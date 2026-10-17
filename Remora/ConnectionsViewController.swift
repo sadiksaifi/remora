@@ -1,0 +1,392 @@
+import AppKit
+import Observation
+import RemoraCore
+import SwiftUI
+
+/// The list of saved connections and every action on them: connect, add, edit, duplicate, delete.
+@MainActor
+final class ConnectionsViewController: NSViewController, NSTableViewDataSource, NSTableViewDelegate, NSMenuItemValidation {
+    private let connectionStore: ConnectionStore
+    private let credentialStore: CredentialStore
+    private let sessionWindows: SessionWindows
+    private let tableView = ConnectionsTableView()
+    private var emptyStateView: NSHostingView<EmptyStateView>!
+    private var editorController: NSViewController?
+    /// The visible connections: filtered by `searchText` and sorted by name.
+    private var rows: [Connection] = []
+
+    var searchText = "" {
+        didSet { reloadRows() }
+    }
+
+    init(connectionStore: ConnectionStore, credentialStore: CredentialStore, sessionWindows: SessionWindows) {
+        self.connectionStore = connectionStore
+        self.credentialStore = credentialStore
+        self.sessionWindows = sessionWindows
+        super.init(nibName: nil, bundle: nil)
+    }
+
+    required init?(coder: NSCoder) {
+        fatalError("Use init(connectionStore:credentialStore:sessionWindows:)")
+    }
+
+    override func loadView() {
+        let column = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("connection"))
+        column.resizingMask = .autoresizingMask
+        tableView.addTableColumn(column)
+        tableView.headerView = nil
+        tableView.style = .inset
+        tableView.rowHeight = 40
+        tableView.columnAutoresizingStyle = .uniformColumnAutoresizingStyle
+        tableView.allowsMultipleSelection = true
+        tableView.dataSource = self
+        tableView.delegate = self
+        tableView.target = self
+        tableView.doubleAction = #selector(connectClickedRow(_:))
+        tableView.onReturn = { [weak self] in self?.connect(nil) }
+        tableView.menu = contextMenu()
+        tableView.setAccessibilityLabel("Connections")
+
+        let scrollView = NSScrollView()
+        scrollView.documentView = tableView
+        scrollView.hasVerticalScroller = true
+        scrollView.autohidesScrollers = true
+        scrollView.translatesAutoresizingMaskIntoConstraints = false
+
+        emptyStateView = NSHostingView(rootView: EmptyStateView(kind: .noConnections) { [weak self] in
+            self?.newConnection(nil)
+        })
+        emptyStateView.sizingOptions = []
+        emptyStateView.translatesAutoresizingMaskIntoConstraints = false
+
+        let view = NSView()
+        view.addSubview(scrollView)
+        view.addSubview(emptyStateView)
+        NSLayoutConstraint.activate([
+            scrollView.topAnchor.constraint(equalTo: view.topAnchor),
+            scrollView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+            scrollView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            scrollView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            emptyStateView.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor),
+            emptyStateView.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor),
+            emptyStateView.leadingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.leadingAnchor),
+            emptyStateView.trailingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.trailingAnchor),
+        ])
+        self.view = view
+    }
+
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        observeConnections()
+    }
+
+    var initialFirstResponder: NSView {
+        tableView
+    }
+
+    /// Re-renders relative "last connected" dates, which go stale while the window sits open.
+    func refreshDates() {
+        guard tableView.numberOfRows > 0 else { return }
+        tableView.reloadData(
+            forRowIndexes: IndexSet(integersIn: 0..<tableView.numberOfRows),
+            columnIndexes: [0]
+        )
+    }
+
+    // MARK: Actions
+
+    @objc func newConnection(_ sender: Any?) {
+        presentEditor(for: Connection(name: "", host: "", username: ""), password: "")
+    }
+
+    @objc func connect(_ sender: Any?) {
+        open(targetRows(for: sender).map { rows[$0] })
+    }
+
+    @objc func editConnection(_ sender: Any?) {
+        guard let connection = singleTarget(for: sender),
+              let password = storedPassword(for: connection)
+        else { return }
+        presentEditor(for: connection, password: password)
+    }
+
+    @objc func duplicateConnection(_ sender: Any?) {
+        guard let connection = singleTarget(for: sender),
+              let password = storedPassword(for: connection)
+        else { return }
+        var copy = connection
+        copy.id = UUID()
+        copy.name += " copy"
+        copy.lastConnected = nil
+        presentEditor(for: copy, password: password)
+    }
+
+    @objc func delete(_ sender: Any?) {
+        let targets = targetRows(for: sender).map { rows[$0] }
+        guard let window = view.window, let first = targets.first else { return }
+        let alert = NSAlert()
+        if targets.count == 1 {
+            alert.messageText = "Delete “\(first.name)”?"
+            alert.informativeText = "This also removes its saved password. You can’t undo this action."
+        } else {
+            alert.messageText = "Delete \(targets.count) Connections?"
+            alert.informativeText = "This also removes their saved passwords. You can’t undo this action."
+        }
+        alert.addButton(withTitle: "Delete").hasDestructiveAction = true
+        alert.addButton(withTitle: "Cancel")
+        alert.beginSheetModal(for: window) { [weak self] response in
+            guard response == .alertFirstButtonReturn else { return }
+            self?.deleteConnections(ids: Set(targets.map(\.id)))
+        }
+    }
+
+    @objc private func connectClickedRow(_ sender: Any?) {
+        let row = tableView.clickedRow
+        guard row >= 0, row < rows.count else { return }
+        open([rows[row]])
+    }
+
+    @objc private func connectButtonClicked(_ sender: NSButton) {
+        let row = tableView.row(for: sender)
+        guard row >= 0, row < rows.count else { return }
+        open([rows[row]])
+    }
+
+    func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        switch menuItem.action {
+        case #selector(connect(_:)), #selector(delete(_:)):
+            !targetRows(for: menuItem).isEmpty
+        case #selector(editConnection(_:)), #selector(duplicateConnection(_:)):
+            targetRows(for: menuItem).count == 1
+        default:
+            true
+        }
+    }
+
+    // MARK: Table
+
+    func numberOfRows(in tableView: NSTableView) -> Int {
+        rows.count
+    }
+
+    func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
+        let cell = tableView.makeView(withIdentifier: ConnectionCellView.identifier, owner: self)
+            as? ConnectionCellView ?? makeCell()
+        cell.configure(with: rows[row], hovered: row == self.tableView.hoveredRow)
+        return cell
+    }
+
+    func tableView(_ tableView: NSTableView, typeSelectStringFor tableColumn: NSTableColumn?, row: Int) -> String? {
+        rows[row].name
+    }
+
+    private func makeCell() -> ConnectionCellView {
+        let cell = ConnectionCellView()
+        cell.connectButton.target = self
+        cell.connectButton.action = #selector(connectButtonClicked(_:))
+        return cell
+    }
+
+    private func contextMenu() -> NSMenu {
+        let menu = NSMenu()
+        menu.addItem(withTitle: "Connect", action: #selector(connect(_:)), keyEquivalent: "")
+        menu.addItem(.separator())
+        menu.addItem(withTitle: "Edit…", action: #selector(editConnection(_:)), keyEquivalent: "")
+        menu.addItem(withTitle: "Duplicate", action: #selector(duplicateConnection(_:)), keyEquivalent: "")
+        menu.addItem(.separator())
+        menu.addItem(withTitle: "Delete", action: #selector(delete(_:)), keyEquivalent: "")
+        for item in menu.items {
+            item.target = self
+        }
+        return menu
+    }
+
+    /// Context menu actions apply to the clicked row, or to the whole selection when the clicked
+    /// row is part of it. Every other sender acts on the selection.
+    private func targetRows(for sender: Any?) -> IndexSet {
+        let selection = tableView.selectedRowIndexes
+        guard let item = sender as? NSMenuItem, item.menu === tableView.menu else { return selection }
+        let clicked = tableView.clickedRow
+        guard clicked >= 0 else { return [] }
+        return selection.contains(clicked) ? selection : [clicked]
+    }
+
+    private func singleTarget(for sender: Any?) -> Connection? {
+        let targets = targetRows(for: sender)
+        guard targets.count == 1, let row = targets.first else { return nil }
+        return rows[row]
+    }
+
+    // MARK: Store
+
+    private func observeConnections() {
+        withObservationTracking {
+            _ = connectionStore.connections
+        } onChange: { [weak self] in
+            Task { @MainActor [weak self] in
+                self?.reloadRows()
+                self?.observeConnections()
+            }
+        }
+        reloadRows()
+    }
+
+    private func reloadRows() {
+        let selectedIDs = Set(tableView.selectedRowIndexes.compactMap { $0 < rows.count ? rows[$0].id : nil })
+        let query = searchText.trimmingCharacters(in: .whitespaces)
+        rows = connectionStore.connections
+            .filter {
+                query.isEmpty
+                    || $0.name.localizedStandardContains(query)
+                    || $0.host.localizedStandardContains(query)
+                    || $0.username.localizedStandardContains(query)
+            }
+            .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+        tableView.reloadData()
+        tableView.selectRowIndexes(
+            IndexSet(rows.indices.filter { selectedIDs.contains(rows[$0].id) }),
+            byExtendingSelection: false
+        )
+        tableView.updateHover()
+
+        if connectionStore.connections.isEmpty {
+            emptyStateView.rootView.kind = .noConnections
+        } else if rows.isEmpty {
+            emptyStateView.rootView.kind = .noResults(query)
+        }
+        emptyStateView.isHidden = !rows.isEmpty
+    }
+
+    private func select(id: UUID) {
+        reloadRows()
+        guard let row = rows.firstIndex(where: { $0.id == id }) else { return }
+        tableView.selectRowIndexes([row], byExtendingSelection: false)
+        tableView.scrollRowToVisible(row)
+        view.window?.makeFirstResponder(tableView)
+    }
+
+    private func open(_ connections: [Connection]) {
+        var failure: (any Error)?
+        for connection in connections where sessionWindows.show(connection) {
+            do {
+                try connectionStore.markConnected(id: connection.id)
+            } catch {
+                failure = error
+            }
+        }
+        if let failure {
+            showAlert("Couldn’t Save Connection", error: failure, on: view.window)
+        }
+    }
+
+    private func storedPassword(for connection: Connection) -> String? {
+        do {
+            return try credentialStore.password(for: connection.id) ?? ""
+        } catch {
+            showAlert("Couldn’t Read Password", error: error, on: view.window)
+            return nil
+        }
+    }
+
+    /// Saves the connection, then its password. Safe to retry after a partial failure.
+    private func save(_ connection: Connection, password: String) {
+        do {
+            if connectionStore.connections.contains(where: { $0.id == connection.id }) {
+                try connectionStore.update(connection)
+            } else {
+                try connectionStore.add(connection)
+            }
+            if password.isEmpty {
+                try credentialStore.removePassword(for: connection.id)
+            } else {
+                try credentialStore.setPassword(password, for: connection.id)
+            }
+        } catch {
+            showAlert("Couldn’t Save Connection", error: error, on: editorController?.view.window ?? view.window)
+            return
+        }
+        dismissEditor()
+        select(id: connection.id)
+    }
+
+    private func deleteConnections(ids: Set<UUID>) {
+        do {
+            try connectionStore.delete(ids: ids)
+            for id in ids {
+                try credentialStore.removePassword(for: id)
+            }
+        } catch {
+            showAlert("Couldn’t Delete Connection", error: error, on: view.window)
+        }
+    }
+
+    // MARK: Presentation
+
+    private func presentEditor(for connection: Connection, password: String) {
+        guard editorController == nil else { return }
+        let editor = ConnectionEditor(
+            connection: connection,
+            password: password,
+            onCancel: { [weak self] in self?.dismissEditor() },
+            onSave: { [weak self] connection, password in self?.save(connection, password: password) }
+        )
+        let controller = NSHostingController(rootView: editor)
+        controller.sizingOptions = .preferredContentSize
+        editorController = controller
+        presentAsSheet(controller)
+    }
+
+    private func dismissEditor() {
+        guard let editorController else { return }
+        dismiss(editorController)
+        self.editorController = nil
+    }
+
+    private func showAlert(_ title: String, error: any Error, on window: NSWindow?) {
+        let alert = NSAlert()
+        alert.messageText = title
+        alert.informativeText = Self.message(for: error)
+        if let window {
+            alert.beginSheetModal(for: window)
+        } else {
+            alert.runModal()
+        }
+    }
+
+    private static func message(for error: any Error) -> String {
+        switch error {
+        case let ConnectionStore.StorageError.loadFailed(_, underlying),
+             let ConnectionStore.StorageError.quarantineFailed(_, underlying),
+             let ConnectionStore.StorageError.saveFailed(_, underlying):
+            underlying.localizedDescription
+        default:
+            error.localizedDescription
+        }
+    }
+}
+
+/// Shown in place of the list when there is nothing to list.
+struct EmptyStateView: View {
+    enum Kind: Equatable {
+        case noConnections
+        case noResults(String)
+    }
+
+    var kind: Kind
+    let addConnection: () -> Void
+
+    var body: some View {
+        switch kind {
+        case .noConnections:
+            ContentUnavailableView {
+                Label("No Connections", systemImage: "desktopcomputer")
+            } description: {
+                Text("Add a computer to connect to it.")
+            } actions: {
+                Button("Add Connection", action: addConnection)
+            }
+        case .noResults(let query):
+            ContentUnavailableView.search(text: query)
+        }
+    }
+}
