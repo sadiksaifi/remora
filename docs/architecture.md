@@ -8,8 +8,9 @@ This is personal software. Prefer an existing library or a FreeRDP built-in over
 
 - macOS 26.0 and later, arm64 only.
 - Swift 6 language mode with complete strict concurrency.
-- AppKit for windows, the connection list, and the session view. SwiftUI in `NSHostingController` for sheets and Settings.
-- Apple's macOS 27 Human Interface Guidelines are the design baseline. Liquid Glass comes from standard AppKit controls.
+- AppKit for windows, menus, the connection list, and the session view. SwiftUI in `NSHostingController` or `NSHostingView` for sheets, Settings, and session status views.
+- Apple's macOS 27 Human Interface Guidelines are the design baseline. Liquid Glass comes from standard AppKit and SwiftUI controls and the SwiftUI glass effect.
+- The renderer and shortcut-capture demo harnesses compile only in Debug builds.
 - No App Sandbox. Hardened runtime only when we notarize a release.
 
 ## Layout
@@ -54,7 +55,9 @@ One Swift protocol in RemoraCore. The app never sees FreeRDP types.
 - The keyboard layout announced to the server follows the current Mac input source.
 - All pressed keys and buttons are released when the window loses key status or the app deactivates.
 - Scroll accumulates into 1/120-notch wheel units.
-- System shortcuts (Cmd-Tab, Cmd-Space) are captured with a `CGEventTap` while a session window is key. This needs the Accessibility permission. Without it, those shortcuts stay local.
+- System shortcuts (Cmd-Tab, Cmd-Space) are captured with a `CGEventTap` while a session window is key. This needs the Accessibility permission. Without it, or with capture turned off in Settings, those shortcuts stay local.
+- Cmd-Q and Ctrl-Cmd-F always stay local. Ctrl-Option-Cmd-Escape releases the keyboard, like Session > Release Keyboard Capture; clicking the desktop captures it again. Other menu shortcuts act only while the desktop does not have the keyboard.
+- Session > Send Ctrl-Alt-Delete sends Control, Option, and Forward Delete through the ordinary key path.
 
 ## Codecs
 
