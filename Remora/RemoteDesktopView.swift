@@ -11,6 +11,7 @@ final class RemoteDesktopView: NSView {
             window?.invalidateCursorRects(for: self)
         }
     }
+    var onFocus: (() -> Void)?
     private lazy var desktopInput = RemoteDesktopInput(view: self)
     private var inputTrackingArea: NSTrackingArea?
     private var remoteCursor: RemoteCursor = .systemDefault

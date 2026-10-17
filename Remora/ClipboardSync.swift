@@ -1,5 +1,8 @@
 import AppKit
 import RemoraCore
+import os
+
+private let clipboardLog = Logger(subsystem: "dev.sadiksaifi.Remora", category: "Clipboard")
 
 /// One instance per session attempt. The window forwards focus and session events.
 @MainActor
@@ -15,15 +18,10 @@ final class ClipboardSync {
 
     func sessionDidConnect() {
         connected = true
-        sendLocalTextIfChanged()
     }
 
-    func windowDidBecomeKey() {
+    func focusGained() {
         sendLocalTextIfChanged()
-    }
-
-    func applicationDidBecomeActive(isSessionWindowKey: Bool) {
-        if isSessionWindowKey { sendLocalTextIfChanged() }
     }
 
     func receiveRemoteText(_ text: String) {
@@ -37,7 +35,9 @@ final class ClipboardSync {
         guard connected else { return }
         let pasteboard = NSPasteboard.general
         guard changeCount != pasteboard.changeCount else { return }
-        switch pasteboard.accessBehavior {
+        let access = pasteboard.accessBehavior
+        clipboardLog.info("Pasteboard access behavior: \(String(describing: access), privacy: .public)")
+        switch access {
         case .alwaysDeny:
             return
         case .default, .ask:
