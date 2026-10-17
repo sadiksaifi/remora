@@ -41,76 +41,27 @@ public struct CaptureFrame: Sendable {
     }
 }
 
+/// The renderer or a future protocol adapter supplies a complete desktop only when requested.
+public protocol CaptureSource: AnyObject, Sendable {
+    var size: DesktopSize? { get }
+    func snapshot() throws -> CaptureFrame
+    /// Installing an observer also announces the current frame, if available.
+    func setFrameObserver(_ observer: (@Sendable (TimeInterval) -> Void)?)
+}
+
 public protocol CaptureMovie: AnyObject, Sendable {
     var failures: AsyncStream<CaptureFailure> { get }
-    func submit(_ frame: CaptureFrame)
+    func submit(arrival: TimeInterval)
     func finish() async -> Result<URL, CaptureFailure>
 }
 
-/// Platform image encoding and movie construction. The caller owns destination policy.
 public protocol CaptureMedia: Sendable {
     func png(_ frame: CaptureFrame) throws -> Data
-    func movie(at url: URL, initialFrame: CaptureFrame) throws -> any CaptureMovie
+    func movie(at url: URL, source: any CaptureSource) throws -> any CaptureMovie
 }
 
 public protocol CaptureDestination: Sendable {
-    /// Reserves a unique filename. The movie adapter may replace this empty reservation.
     func reserve(connectionName: String, extension suffix: String) throws -> URL
-}
-
-/// One complete desktop, independent of renderer damage and tab visibility.
-/// The lock never spans encoding or file I/O. No borrowed pointer escapes consume.
-public final class CaptureFrameSink: FrameSink, Sendable {
-    private let lock = NSLock()
-    private nonisolated(unsafe) var generation: UInt64 = 0
-    private nonisolated(unsafe) var latest: CaptureFrame?
-    private nonisolated(unsafe) var movie: (any CaptureMovie)?
-
-    public init() {}
-
-    public func consume(_ frame: BorrowedFrame) { consume(frame, generation: nil) }
-
-    /// A session attempt gets its own source. clear() retires it before another attempt starts.
-    public func makeSource() -> any FrameSink {
-        lock.withLock { Source(owner: self, generation: generation) }
-    }
-
-    private struct Source: FrameSink {
-        let owner: CaptureFrameSink
-        let generation: UInt64
-        func consume(_ frame: BorrowedFrame) { owner.consume(frame, generation: generation) }
-    }
-
-    private func consume(_ frame: BorrowedFrame, generation: UInt64?) {
-        guard frame.width > 0, frame.height > 0, frame.stride >= frame.width * 4 else { return }
-        // Serialize arrivals as well as copies if a backend delivers from multiple threads.
-        lock.withLock {
-            guard generation == nil || generation == self.generation else { return }
-            let copy = CaptureFrame(copying: frame)
-            latest = copy
-            movie?.submit(copy)
-        }
-    }
-
-    public func snapshot() throws -> CaptureFrame {
-        try lock.withLock {
-            guard let latest else { throw CaptureFailure.noFrame }
-            return latest
-        }
-    }
-
-    func record(using media: any CaptureMedia, at url: URL) throws -> any CaptureMovie {
-        let initial = try snapshot()
-        let movie = try media.movie(at: url, initialFrame: initial)
-        lock.withLock {
-            self.movie = movie
-            if let latest { movie.submit(latest) }
-        }
-        return movie
-    }
-
-    func detachMovie() { lock.withLock { movie = nil } }
-    public func clear() { lock.withLock { latest = nil; generation &+= 1 } }
 }
 
 public enum RecordingState: Sendable, Equatable {
@@ -128,7 +79,8 @@ public enum RecordingState: Sendable, Equatable {
 
 @MainActor @Observable
 public final class SessionCapture {
-    public let frames: CaptureFrameSink
+    @ObservationIgnored private var source: (any CaptureSource)?
+    @ObservationIgnored private var recordingSource: (any CaptureSource)?
     public private(set) var recordingState: RecordingState = .idle
     public private(set) var lastSavedURL: URL?
     public private(set) var recordingURL: URL?
@@ -139,23 +91,28 @@ public final class SessionCapture {
     @ObservationIgnored private var finishTask: Task<Result<URL, CaptureFailure>, Never>?
     @ObservationIgnored private var monitor: Task<Void, Never>?
 
-    public init(media: any CaptureMedia, destination: any CaptureDestination, frames: CaptureFrameSink = .init()) {
+    public init(media: any CaptureMedia, destination: any CaptureDestination) {
         self.media = media
         self.destination = destination
-        self.frames = frames
     }
 
     isolated deinit {
         monitor?.cancel()
-        frames.detachMovie()
+        recordingSource?.setFrameObserver(nil)
         if let movie { Task { _ = await movie.finish() } }
+    }
+
+    /// The session attaches its renderer and retires it when the session ends.
+    public func setSource(_ source: (any CaptureSource)?) {
+        if self.source !== source { self.source?.setFrameObserver(nil) }
+        self.source = source
     }
 
     /// Encodes off the main actor. The UI can place this PNG on its platform clipboard.
     public func screenshotPNG() async throws -> Data {
-        let frame = try frames.snapshot()
+        guard let source else { throw CaptureFailure.noFrame }
         let media = media
-        return try await Task.detached { try media.png(frame) }.value
+        return try await Task.detached { try media.png(source.snapshot()) }.value
     }
 
     @discardableResult
@@ -178,11 +135,13 @@ public final class SessionCapture {
 
     public func startRecording(connectionName: String) throws {
         guard movie == nil, finishTask == nil else { throw CaptureFailure.busy }
-        _ = try frames.snapshot()
+        guard let source, source.size != nil else { throw CaptureFailure.noFrame }
         let url = try destination.reserve(connectionName: connectionName, extension: "mov")
         do {
             let startedAt = ProcessInfo.processInfo.systemUptime
-            let movie = try frames.record(using: media, at: url)
+            let movie = try media.movie(at: url, source: source)
+            recordingSource = source
+            source.setFrameObserver { movie.submit(arrival: $0) }
             self.movie = movie
             recordingURL = url
             recordingState = .recording(startedAt: startedAt)
@@ -207,7 +166,8 @@ public final class SessionCapture {
     public func stopRecording() async -> Result<URL, CaptureFailure>? {
         if let finishTask { return await finishTask.value }
         guard let movie else { return nil }
-        frames.detachMovie()
+        recordingSource?.setFrameObserver(nil)
+        recordingSource = nil
         self.movie = nil
         monitor?.cancel()
         monitor = nil

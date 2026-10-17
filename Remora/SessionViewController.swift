@@ -101,7 +101,7 @@ final class SessionViewController: NSViewController {
 
     func disconnect() {
         finishCapture()
-        capture.frames.clear()
+        capture.setSource(nil)
         state = .disconnected(nil)
         desktopView?.setSessionConnected(false)
         overlays = nil
@@ -234,7 +234,8 @@ final class SessionViewController: NSViewController {
                 password: currentCredentials.password.isEmpty ? nil : currentCredentials.password,
                 desktopSize: desktopSize, scaleFactor: scaleFactor, allowsDynamicResize: allowsDynamicResize
             )
-            let session = RDPSession(configuration: configuration, frameSink: RendererFrameSink(renderer: renderer, capture: capture.frames.makeSource()))
+            capture.setSource(renderer.desktop)
+            let session = RDPSession(configuration: configuration, frameSink: renderer)
             let desktopView = RemoteDesktopView(renderer: renderer)
             desktopView.input = session
             self.desktopView = desktopView
@@ -298,7 +299,7 @@ final class SessionViewController: NSViewController {
                 overlays?.reconnecting(attempt: attempt)
             case .disconnected(let reason):
                 finishCapture()
-                capture.frames.clear()
+                capture.setSource(nil)
                 desktopView.setSessionConnected(false)
                 overlays = nil
                 clipboardSync = nil
@@ -524,18 +525,5 @@ private final class SessionContainerView: NSView {
     override func viewDidChangeBackingProperties() {
         super.viewDidChangeBackingProperties()
         onResize?()
-    }
-}
-
-private struct RendererFrameSink: FrameSink {
-    let renderer: FrameRenderer
-    let capture: any FrameSink
-
-    func consume(_ frame: BorrowedFrame) {
-        capture.consume(frame)
-        renderer.ingest(pixels: frame.pixels, width: frame.width, height: frame.height,
-                        bytesPerRow: frame.stride, dirty: frame.dirtyRectangles.map {
-            DirtyRect(x: $0.x, y: $0.y, width: $0.width, height: $0.height)
-        })
     }
 }

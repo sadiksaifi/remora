@@ -4,6 +4,7 @@ import CoreImage
 import ImageIO
 import UniformTypeIdentifiers
 import VideoToolbox
+import Metal
 
 public struct ScreenshotDestination: CaptureDestination {
     public init() {}
@@ -50,9 +51,10 @@ public struct AppleCaptureMedia: CaptureMedia {
                        provider: provider, decode: nil, shouldInterpolate: false, intent: .defaultIntent)
     }
 
-    public func movie(at url: URL, initialFrame: CaptureFrame) throws -> any CaptureMovie {
+    public func movie(at url: URL, source: any CaptureSource) throws -> any CaptureMovie {
+        guard let source = source as? MetalDesktop else { throw CaptureFailure.recording("A Metal desktop is required.") }
         let workingURL = url.deletingLastPathComponent().appendingPathComponent(".Remora-\(UUID().uuidString).partial.mov")
-        do { return try AppleCaptureMovie(url: url, workingURL: workingURL, initialFrame: initialFrame) }
+        do { return try AppleCaptureMovie(url: url, workingURL: workingURL, source: source) }
         catch {
             do {
                 if FileManager.default.fileExists(atPath: workingURL.path) { try FileManager.default.removeItem(at: workingURL) }
@@ -69,7 +71,7 @@ public struct AppleCaptureMedia: CaptureMedia {
 final class AppleCaptureMovie: CaptureMovie, @unchecked Sendable {
     private let queue = DispatchQueue(label: "dev.sadiksaifi.Remora.capture", qos: .utility)
     private let lock = NSLock()
-    private var pending: CaptureFrame?
+    private var pending: TimeInterval?
     private var scheduled = false
     private var accepting = true
     private var outcome: Result<URL, CaptureFailure>?
@@ -77,7 +79,9 @@ final class AppleCaptureMovie: CaptureMovie, @unchecked Sendable {
     private let writer: AVAssetWriter
     private let input: AVAssetWriterInput
     private let adaptor: AVAssetWriterInputPixelBufferAdaptor
-    private let context = CIContext(options: [.cacheIntermediates: false])
+    private var context: CIContext?
+    private let source: MetalDesktop
+    private let textureCache: CVMetalTextureCache
     private let url: URL
     private let workingURL: URL
     private let size: DesktopSize
@@ -95,11 +99,17 @@ final class AppleCaptureMovie: CaptureMovie, @unchecked Sendable {
     private let failureContinuation: AsyncStream<CaptureFailure>.Continuation
     private var writerObservation: NSKeyValueObservation?
 
-    init(url: URL, workingURL: URL, initialFrame: CaptureFrame) throws {
+    init(url: URL, workingURL: URL, source: MetalDesktop) throws {
         self.url = url
         self.workingURL = workingURL
         (failures, failureContinuation) = AsyncStream.makeStream(bufferingPolicy: .bufferingNewest(1))
-        size = initialFrame.size
+        self.source = source
+        guard let size = source.size else { throw CaptureFailure.noFrame }
+        self.size = size
+        var cache: CVMetalTextureCache?
+        guard CVMetalTextureCacheCreate(nil, nil, source.device, nil, &cache) == kCVReturnSuccess,
+              let cache else { throw CaptureFailure.recording("No Metal pixel buffer texture cache.") }
+        textureCache = cache
         origin = ProcessInfo.processInfo.systemUptime
         // Keep the filename reservation until the finished movie atomically replaces it.
         writer = try AVAssetWriter(outputURL: workingURL, fileType: .mov)
@@ -132,20 +142,16 @@ final class AppleCaptureMovie: CaptureMovie, @unchecked Sendable {
         writer.add(input)
         guard writer.startWriting() else { throw CaptureFailure.recording(writer.error?.localizedDescription ?? "Could not start HEVC encoder.") }
         writer.startSession(atSourceTime: .zero)
-        // A recording starts with the current desktop, even if it never changes afterwards.
-        pending = initialFrame
-        scheduled = true
         writerObservation = writer.observe(\.status, options: [.new]) { [weak self] writer, _ in
             guard writer.status == .failed, let self else { return }
             self.queue.async { self.fail(.recording(self.writer.error?.localizedDescription ?? "Encoder failed.")) }
         }
-        queue.async { self.drain() }
     }
 
-    func submit(_ frame: CaptureFrame) {
+    func submit(arrival: TimeInterval) {
         let wake = lock.withLock {
             guard accepting, outcome == nil else { return false }
-            pending = frame
+            pending = arrival
             guard !scheduled else { return false }
             scheduled = true
             return true
@@ -186,28 +192,21 @@ final class AppleCaptureMovie: CaptureMovie, @unchecked Sendable {
         if writer.status == .failed { fail(.recording(writer.error?.localizedDescription ?? "Encoder failed.")); return }
         let now = ProcessInfo.processInfo.systemUptime
         if finishing && now >= finishDeadline { fail(.timedOut); return }
-        let frame = lock.withLock { pending }
-        if frame != nil {
-            // Wall-clock spacing bounds work; PTS spacing bounds the movie's frame rate.
-            if input.isReadyForMoreMediaData && now - lastAppend >= 1.0 / 60 {
-                let selected = lock.withLock { () -> CaptureFrame? in
-                    let frame = pending
-                    pending = nil
-                    return frame
-                }
-                if let selected {
-                    let timestamp = lastPTS < 0 ? 0 : max(lastPTS + 1.0 / 60, selected.arrival - origin)
-                    do {
-                        if selected.arrival > lastArrival, try append(selected, at: timestamp) {
-                            lastPTS = timestamp
-                            lastAppend = now
-                            lastArrival = selected.arrival
-                        } else if selected.arrival > lastArrival {
-                            lock.withLock { if pending == nil { pending = selected } }
-                        }
+        if lock.withLock({ pending != nil }), input.isReadyForMoreMediaData, now - lastAppend >= 1.0 / 60 {
+            let selected = lock.withLock { () -> TimeInterval? in
+                let arrival = pending
+                pending = nil
+                return arrival
+            }
+            if let selected, selected > lastArrival {
+                do {
+                    if let arrival = try append() {
+                        lastArrival = arrival
+                        lastAppend = now
+                    } else {
+                        lock.withLock { if pending == nil { pending = selected } }
                     }
-                    catch { fail(error as? CaptureFailure ?? .recording(error.localizedDescription)); return }
-                }
+                } catch { fail(error as? CaptureFailure ?? .recording(error.localizedDescription)); return }
             }
         }
         let hasPending = lock.withLock { () -> Bool in
@@ -230,27 +229,63 @@ final class AppleCaptureMovie: CaptureMovie, @unchecked Sendable {
         }
     }
 
-    private func append(_ frame: CaptureFrame, at timestamp: TimeInterval) throws -> Bool {
+    private func append() throws -> TimeInterval? {
         guard let pool = adaptor.pixelBufferPool else { throw CaptureFailure.recording("No pixel buffer pool.") }
         var pixelBuffer: CVPixelBuffer?
         let status = CVPixelBufferPoolCreatePixelBufferWithAuxAttributes(nil, pool,
             [kCVPixelBufferPoolAllocationThresholdKey as String: 6] as CFDictionary, &pixelBuffer)
-        if status == kCVReturnWouldExceedAllocationThreshold { return false }
+        if status == kCVReturnWouldExceedAllocationThreshold {
+            CVMetalTextureCacheFlush(textureCache, 0)
+            return nil
+        }
         guard status == kCVReturnSuccess, let pixelBuffer else {
             throw CaptureFailure.recording("Pixel buffer allocation failed (\(status)).")
         }
-        guard let image = AppleCaptureMedia.image(frame) else { throw CaptureFailure.recording("Invalid desktop pixels.") }
-        let scale = min(Double(size.width) / Double(frame.size.width), Double(size.height) / Double(frame.size.height))
-        let fitted = CIImage(cgImage: image).transformed(by: CGAffineTransform(scaleX: scale, y: scale))
-            .transformed(by: CGAffineTransform(translationX: (Double(size.width) - Double(frame.size.width) * scale) / 2,
-                                              y: (Double(size.height) - Double(frame.size.height) * scale) / 2))
-        let bounds = CGRect(x: 0, y: 0, width: size.width, height: size.height)
-        let composite = fitted.composited(over: CIImage(color: .black).cropped(to: bounds))
-        context.render(composite, to: pixelBuffer, bounds: bounds, colorSpace: CGColorSpace(name: CGColorSpace.sRGB))
+        var cvTexture: CVMetalTexture?
+        let textureStatus = CVMetalTextureCacheCreateTextureFromImage(nil, textureCache, pixelBuffer,
+            [kCVMetalTextureUsage as String: MTLTextureUsage.shaderWrite.rawValue | MTLTextureUsage.shaderRead.rawValue] as CFDictionary,
+            .bgra8Unorm, size.width, size.height, 0, &cvTexture)
+        guard textureStatus == kCVReturnSuccess, let cvTexture, let destination = CVMetalTextureGetTexture(cvTexture) else {
+            throw CaptureFailure.recording("Could not map encoder pixel buffer into Metal (\(textureStatus)).")
+        }
+        let submission = try source.submit { texture, command in
+            if texture.width == size.width && texture.height == size.height {
+                guard let blit = command.makeBlitCommandEncoder() else { throw CaptureFailure.recording("No encoder blit command.") }
+                blit.copy(from: texture, sourceSlice: 0, sourceLevel: 0, sourceOrigin: MTLOrigin(),
+                          sourceSize: MTLSize(width: size.width, height: size.height, depth: 1),
+                          to: destination, destinationSlice: 0, destinationLevel: 0, destinationOrigin: MTLOrigin())
+                blit.endEncoding()
+            } else {
+                if context == nil { context = CIContext(mtlDevice: source.device, options: [.cacheIntermediates: false]) }
+                // FreeRDP's alpha byte is undefined. A same-format view forces opaque sampling
+                // without a conversion pass or modifying the renderer's texture.
+                guard let opaque = texture.makeTextureView(pixelFormat: .bgra8Unorm, textureType: .type2D,
+                    levels: 0..<1, slices: 0..<1,
+                    swizzle: MTLTextureSwizzleChannels(red: .red, green: .green, blue: .blue, alpha: .one)),
+                    let image = CIImage(mtlTexture: opaque, options: [.colorSpace: CGColorSpace(name: CGColorSpace.sRGB)!]) else {
+                    throw CaptureFailure.recording("Invalid desktop texture.")
+                }
+                let scale = min(Double(size.width) / Double(texture.width), Double(size.height) / Double(texture.height))
+                let fitted = image.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
+                    .transformed(by: CGAffineTransform(translationX: (Double(size.width) - Double(texture.width) * scale) / 2,
+                                                      y: (Double(size.height) - Double(texture.height) * scale) / 2))
+                let bounds = CGRect(x: 0, y: 0, width: size.width, height: size.height)
+                let composite = fitted.composited(over: CIImage(color: .black).cropped(to: bounds))
+                context!.render(composite, to: destination, commandBuffer: command, bounds: bounds,
+                                colorSpace: CGColorSpace(name: CGColorSpace.sRGB)!)
+            }
+        }
+        // Keep both Core Video wrappers alive through the GPU copy. Never wait on the session thread.
+        withExtendedLifetime(cvTexture) { submission.command.waitUntilCompleted() }
+        guard submission.command.status == .completed else {
+            throw CaptureFailure.recording(submission.command.error?.localizedDescription ?? "Encoder GPU copy failed.")
+        }
+        let timestamp = lastPTS < 0 ? 0 : max(lastPTS + 1.0 / 60, submission.arrival - origin)
         guard adaptor.append(pixelBuffer, withPresentationTime: CMTime(seconds: timestamp, preferredTimescale: 60_000)) else {
             throw CaptureFailure.recording(writer.error?.localizedDescription ?? "Frame append failed.")
         }
-        return true
+        lastPTS = timestamp
+        return submission.arrival
     }
 
     private func fail(_ error: CaptureFailure) {

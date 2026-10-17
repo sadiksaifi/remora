@@ -3,27 +3,31 @@ import Foundation
 import AVFoundation
 import ImageIO
 import CoreGraphics
+import Metal
 @testable import RemoraCore
 
-private func desktop(width: Int, height: Int, bgra: [UInt8], sink: CaptureFrameSink) {
+private func desktop(width: Int, height: Int, bgra: [UInt8], sink: MetalDesktop) {
     // Padded rows catch accidental use of tightly packed source strides.
     let stride = width * 4 + 16
     var pixels = [UInt8](repeating: 0, count: stride * height)
     for y in 0..<height {
         for x in 0..<width { pixels.replaceSubrange((y * stride + x * 4)..<(y * stride + x * 4 + 4), with: bgra) }
     }
-    pixels.withUnsafeBytes {
-        sink.consume(BorrowedFrame(pixels: $0.baseAddress!, width: width, height: height, stride: stride,
+    _ = pixels.withUnsafeBytes {
+        try! sink.ingest(BorrowedFrame(pixels: $0.baseAddress!, width: width, height: height, stride: stride,
                                    dirtyRectangles: [.init(x: 0, y: 0, width: 1, height: 1)]))
     }
     // Destroy the borrowed storage. A later screenshot must retain the whole desktop.
     _ = pixels.withUnsafeMutableBytes { $0.initializeMemory(as: UInt8.self, repeating: 0) }
 }
 
-@Test func screenshotRetainsFullDesktopAndWritesOpaquePNG() throws {
-    let frames = CaptureFrameSink()
+@Test @MainActor func idleHiddenDesktopReadbackWritesCompleteOpaquePNG() async throws {
+    let frames = try MetalDesktop(device: #require(MTLCreateSystemDefaultDevice()))
     desktop(width: 8, height: 6, bgra: [21, 87, 231, 0], sink: frames)
-    let png = try AppleCaptureMedia().png(frames.snapshot())
+    let capture = SessionCapture(media: AppleCaptureMedia(), destination: ScreenshotDestination())
+    capture.setSource(frames)
+    // No display link, drawable, recorder, or further frame callback. This is a hidden, idle desktop.
+    let png = try await capture.screenshotPNG()
     let source = try #require(CGImageSourceCreateWithData(png as CFData, nil))
     let image = try #require(CGImageSourceCreateImageAtIndex(source, 0, nil))
     #expect(image.width == 8)
@@ -38,6 +42,21 @@ private func desktop(width: Int, height: Int, bgra: [UInt8], sink: CaptureFrameS
     for offset in stride(from: 0, to: rgba.count, by: 4) {
         #expect(Array(rgba[offset..<offset + 4]) == [231, 87, 21, 255])
     }
+    // An unused staging slot contains poison outside this dirty pixel. Do not upload its holes.
+    var update = [UInt8](repeating: 0, count: 8 * 6 * 4)
+    update.replaceSubrange((update.count - 4)..<update.count, with: [201, 31, 17, 0])
+    let copied = try update.withUnsafeBytes {
+        try frames.ingest(BorrowedFrame(pixels: $0.baseAddress!, width: 8, height: 6, stride: 32,
+            dirtyRectangles: [.init(x: 7, y: 5, width: 1, height: 1)]))
+    }
+    #expect(copied == 4)
+    // A failed consumer must still commit its queued upload and return the staging slot.
+    #expect(throws: CaptureFailure.self) {
+        try frames.submit { _, _ in throw CaptureFailure.image("Synthetic encoding failure") }
+    }
+    let idle = try frames.snapshot()
+    #expect(Array(idle.pixels.suffix(4)) == [201, 31, 17, 0])
+    #expect(Array(idle.pixels.prefix(4)) == [21, 87, 231, 0])
 }
 
 @Test func hardwareMovieSurvivesResizeAndIncludesIdleTime() async throws {
@@ -46,23 +65,27 @@ private func desktop(width: Int, height: Int, bgra: [UInt8], sink: CaptureFrameS
     defer { try? FileManager.default.removeItem(at: directory) }
     let url = directory.appendingPathComponent("synthetic.mov")
     #expect(FileManager.default.createFile(atPath: url.path, contents: Data()))
-    let frames = CaptureFrameSink()
+    let frames = try MetalDesktop(device: #require(MTLCreateSystemDefaultDevice()))
     desktop(width: 320, height: 240, bgra: [20, 30, 240, 0], sink: frames)
-    let movie = try frames.record(using: AppleCaptureMedia(), at: url)
+    let movie = try AppleCaptureMedia().movie(at: url, source: frames)
+    frames.setFrameObserver { movie.submit(arrival: $0) }
     try await Task.sleep(for: .milliseconds(180))
     desktop(width: 160, height: 240, bgra: [30, 240, 20, 0], sink: frames)
     // Exercise latest-frame coalescing faster than the 60 fps limit.
     let green: [UInt8] = [30, 240, 20, 0]
     var burst = Array(repeating: green, count: 160 * 240).flatMap { $0 }
+    for offset in stride(from: 0, to: 160 * 80 * 4, by: 4) {
+        burst.replaceSubrange(offset..<offset + 4, with: [230, 30, 20, 0])
+    }
     for index in 0..<40 {
         burst[0] = UInt8(index)
-        burst.withUnsafeBytes {
-            frames.consume(BorrowedFrame(pixels: $0.baseAddress!, width: 160, height: 240, stride: 640,
-                                         dirtyRectangles: [.init(x: 0, y: 0, width: 1, height: 1)]))
+        _ = burst.withUnsafeBytes {
+            try! frames.ingest(BorrowedFrame(pixels: $0.baseAddress!, width: 160, height: 240, stride: 640,
+                                         dirtyRectangles: [.init(x: 0, y: 0, width: index == 0 ? 160 : 1, height: index == 0 ? 80 : 1)]))
         }
     }
     try await Task.sleep(for: .milliseconds(520))
-    frames.detachMovie()
+    frames.setFrameObserver(nil)
     let result = await movie.finish()
     _ = try result.get()
     let asset = AVURLAsset(url: url)
@@ -85,6 +108,13 @@ private func desktop(width: Int, height: Int, bgra: [UInt8], sink: CaptureFrameS
     var times: [Double] = []
     while let sample = output.copyNextSampleBuffer() {
         lastBuffer = CMSampleBufferGetImageBuffer(sample)
+        if times.isEmpty, let buffer = lastBuffer {
+            CVPixelBufferLockBaseAddress(buffer, .readOnly)
+            let pixels = CVPixelBufferGetBaseAddress(buffer)!.assumingMemoryBound(to: UInt8.self)
+            // The initial same-size frame takes the direct GPU blit path, with undefined alpha.
+            #expect(pixels[2] > 210 && pixels[1] < 55 && pixels[0] < 55)
+            CVPixelBufferUnlockBaseAddress(buffer, .readOnly)
+        }
         times.append(CMSampleBufferGetPresentationTimeStamp(sample).seconds)
     }
     #expect(reader.status == .completed)
@@ -99,4 +129,6 @@ private func desktop(width: Int, height: Int, bgra: [UInt8], sink: CaptureFrameS
     #expect(pixels[edge] < 12 && pixels[edge + 1] < 12 && pixels[edge + 2] < 12)
     let center = 120 * stride + 160 * 4
     #expect(pixels[center + 1] > 210)
+    let top = 40 * stride + 160 * 4
+    #expect(pixels[top] > 200 && pixels[top + 1] < 55)
 }
