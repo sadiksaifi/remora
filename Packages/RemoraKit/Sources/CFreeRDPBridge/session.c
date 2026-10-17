@@ -444,8 +444,8 @@ RMRDPSession *rm_rdp_create(const RMRDPConfiguration *config, const RMRDPCallbac
         freerdp_settings_set_uint32(settings, FreeRDP_TcpKeepAliveDelay, 30) &&
         freerdp_settings_set_uint32(settings, FreeRDP_TcpKeepAliveInterval, 10) &&
         freerdp_settings_set_uint32(settings, FreeRDP_TcpKeepAliveRetries, 6) &&
-        freerdp_settings_set_bool(settings, FreeRDP_SupportDisplayControl, TRUE) &&
-        freerdp_settings_set_bool(settings, FreeRDP_DynamicResolutionUpdate, TRUE) &&
+        freerdp_settings_set_bool(settings, FreeRDP_SupportDisplayControl, config->dynamic_resolution) &&
+        freerdp_settings_set_bool(settings, FreeRDP_DynamicResolutionUpdate, config->dynamic_resolution) &&
         freerdp_settings_set_bool(settings, FreeRDP_AutoReconnectionEnabled, TRUE) &&
         freerdp_settings_set_uint32(settings, FreeRDP_AutoReconnectMaxRetries, 20) &&
         /* These require rdpdr, which forces an rdpsnd addin even with sound off.

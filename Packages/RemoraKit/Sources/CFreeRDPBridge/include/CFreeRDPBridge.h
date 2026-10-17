@@ -23,6 +23,7 @@ typedef struct {
     double scale_factor;
     uint32_t keyboard_layout;
     bool iso_keyboard;
+    bool dynamic_resolution;
 } RMRDPConfiguration;
 
 typedef struct {
