@@ -23,7 +23,7 @@ final class ConnectionsWindowController: NSWindowController, NSWindowDelegate, N
             backing: .buffered,
             defer: false
         )
-        window.title = "Remora"
+        window.title = "Connections"
         window.minSize = NSSize(width: 380, height: 300)
         window.isReleasedWhenClosed = false
         window.tabbingMode = .disallowed

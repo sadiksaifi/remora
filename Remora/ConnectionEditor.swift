@@ -84,7 +84,7 @@ struct ConnectionEditor: View {
                     TextField("Port", text: $port, prompt: Text(String(Connection.defaultPort)))
                         .autocorrectionDisabled()
                 } header: {
-                    Text("Computer")
+                    Text("Connection")
                 } footer: {
                     if !addressProblems.isEmpty {
                         VStack(alignment: .leading, spacing: 4) {
