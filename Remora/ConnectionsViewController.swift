@@ -36,7 +36,7 @@ final class ConnectionsViewController: NSViewController, NSTableViewDataSource, 
         tableView.addTableColumn(column)
         tableView.headerView = nil
         tableView.style = .inset
-        tableView.rowHeight = 40
+        tableView.rowHeight = 44
         tableView.columnAutoresizingStyle = .uniformColumnAutoresizingStyle
         tableView.allowsMultipleSelection = true
         tableView.dataSource = self
@@ -96,7 +96,7 @@ final class ConnectionsViewController: NSViewController, NSTableViewDataSource, 
     // MARK: Actions
 
     @objc func newConnection(_ sender: Any?) {
-        presentEditor(for: Connection(name: "", host: "", username: ""), password: "")
+        presentEditor(title: "New Connection", for: Connection(name: "", host: "", username: ""), password: "")
     }
 
     @objc func connect(_ sender: Any?) {
@@ -107,7 +107,7 @@ final class ConnectionsViewController: NSViewController, NSTableViewDataSource, 
         guard let connection = singleTarget(for: sender),
               let password = storedPassword(for: connection)
         else { return }
-        presentEditor(for: connection, password: password)
+        presentEditor(title: "Edit Connection", for: connection, password: password)
     }
 
     @objc func duplicateConnection(_ sender: Any?) {
@@ -118,7 +118,7 @@ final class ConnectionsViewController: NSViewController, NSTableViewDataSource, 
         copy.id = UUID()
         copy.name += " copy"
         copy.lastConnected = nil
-        presentEditor(for: copy, password: password)
+        presentEditor(title: "Duplicate Connection", for: copy, password: password)
     }
 
     @objc func delete(_ sender: Any?) {
@@ -322,9 +322,10 @@ final class ConnectionsViewController: NSViewController, NSTableViewDataSource, 
 
     // MARK: Presentation
 
-    private func presentEditor(for connection: Connection, password: String) {
+    private func presentEditor(title: String, for connection: Connection, password: String) {
         guard editorController == nil else { return }
         let editor = ConnectionEditor(
+            title: title,
             connection: connection,
             password: password,
             onCancel: { [weak self] in self?.dismissEditor() },
