@@ -332,6 +332,8 @@ final class ConnectionsViewController: NSViewController, NSTableViewDataSource, 
             emptyStateView.rootView.kind = .noResults(query)
         }
         emptyStateView.isHidden = !rows.isEmpty
+        // Stripes fill the empty area below the rows, but would run through the empty state's text.
+        tableView.usesAlternatingRowBackgroundColors = !rows.isEmpty
     }
 
     private func select(id: UUID) {
