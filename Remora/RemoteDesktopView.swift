@@ -15,6 +15,12 @@ final class RemoteDesktopView: NSView {
     func sendCtrlAltDelete() { desktopInput.sendCtrlAltDelete() }
 
     var onFocus: (() -> Void)?
+    /// Called when the desktop gains or loses the keyboard: it is first responder of the key window,
+    /// the app is active, and the session is connected. System shortcut capture follows the same state.
+    var onCaptureChange: ((Bool) -> Void)? {
+        get { desktopInput.onCaptureChange }
+        set { desktopInput.onCaptureChange = newValue }
+    }
     private lazy var desktopInput = RemoteDesktopInput(view: self)
     private var inputTrackingArea: NSTrackingArea?
     private var remoteCursor: RemoteCursor = .systemDefault

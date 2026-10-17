@@ -35,6 +35,9 @@ final class RemoteDesktopInput: NSObject {
     private var buttons: PointerButtons = []
     private var lastPosition: RemotePoint?
     private var keyUpMonitor: Any?
+    /// Called when the desktop gains or loses the keyboard of the active key window.
+    var onCaptureChange: ((Bool) -> Void)?
+    private var reportedCapture = false
 
     init(view: RemoteDesktopView) { self.view = view }
 
@@ -78,11 +81,13 @@ final class RemoteDesktopInput: NSObject {
     }
 
     func focusIn() {
+        captureMayHaveChanged()
         guard hasFocus else { return }
         becameFirstResponder()
     }
 
     func becameFirstResponder() {
+        captureMayHaveChanged()
         guard connected, input != nil, view?.window?.isKeyWindow == true, NSApp.isActive else { return }
         shortcutCapture.start()
         // AppKit can call becomeFirstResponder before assigning window.firstResponder.
@@ -93,8 +98,19 @@ final class RemoteDesktopInput: NSObject {
     }
 
     func focusOut() {
+        captureMayHaveChanged()
         shortcutCapture.stop()
         releaseKeys()
+    }
+
+    /// AppKit finishes a focus change after the call that announces it, so the state is read on the next turn.
+    /// The task keeps this object alive, so a desktop leaving its window still reports the release.
+    private func captureMayHaveChanged() {
+        Task { @MainActor in
+            guard hasFocus != reportedCapture else { return }
+            reportedCapture = hasFocus
+            onCaptureChange?(reportedCapture)
+        }
     }
 
     private func releaseKeys() {
