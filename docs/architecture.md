@@ -44,7 +44,7 @@ One Swift protocol in RemoraCore. The app never sees FreeRDP types.
 
 ## Rendering
 
-`CAMetalLayer` with one BGRA texture. Each frame uploads only the dirty rectangles with `replaceRegion` and draws one quad. Pixels are sRGB and opaque. `NSView.displayLink` paces presentation.
+`CAMetalLayer` with one private BGRA texture. The renderer copies dirty rectangles into shared staging buffers, then blits the accumulated damage and draws one opaque quad in the same command buffer. Semaphores prevent CPU writes while the GPU reads a staging buffer. `NSView.displayLink` paces presentation, with at most one command buffer in flight. Pending damage coalesces instead of queueing frames; an idle desktop submits no GPU work. Pixels are tagged sRGB. Scaling uses aspect fit with black letterboxing, nearest sampling at 1:1, and linear sampling otherwise.
 
 ## Input
 
