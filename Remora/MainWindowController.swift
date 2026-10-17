@@ -26,11 +26,13 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
     private let homeToolbarItem = NSToolbarItem(itemIdentifier: MainWindowController.homeItem)
     private let tabsToolbarItem = NSToolbarItem(itemIdentifier: MainWindowController.tabsItem)
     private let tabStrip: NSHostingView<SessionTabStrip>
+    private let tabStripLayout = SessionTabStripLayout()
     private let tabStripWidth: NSLayoutConstraint
     private let searchToolbarItem = NSSearchToolbarItem(itemIdentifier: MainWindowController.searchItem)
     private let searchWidth: NSLayoutConstraint
     /// Window > a separator and tab 1 through 9, hidden past the last tab.
     private(set) var tabMenuItems: [NSMenuItem] = []
+    private var eventMonitor: Any?
 
     init(connectionStore: ConnectionStore, credentialStore: CredentialStore, sessionTabs: SessionTabs) {
         self.connectionStore = connectionStore
@@ -41,7 +43,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
             sessionTabs: sessionTabs
         )
         currentPage = connectionsViewController
-        tabStrip = NSHostingView(rootView: SessionTabStrip(tabs: sessionTabs))
+        tabStrip = NSHostingView(rootView: SessionTabStrip(tabs: sessionTabs, layout: tabStripLayout))
         tabStripWidth = tabStrip.widthAnchor.constraint(
             lessThanOrEqualToConstant: SessionTabStrip.idealWidth(forTabCount: 1)
         )
@@ -92,12 +94,34 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
             return item
         }
         sessionTabs.onSelectionChange = { [weak self] _, selection in self?.showPage(selection) }
+        eventMonitor = NSEvent.addLocalMonitorForEvents(matching: [.rightMouseDown, .leftMouseDown]) {
+            [weak self] event in
+            let consumed = MainActor.assumeIsolated { self?.consume(event) ?? false }
+            return consumed ? nil : event
+        }
         observeTabs()
         updateChrome()
     }
 
     required init?(coder: NSCoder) {
         fatalError("Use init(connectionStore:credentialStore:sessionTabs:)")
+    }
+
+    isolated deinit {
+        if let eventMonitor { NSEvent.removeMonitor(eventMonitor) }
+    }
+
+    /// Handles the secondary clicks that the toolbar would otherwise take.
+    /// Returns true for an event it consumed.
+    private func consume(_ event: NSEvent) -> Bool {
+        switch event.type {
+        case .rightMouseDown:
+            showTabMenu(for: event)
+        case .leftMouseDown where event.modifierFlags.contains(.control):
+            showTabMenu(for: event)
+        default:
+            false
+        }
     }
 
     // MARK: Pages
@@ -228,6 +252,8 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
             return tabs.indices.contains(menuItem.tag) && canChangeTabs
         case #selector(closeTab(_:)):
             return session != nil && canChangeTabs
+        case #selector(closeClickedTab(_:)):
+            return canChangeTabs
         case #selector(disconnectSession(_:)):
             return session?.canDisconnect ?? false
         case #selector(reconnectSession(_:)):
@@ -239,6 +265,26 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
         default:
             return true
         }
+    }
+
+    /// The toolbar takes secondary clicks for its own menu before the strip's views see them.
+    private func showTabMenu(for event: NSEvent) -> Bool {
+        guard event.window != nil, event.window === tabStrip.window, !tabStrip.isHiddenOrHasHiddenAncestor else {
+            return false
+        }
+        let point = tabStrip.convert(event.locationInWindow, from: nil)
+        guard tabStrip.bounds.contains(point), let id = tabStripLayout.tab(at: point) else { return false }
+        let menu = NSMenu()
+        let item = menu.addItem(withTitle: "Close Tab", action: #selector(closeClickedTab(_:)), keyEquivalent: "")
+        item.target = self
+        item.representedObject = id
+        NSMenu.popUpContextMenu(menu, with: event, for: tabStrip)
+        return true
+    }
+
+    @objc private func closeClickedTab(_ sender: NSMenuItem) {
+        guard let id = sender.representedObject as? UUID else { return }
+        close(id)
     }
 
     // MARK: Search
@@ -384,6 +430,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
 
         tabStrip.rootView = SessionTabStrip(
             tabs: sessionTabs,
+            layout: tabStripLayout,
             onSelect: { [weak self] id in self?.select(id) },
             onClose: { [weak self] id in self?.close(id) }
         )

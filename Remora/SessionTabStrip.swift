@@ -10,12 +10,14 @@ struct SessionTabStrip: View {
     static let minimumTabWidth: CGFloat = 76
     static let height: CGFloat = 30
     private static let inset: CGFloat = 3
+    private nonisolated static let coordinateSpace = "SessionTabStrip"
 
     static func idealWidth(forTabCount count: Int) -> CGFloat {
         CGFloat(max(1, count)) * idealTabWidth + 2 * inset
     }
 
     let tabs: SessionTabs
+    let layout: SessionTabStripLayout
     var onSelect: (UUID) -> Void = { _ in }
     var onClose: (UUID) -> Void = { _ in }
     @State private var hovered: UUID?
@@ -41,6 +43,10 @@ struct SessionTabStrip: View {
                             )
                             .frame(width: width, height: proxy.size.height)
                             .id(tab.id)
+                            .onGeometryChange(for: CGRect.self) { $0.frame(in: .named(Self.coordinateSpace)) } action: {
+                                layout.frames[tab.id] = $0
+                            }
+                            .onDisappear { layout.frames[tab.id] = nil }
                         }
                     }
                 }
@@ -53,6 +59,7 @@ struct SessionTabStrip: View {
             }
         }
         .padding(.horizontal, Self.inset)
+        .coordinateSpace(.named(Self.coordinateSpace))
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Tabs")
     }
@@ -120,9 +127,6 @@ private struct SessionTabView: View {
         .onTapGesture(perform: onSelect)
         .onHover(perform: onHover)
         .help(tab.title)
-        .contextMenu {
-            Button("Close Tab", action: onClose)
-        }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(tab.title)
         .accessibilityValue(tab.needsAttention ? "Needs attention" : tab.state.statusTitle)
@@ -134,5 +138,16 @@ private struct SessionTabView: View {
     /// The shown tab shows its session status. A hidden tab shows an orange dot only while a request waits.
     private var dotColor: NSColor? {
         if isSelected { tab.state.statusColor } else if tab.needsAttention { .systemOrange } else { nil }
+    }
+}
+
+/// Where each tab sits in the strip, in the hosting view's flipped coordinates. The toolbar takes
+/// secondary clicks before SwiftUI sees them, so the window controller shows the tab menu from this.
+@MainActor
+final class SessionTabStripLayout {
+    fileprivate var frames: [UUID: CGRect] = [:]
+
+    func tab(at point: CGPoint) -> UUID? {
+        frames.first { $0.value.contains(point) }?.key
     }
 }
