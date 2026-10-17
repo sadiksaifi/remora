@@ -266,8 +266,16 @@ final class ConnectionsViewController: NSViewController, NSTableViewDataSource, 
     }
 
     private func open(_ connections: [Connection]) {
-        for connection in connections {
-            sessionWindows.show(connection)
+        var failure: (any Error)?
+        for connection in connections where sessionWindows.show(connection) {
+            do {
+                try connectionStore.markConnected(id: connection.id)
+            } catch {
+                failure = error
+            }
+        }
+        if let failure {
+            showAlert("Couldn’t Save Connection", error: failure, on: view.window)
         }
     }
 
