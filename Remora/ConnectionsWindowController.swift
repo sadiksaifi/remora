@@ -15,9 +15,11 @@ final class ConnectionsWindowController: NSWindowController, NSWindowDelegate, N
             credentialStore: credentialStore,
             sessionWindows: sessionWindows
         )
+        // No full-size content view: with the list under the toolbar, AppKit shows the toolbar
+        // background only while the pointer is in the title bar. Below it, the background always shows.
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 560, height: 440),
-            styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
+            styleMask: [.titled, .closable, .miniaturizable, .resizable],
             backing: .buffered,
             defer: false
         )
