@@ -55,6 +55,7 @@ typedef struct {
     /* Straight-alpha BGRA32, tightly packed. Copy before returning. */
     void (*cursor)(void *user, RMRDPCursorKind kind, const uint8_t *pixels,
                    uint32_t width, uint32_t height, uint32_t hotspot_x, uint32_t hotspot_y);
+    void (*remote_clipboard_text)(void *user, const char *text);
     /* On success supply malloc-owned strings in all three outputs; the bridge takes ownership.
      * On cancellation return false and leave outputs NULL. */
     bool (*credentials)(void *user, const char *username, const char *domain, bool rejected,
@@ -79,6 +80,8 @@ void rm_rdp_pointer(RMRDPSession *session, uint16_t x, uint16_t y, uint8_t butto
 void rm_rdp_wheel(RMRDPSession *session, int32_t vertical, int32_t horizontal);
 void rm_rdp_synchronize(RMRDPSession *session, uint8_t locks);
 void rm_rdp_release_all(RMRDPSession *session);
+/* Copies NUL-terminated UTF-8 text and wakes the session thread. */
+void rm_rdp_set_local_clipboard(RMRDPSession *session, const char *text);
 /* Zero means unsupported. Uses WinPR's Apple table plus documented corrections. */
 uint32_t rm_rdp_scancode(uint16_t key, bool iso_keyboard);
 uint32_t rm_rdp_keyboard_layout(const char *name);

@@ -1,5 +1,6 @@
 #include "CFreeRDPBridge.h"
 #include "input.h"
+#include "clipboard.h"
 
 #define WITH_OPAQUE_SETTINGS
 /* WinPR's own public sspi.h declares fields with deprecated WinPR types. */
@@ -30,12 +31,19 @@
 #include <time.h>
 #include <unistd.h>
 
+/* Darwin modules and WinPR both export these macros. Choose C boolean values. */
+#undef TRUE
+#undef FALSE
+#define TRUE true
+#define FALSE false
+
 struct RMRDPSession {
     rdpClientContext client; /* Must remain first: client-common requires this prefix. */
     RMRDPCallbacks callbacks;
     void *user;
     atomic_bool aborted;
     RMInput *input;
+    RMClipboard *clipboard;
     bool credentials_cancelled;
     bool certificate_rejected;
     unsigned credential_requests;
@@ -44,6 +52,7 @@ struct RMRDPSession {
 };
 
 RMInput *rm_rdp_input(RMRDPSession *s) { return s->input; }
+RMClipboard *rm_rdp_clipboard(RMRDPSession *s) { return s->clipboard; }
 
 static rdpContext *context_of(RMRDPSession *s) { return &s->client.context; }
 static RMRDPSession *session_of(rdpContext *context) { return (RMRDPSession *)context; }
@@ -322,7 +331,9 @@ static BOOL client_new(freerdp *instance, rdpContext *context) {
     if (PubSub_SubscribeChannelConnected(context->pubSub,
             freerdp_client_OnChannelConnectedEventHandler) < 0 ||
         PubSub_SubscribeChannelDisconnected(context->pubSub,
-            freerdp_client_OnChannelDisconnectedEventHandler) < 0)
+            freerdp_client_OnChannelDisconnectedEventHandler) < 0 ||
+        PubSub_SubscribeChannelConnected(context->pubSub, rm_clipboard_channel_connected) < 0 ||
+        PubSub_SubscribeChannelDisconnected(context->pubSub, rm_clipboard_channel_disconnected) < 0)
         return FALSE;
     rdpTransportIo io = *freerdp_get_io_callbacks(context);
     io.TCPConnect = tcp_connect;
@@ -351,7 +362,8 @@ RMRDPSession *rm_rdp_create(const RMRDPConfiguration *config, const RMRDPCallbac
     s->user = user;
     atomic_init(&s->aborted, false);
     s->input = rm_input_new(context, callbacks, user, config->iso_keyboard);
-    if (!s->input) {
+    s->clipboard = rm_clipboard_new(callbacks, user);
+    if (!s->input || !s->clipboard) {
         rm_rdp_free(s);
         return NULL;
     }
@@ -387,7 +399,7 @@ RMRDPSession *rm_rdp_create(const RMRDPConfiguration *config, const RMRDPCallbac
         freerdp_settings_set_bool(settings, FreeRDP_SupportMultitransport, FALSE) &&
         freerdp_settings_set_bool(settings, FreeRDP_DeviceRedirection, FALSE) &&
         freerdp_settings_set_bool(settings, FreeRDP_AudioPlayback, FALSE) &&
-        freerdp_settings_set_bool(settings, FreeRDP_RedirectClipboard, FALSE);
+        freerdp_settings_set_bool(settings, FreeRDP_RedirectClipboard, TRUE);
     if (!ok) {
         rm_rdp_free(s);
         return NULL;
@@ -454,10 +466,12 @@ void rm_rdp_run(RMRDPSession *s) {
             s->callbacks.connected(s->user);
         while (!atomic_load(&s->aborted) && !freerdp_shall_disconnect_context(context)) {
             HANDLE handles[MAXIMUM_WAIT_OBJECTS] = { 0 };
-            const DWORD count = freerdp_get_event_handles(context, handles, MAXIMUM_WAIT_OBJECTS - 1);
+            const DWORD count = freerdp_get_event_handles(context, handles, MAXIMUM_WAIT_OBJECTS - 2);
             handles[count] = rm_input_event(s->input);
-            if (!count || WaitForMultipleObjects(count + 1, handles, FALSE, INFINITE) == WAIT_FAILED ||
-                !freerdp_check_event_handles(context) || !rm_input_drain(s->input)) {
+            handles[count + 1] = rm_clipboard_event(s->clipboard);
+            if (!count || WaitForMultipleObjects(count + 2, handles, FALSE, INFINITE) == WAIT_FAILED ||
+                !freerdp_check_event_handles(context) || !rm_input_drain(s->input) ||
+                !rm_clipboard_drain(s->clipboard)) {
                 loop_failed = true;
                 break;
             }
@@ -504,7 +518,9 @@ void rm_rdp_abort(RMRDPSession *s) {
 void rm_rdp_free(RMRDPSession *s) {
     if (s) {
         RMInput *input = s->input;
+        RMClipboard *clipboard = s->clipboard;
         freerdp_client_context_free(context_of(s));
         rm_input_free(input);
+        rm_clipboard_free(clipboard);
     }
 }
