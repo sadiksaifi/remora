@@ -52,6 +52,7 @@ final class SessionViewController: NSViewController {
         display = SessionDisplay(view: container)
         super.init(nibName: nil, bundle: nil)
         container.onResize = { [weak self] in self?.display.requestResize() }
+        container.onVisibilityChange = { [weak self] in self?.display.visibilityChanged() }
     }
 
     required init?(coder: NSCoder) {
@@ -78,7 +79,6 @@ final class SessionViewController: NSViewController {
         startSession()
     }
 
-    /// Ends the session and removes the tab's views. The tab can't reconnect afterwards.
     /// Takes the saved connection after an edit. A running session keeps its settings; the next
     /// attempt uses the new ones and reads the password from the Keychain again.
     func update(_ connection: Connection) {
@@ -86,6 +86,7 @@ final class SessionViewController: NSViewController {
         credentials = nil
     }
 
+    /// Ends the session and removes the tab's views. The tab can't reconnect afterwards.
     func close() {
         closed = true
         disconnect()
@@ -448,9 +449,31 @@ final class SessionViewController: NSViewController {
 }
 
 /// The session's content area below the toolbar. Fit to Window follows its size and backing scale.
+/// It reports joining or leaving the window and the window's occlusion changes.
 @MainActor
 private final class SessionContainerView: NSView {
     var onResize: (() -> Void)?
+    var onVisibilityChange: (() -> Void)?
+
+    override func viewWillMove(toWindow newWindow: NSWindow?) {
+        super.viewWillMove(toWindow: newWindow)
+        NotificationCenter.default.removeObserver(self, name: NSWindow.didChangeOcclusionStateNotification, object: nil)
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        if let window {
+            NotificationCenter.default.addObserver(
+                self, selector: #selector(windowDidChangeOcclusionState(_:)),
+                name: NSWindow.didChangeOcclusionStateNotification, object: window
+            )
+        }
+        onVisibilityChange?()
+    }
+
+    @objc private func windowDidChangeOcclusionState(_ notification: Notification) {
+        onVisibilityChange?()
+    }
 
     override func setFrameSize(_ newSize: NSSize) {
         let changed = newSize != frame.size

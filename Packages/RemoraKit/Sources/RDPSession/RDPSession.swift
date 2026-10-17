@@ -69,6 +69,15 @@ public final class RDPSession: RemoteSession, @unchecked Sendable {
         enqueue { rm_rdp_request_resize($0, width, height, scale) }
     }
 
+    public func setDisplayUpdatesEnabled(_ enabled: Bool) {
+        state.lock.withLock {
+            state.displayUpdates = enabled
+            if state.connected, !state.cancelled, let handle = state.handle {
+                rm_rdp_set_display_updates(handle, enabled)
+            }
+        }
+    }
+
     public func sendKey(_ key: KeyInput) {
         enqueue { rm_rdp_key($0, key.keyCode, key.isDown) }
     }
@@ -167,6 +176,7 @@ public final class RDPSession: RemoteSession, @unchecked Sendable {
                 owner.state.connected = true
                 if let handle = owner.state.handle {
                     rm_rdp_synchronize(handle, owner.state.locks.rawValue)
+                    rm_rdp_set_display_updates(handle, owner.state.displayUpdates)
                     if let text = owner.state.localClipboard {
                         text.withCString { rm_rdp_set_local_clipboard(handle, $0) }
                     }
@@ -304,6 +314,7 @@ private final class StateBox: @unchecked Sendable {
     var connected = false
     var supportsDynamicResize = false
     var locks: LockKeys = []
+    var displayUpdates = true
     var started = false
     var ended = false
     var cancelled = false

@@ -536,6 +536,7 @@ void rm_rdp_run(RMRDPSession *s) {
                 s->reconnecting = false;
                 if (recovered) {
                     rm_rdp_release_all(s);
+                    rm_display_reconnected(s->display);
                     if (s->callbacks.connected)
                         s->callbacks.connected(s->user);
                     continue;

@@ -66,6 +66,7 @@ private final class LoggingSession: RemoteSession, Sendable {
     let events = AsyncStream<SessionEvent> { $0.finish() }
     var supportsDynamicResize: Bool { false }
     func requestResize(_ size: DesktopSize, scale: Double) {}
+    func setDisplayUpdatesEnabled(_ enabled: Bool) {}
     func connect() {}
     func disconnect() {}
     func sendKey(_ key: KeyInput) {

@@ -3,12 +3,15 @@ import RemoraCore
 
 /// Requests a Fit to Window desktop size that follows the session's content area,
 /// separately from the remote desktop size. Full-screen transitions defer requests until they end.
+/// Pauses the server's desktop updates while the content area can't be seen: a hidden tab,
+/// a minimized window, or a fully covered window.
 @MainActor
 final class SessionDisplay {
     private weak var session: (any RemoteSession)?
     private weak var view: NSView?
     private var connected = false
     private var transitioning = false
+    private var visible = false
 
     init(view: NSView) {
         self.view = view
@@ -17,6 +20,21 @@ final class SessionDisplay {
     func attach(_ session: any RemoteSession) {
         self.session = session
         connected = false
+        visible = isVisible
+        session.setDisplayUpdatesEnabled(visible)
+    }
+
+    /// Call when the view joins or leaves a window, or the window's occlusion changes.
+    func visibilityChanged() {
+        let visible = isVisible
+        guard visible != self.visible else { return }
+        self.visible = visible
+        session?.setDisplayUpdatesEnabled(visible)
+    }
+
+    private var isVisible: Bool {
+        guard let window = view?.window else { return false }
+        return window.occlusionState.contains(.visible) && !window.isMiniaturized
     }
 
     func disconnect() {

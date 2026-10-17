@@ -179,6 +179,10 @@ public protocol RemoteSession: AnyObject, Sendable {
     /// Requests backing pixels and pixels per point. Ignored until resizing is supported.
     /// Only desktopSizeChanged confirms the resulting size.
     func requestResize(_ size: DesktopSize, scale: Double)
+    /// Asks the server to stop or resume sending desktop updates, for example while the desktop is hidden.
+    /// The connection, input, and clipboard continue, and the choice survives reconnection.
+    /// Resuming asks the server to redraw the desktop. A server without support keeps sending updates.
+    func setDisplayUpdatesEnabled(_ enabled: Bool)
     func connect()
     func disconnect()
     func sendKey(_ key: KeyInput)

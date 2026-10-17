@@ -8,9 +8,10 @@
 #include <string.h>
 
 /* Display Control callbacks run on the dynamic-channel worker. The lock protects
- * the channel, caps, and a single-slot command queue. Only process sends layouts;
- * callbacks to Swift always run after unlocking. */
+ * the channel, caps, a single-slot command queue, and the display update switch.
+ * Only process sends layouts and Suppress Output; callbacks to Swift always run after unlocking. */
 struct RMDisplay {
+    rdpContext *context;
     RMRDPCallbacks callbacks;
     void *user;
     pthread_mutex_t lock;
@@ -26,6 +27,8 @@ struct RMDisplay {
     DISPLAY_CONTROL_MONITOR_LAYOUT desired, last_layout;
     uint32_t observed_width, observed_height;
     bool observed_requested;
+    /* What the client wants and what the server was last told. Servers start with updates on. */
+    bool updates_wanted, updates_sent;
 };
 
 static UINT display_caps(DispClientContext *channel, UINT32 monitors, UINT32 a, UINT32 b) {
@@ -73,8 +76,10 @@ RMDisplay *rm_display_new(rdpContext *context, const RMRDPCallbacks *callbacks, 
     RMDisplay *d = calloc(1, sizeof(*d));
     if (!d)
         return NULL;
+    d->context = context;
     d->callbacks = *callbacks;
     d->user = user;
+    d->updates_wanted = d->updates_sent = true;
     if (pthread_mutex_init(&d->lock, NULL) != 0) {
         free(d);
         return NULL;
@@ -141,9 +146,47 @@ void rm_rdp_request_resize(RMRDPSession *session, uint32_t width, uint32_t heigh
     pthread_mutex_unlock(&d->lock);
 }
 
+void rm_rdp_set_display_updates(RMRDPSession *session, bool enabled) {
+    RMDisplay *d = rm_rdp_display(session);
+    pthread_mutex_lock(&d->lock);
+    if (d->updates_wanted != enabled) {
+        d->updates_wanted = enabled;
+        SetEvent(d->wake);
+    }
+    pthread_mutex_unlock(&d->lock);
+}
+
+void rm_display_reconnected(RMDisplay *d) {
+    pthread_mutex_lock(&d->lock);
+    d->updates_sent = true;
+    SetEvent(d->wake);
+    pthread_mutex_unlock(&d->lock);
+}
+
+/* FreeRDP sends nothing when the server lacks suppressOutputSupport, and the server keeps
+ * sending updates. A failed write surfaces through the event loop like any other. */
+static void send_display_updates(RMDisplay *d, bool allow) {
+    rdpContext *context = d->context;
+    const UINT32 width = freerdp_settings_get_uint32(context->settings, FreeRDP_DesktopWidth);
+    const UINT32 height = freerdp_settings_get_uint32(context->settings, FreeRDP_DesktopHeight);
+    /* TS_RECTANGLE16 bounds are inclusive. */
+    const RECTANGLE_16 desktop = {
+        .left = 0, .top = 0,
+        .right = (UINT16)(width > 0 ? width - 1 : 0), .bottom = (UINT16)(height > 0 ? height - 1 : 0)
+    };
+    BOOL sent = context->update->SuppressOutput(context, allow ? 1 : 0, allow ? &desktop : NULL);
+    if (sent && allow)
+        sent = context->update->RefreshRect(context, 1, &desktop);
+    os_log_info(d->log, "Display updates: %{public}s, server support=%d, status=%d", allow ? "on" : "off",
+                freerdp_settings_get_bool(context->settings, FreeRDP_SuppressOutput), sent);
+}
+
 DWORD rm_display_process(RMDisplay *d) {
     pthread_mutex_lock(&d->lock);
     ResetEvent(d->wake);
+    const bool updates_changed = d->updates_wanted != d->updates_sent;
+    const bool updates = d->updates_wanted;
+    d->updates_sent = updates;
     const bool changed = d->available != d->reported_available;
     const bool available = d->available;
     d->reported_available = available;
@@ -176,6 +219,8 @@ DWORD rm_display_process(RMDisplay *d) {
         if (!d->queued && d->retries >= 5) timeout = INFINITE;
     }
     pthread_mutex_unlock(&d->lock);
+    if (updates_changed)
+        send_display_updates(d, updates);
     if (changed && d->callbacks.dynamic_resize)
         d->callbacks.dynamic_resize(d->user, available);
     return timeout;
