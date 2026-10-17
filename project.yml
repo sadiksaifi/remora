@@ -24,6 +24,8 @@ targets:
     dependencies:
       - package: RemoraKit
         product: RemoraCore
+      - package: RemoraKit
+        product: RDPSession
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: dev.sadiksaifi.Remora

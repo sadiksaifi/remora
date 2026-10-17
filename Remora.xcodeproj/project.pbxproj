@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		B1C9787A91AEA39CBD37D6CA /* RDPSession in Frameworks */ = {isa = PBXBuildFile; productRef = CEE650B072CCF9E151EF611A /* RDPSession */; };
 		E9111E3861BEE04603B7723C /* RemoraCore in Frameworks */ = {isa = PBXBuildFile; productRef = F4412091013E9923095E958D /* RemoraCore */; };
 /* End PBXBuildFile section */
 
@@ -33,6 +34,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				E9111E3861BEE04603B7723C /* RemoraCore in Frameworks */,
+				B1C9787A91AEA39CBD37D6CA /* RDPSession in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -85,6 +87,7 @@
 			name = Remora;
 			packageProductDependencies = (
 				F4412091013E9923095E958D /* RemoraCore */,
+				CEE650B072CCF9E151EF611A /* RDPSession */,
 			);
 			productName = Remora;
 			productReference = E3C547F7F1E1AEA0842A1FA7 /* Remora.app */;
@@ -354,6 +357,10 @@
 /* End XCLocalSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
+		CEE650B072CCF9E151EF611A /* RDPSession */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = RDPSession;
+		};
 		F4412091013E9923095E958D /* RemoraCore */ = {
 			isa = XCSwiftPackageProductDependency;
 			productName = RemoraCore;
