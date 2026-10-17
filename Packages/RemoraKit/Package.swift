@@ -32,7 +32,7 @@ let package = Package(
             name: "RemoraCore",
             dependencies: [.product(name: "KeychainAccess", package: "KeychainAccess")]
         ),
-        .testTarget(name: "RemoraCoreTests", dependencies: ["RemoraCore"])
+        .testTarget(name: "RemoraCoreTests", dependencies: ["RemoraCore", "CFreeRDPBridge"])
     ],
     swiftLanguageModes: [.v6]
 )

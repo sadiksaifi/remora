@@ -1,8 +1,20 @@
 import AppKit
 import QuartzCore
+import RemoraCore
 
 @MainActor
 final class RemoteDesktopView: NSView {
+    var input: (any RemoteSession)? {
+        get { desktopInput.input }
+        set {
+            desktopInput.input = newValue
+            window?.invalidateCursorRects(for: self)
+        }
+    }
+    private lazy var desktopInput = RemoteDesktopInput(view: self)
+    private var inputTrackingArea: NSTrackingArea?
+    private var remoteCursor: RemoteCursor = .systemDefault
+
     let renderer: FrameRenderer
     private let metalLayer = CAMetalLayer()
     private var refreshLink: CADisplayLink?
@@ -38,6 +50,7 @@ final class RemoteDesktopView: NSView {
     override func updateLayer() { redrawNeeded = true }
 
     override func viewWillMove(toWindow newWindow: NSWindow?) {
+        desktopInput.focusOut()
         refreshLink?.invalidate()
         refreshLink = nil
         refreshTarget = nil
@@ -47,7 +60,9 @@ final class RemoteDesktopView: NSView {
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
         updateDrawableSize()
-        guard window != nil else { return }
+        desktopInput.movedToWindow()
+        guard let window else { return }
+        window.makeFirstResponder(self)
         let target = RefreshTarget(view: self)
         let link = displayLink(target: target, selector: #selector(RefreshTarget.refresh(_:)))
         link.add(to: .main, forMode: .common)
@@ -64,6 +79,57 @@ final class RemoteDesktopView: NSView {
     override func layout() {
         super.layout()
         updateDrawableSize()
+    }
+
+    override func becomeFirstResponder() -> Bool {
+        let accepted = super.becomeFirstResponder()
+        if accepted { desktopInput.becameFirstResponder() }
+        return accepted
+    }
+
+    override func resignFirstResponder() -> Bool {
+        desktopInput.focusOut()
+        return super.resignFirstResponder()
+    }
+
+    override func keyDown(with event: NSEvent) { desktopInput.key(event, down: true) }
+    override func keyUp(with event: NSEvent) { desktopInput.key(event, down: false) }
+    override func flagsChanged(with event: NSEvent) { desktopInput.flagsChanged(event) }
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        desktopInput.performKeyEquivalent(event) || super.performKeyEquivalent(with: event)
+    }
+    override func mouseMoved(with event: NSEvent) { desktopInput.pointer(event) }
+    override func mouseDragged(with event: NSEvent) { desktopInput.pointer(event) }
+    override func rightMouseDragged(with event: NSEvent) { desktopInput.pointer(event) }
+    override func otherMouseDragged(with event: NSEvent) { desktopInput.pointer(event) }
+    override func mouseDown(with event: NSEvent) { desktopInput.pointer(event, down: true) }
+    override func mouseUp(with event: NSEvent) { desktopInput.pointer(event, down: false) }
+    override func rightMouseDown(with event: NSEvent) { desktopInput.pointer(event, down: true) }
+    override func rightMouseUp(with event: NSEvent) { desktopInput.pointer(event, down: false) }
+    override func otherMouseDown(with event: NSEvent) { desktopInput.pointer(event, down: true) }
+    override func otherMouseUp(with event: NSEvent) { desktopInput.pointer(event, down: false) }
+    override func scrollWheel(with event: NSEvent) { desktopInput.scrollWheel(event) }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let inputTrackingArea { removeTrackingArea(inputTrackingArea) }
+        let area = NSTrackingArea(rect: .zero, options: [.mouseMoved, .activeInKeyWindow, .inVisibleRect],
+                                  owner: self, userInfo: nil)
+        addTrackingArea(area)
+        inputTrackingArea = area
+    }
+
+    func apply(cursor: RemoteCursor) {
+        remoteCursor = cursor
+        window?.invalidateCursorRects(for: self)
+    }
+
+    override func resetCursorRects() {
+        addCursorRect(bounds, cursor: .arrow)
+        let geometry = DesktopGeometry(remoteSize: remoteSize, drawableSize: bounds.size)
+        guard input != nil, geometry.contentRect.width > 0 else { return }
+        let scale = geometry.contentRect.width / remoteSize.width
+        addCursorRect(geometry.contentRect, cursor: remoteCursor.cursor(pointsPerPixel: scale))
     }
 
     /// Maps this flipped view's points to top-left remote pixel coordinates.
@@ -86,11 +152,15 @@ final class RemoteDesktopView: NSView {
         metalLayer.drawableSize = size
         CATransaction.commit()
         redrawNeeded = true
+        window?.invalidateCursorRects(for: self)
     }
 
     private func refresh() {
         if let size = renderer.present(on: metalLayer, redraw: redrawNeeded) {
-            remoteSize = size
+            if remoteSize != size {
+                remoteSize = size
+                window?.invalidateCursorRects(for: self)
+            }
             redrawNeeded = false
         }
     }

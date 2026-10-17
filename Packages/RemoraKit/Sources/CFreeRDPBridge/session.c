@@ -1,4 +1,5 @@
 #include "CFreeRDPBridge.h"
+#include "input.h"
 
 #define WITH_OPAQUE_SETTINGS
 /* WinPR's own public sspi.h declares fields with deprecated WinPR types. */
@@ -33,12 +34,15 @@ struct RMRDPSession {
     RMRDPCallbacks callbacks;
     void *user;
     atomic_bool aborted;
+    RMInput *input;
     bool credentials_cancelled;
     bool certificate_rejected;
     unsigned credential_requests;
     RMRDPDisconnectReason network_error;
     int socket_error;
 };
+
+RMInput *rm_rdp_input(RMRDPSession *s) { return s->input; }
 
 static rdpContext *context_of(RMRDPSession *s) { return &s->client.context; }
 static RMRDPSession *session_of(rdpContext *context) { return (RMRDPSession *)context; }
@@ -282,6 +286,7 @@ static BOOL post_connect(freerdp *instance) {
     instance->context->update->BeginPaint = begin_paint;
     instance->context->update->EndPaint = end_paint;
     instance->context->update->DesktopResize = desktop_resize;
+    rm_input_register_pointer(session_of(instance->context)->input);
     report_size(session_of(instance->context));
     return TRUE;
 }
@@ -328,6 +333,11 @@ RMRDPSession *rm_rdp_create(const RMRDPConfiguration *config, const RMRDPCallbac
     s->callbacks = *callbacks;
     s->user = user;
     atomic_init(&s->aborted, false);
+    s->input = rm_input_new(context, callbacks, user, config->iso_keyboard);
+    if (!s->input) {
+        rm_rdp_free(s);
+        return NULL;
+    }
     rdpSettings *settings = context->settings;
     const UINT32 scale = (UINT32)lround(config->scale_factor * 100);
     /* MS-RDPBCGR permits only 100, 140 or 180 for DeviceScaleFactor. */
@@ -343,6 +353,7 @@ RMRDPSession *rm_rdp_create(const RMRDPConfiguration *config, const RMRDPCallbac
         freerdp_settings_set_uint32(settings, FreeRDP_DesktopHeight, config->height) &&
         freerdp_settings_set_uint32(settings, FreeRDP_DesktopScaleFactor, scale) &&
         freerdp_settings_set_uint32(settings, FreeRDP_DeviceScaleFactor, device_scale) &&
+        freerdp_settings_set_uint32(settings, FreeRDP_KeyboardLayout, config->keyboard_layout) &&
         freerdp_settings_set_uint32(settings, FreeRDP_ColorDepth, 32) &&
         freerdp_settings_set_uint32(settings, FreeRDP_TcpConnectTimeout, 12000) &&
         freerdp_settings_set_bool(settings, FreeRDP_SupportGraphicsPipeline, TRUE) &&
@@ -426,9 +437,10 @@ void rm_rdp_run(RMRDPSession *s) {
             s->callbacks.connected(s->user);
         while (!atomic_load(&s->aborted) && !freerdp_shall_disconnect_context(context)) {
             HANDLE handles[MAXIMUM_WAIT_OBJECTS] = { 0 };
-            const DWORD count = freerdp_get_event_handles(context, handles, MAXIMUM_WAIT_OBJECTS);
-            if (!count || WaitForMultipleObjects(count, handles, FALSE, INFINITE) == WAIT_FAILED ||
-                !freerdp_check_event_handles(context)) {
+            const DWORD count = freerdp_get_event_handles(context, handles, MAXIMUM_WAIT_OBJECTS - 1);
+            handles[count] = rm_input_event(s->input);
+            if (!count || WaitForMultipleObjects(count + 1, handles, FALSE, INFINITE) == WAIT_FAILED ||
+                !freerdp_check_event_handles(context) || !rm_input_drain(s->input)) {
                 loop_failed = true;
                 break;
             }
@@ -473,6 +485,9 @@ void rm_rdp_abort(RMRDPSession *s) {
 }
 
 void rm_rdp_free(RMRDPSession *s) {
-    if (s)
+    if (s) {
+        RMInput *input = s->input;
         freerdp_client_context_free(context_of(s));
+        rm_input_free(input);
+    }
 }
