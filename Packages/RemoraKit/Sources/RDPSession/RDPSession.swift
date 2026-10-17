@@ -60,11 +60,12 @@ public final class RDPSession: RemoteSession, @unchecked Sendable {
     }
 
     public var supportsDynamicResize: Bool {
-        state.lock.withLock { state.connected && state.supportsDynamicResize && !state.cancelled }
+        configuration.allowsDynamicResize && state.lock.withLock { state.connected && state.supportsDynamicResize && !state.cancelled }
     }
 
     public func requestResize(_ size: DesktopSize, scale: Double) {
-        guard let width = UInt32(exactly: size.width), let height = UInt32(exactly: size.height) else { return }
+        guard configuration.allowsDynamicResize,
+              let width = UInt32(exactly: size.width), let height = UInt32(exactly: size.height) else { return }
         enqueue { rm_rdp_request_resize($0, width, height, scale) }
     }
 
@@ -156,7 +157,8 @@ public final class RDPSession: RemoteSession, @unchecked Sendable {
             username: UnsafePointer(strings[1]), domain: UnsafePointer(strings[2]),
             password: UnsafePointer(strings[3]), config_path: UnsafePointer(strings[4]),
             width: width, height: height, scale_factor: configuration.scaleFactor,
-            keyboard_layout: keyboardLayout, iso_keyboard: isoKeyboard
+            keyboard_layout: keyboardLayout, iso_keyboard: isoKeyboard,
+            dynamic_resolution: configuration.allowsDynamicResize
         )
         var callbacks = RMRDPCallbacks()
         callbacks.connected = { user in

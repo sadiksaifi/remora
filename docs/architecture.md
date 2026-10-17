@@ -47,6 +47,14 @@ One Swift protocol in RemoraCore. The app never sees FreeRDP types.
 
 `CAMetalLayer` with one private BGRA texture. The renderer copies dirty rectangles into shared staging buffers, then blits the accumulated damage and draws one opaque quad in the same command buffer. Semaphores prevent CPU writes while the GPU reads a staging buffer. `NSView.displayLink` paces presentation, with at most one command buffer in flight. Pending damage coalesces instead of queueing frames; an idle desktop submits no GPU work. Pixels are tagged sRGB. Scaling uses aspect fit with black letterboxing, nearest sampling at 1:1, and linear sampling otherwise.
 
+## Desktop sizing
+
+Connections default to Fit to Window, including saved connections without a resolution key. Fit to Window connects at the window's content size in backing pixels and announces the display's backing scale. Display Control follows window resizing, screen changes, and full-screen transitions.
+
+A fixed resolution stores a width and height in remote pixels in RemoraCore. Each side must be 200 to 8192 pixels, and the width must be even. Fixed sessions connect with those dimensions and scale 1 (DesktopScaleFactor and DeviceScaleFactor 100). The RDP adapter rejects resize requests and disables Display Control negotiation for their lifetime, including automatic reconnect and GNOME's redirected reconnect through FreeRDP's original settings backup.
+
+Fixed session windows open at one remote pixel per Mac point, shrink proportionally to the visible screen, and center. Unrequested server desktop sizes use the same rule; Fit to Window divides them by the backing scale. Window resizing and full screen continue to render with aspect fit and letterboxing. The renderer and pointer mapping share `DesktopGeometry`; letterbox bars do not send pointer input.
+
 ## Input
 
 - The session view is first responder and handles `keyDown`, `keyUp`, `flagsChanged`, and `performKeyEquivalent`.

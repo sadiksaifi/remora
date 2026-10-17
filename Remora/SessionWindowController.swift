@@ -40,9 +40,16 @@ final class SessionWindowController: NSWindowController, NSWindowDelegate, NSMen
         window.isReleasedWhenClosed = false
         window.tabbingIdentifier = "Session"
         window.collectionBehavior.insert(.fullScreenPrimary)
+        if case .fixed = connection.resolution {
+            window.minSize = NSSize(width: 200, height: 200)
+        }
         window.center()
         super.init(window: window)
         window.delegate = self
+        if case .fixed(let width, let height) = connection.resolution, connection.resolution.isValid {
+            resizeWindow(to: DesktopSize(width: width, height: height))
+            window.center()
+        }
         startSession()
     }
 
@@ -119,6 +126,10 @@ final class SessionWindowController: NSWindowController, NSWindowDelegate, NSMen
                 showStatus(.disconnected(.protocolError("The connection port must be between 1 and 65535.")))
                 return
             }
+            guard connection.resolution.isValid else {
+                showStatus(.disconnected(.protocolError("The resolution must be 200 to 8192 pixels per side with an even width.")))
+                return
+            }
             let currentCredentials: SessionCredentials
             if let credentials {
                 currentCredentials = credentials
@@ -131,12 +142,25 @@ final class SessionWindowController: NSWindowController, NSWindowDelegate, NSMen
             }
             let renderer = try FrameRenderer()
             let size = window.convertToBacking(connectingView.bounds).size
+            let desktopSize: DesktopSize
+            let scaleFactor: Double
+            let allowsDynamicResize: Bool
+            switch connection.resolution {
+            case .fitToWindow:
+                desktopSize = DesktopSize(width: Int(size.width), height: Int(size.height))
+                scaleFactor = window.backingScaleFactor
+                allowsDynamicResize = true
+            case .fixed(let width, let height):
+                desktopSize = DesktopSize(width: width, height: height)
+                scaleFactor = 1
+                allowsDynamicResize = false
+            }
+            sessionLog.info("Requested desktop: \(desktopSize.width)x\(desktopSize.height), scale=\(scaleFactor), dynamic=\(allowsDynamicResize)")
             let configuration = SessionConfiguration(
                 host: connection.host, port: port, username: currentCredentials.username,
                 domain: currentCredentials.domain,
                 password: currentCredentials.password.isEmpty ? nil : currentCredentials.password,
-                desktopSize: DesktopSize(width: Int(size.width), height: Int(size.height)),
-                scaleFactor: window.backingScaleFactor
+                desktopSize: desktopSize, scaleFactor: scaleFactor, allowsDynamicResize: allowsDynamicResize
             )
             let session = RDPSession(configuration: configuration, frameSink: RendererFrameSink(renderer: renderer))
             let desktopView = RemoteDesktopView(renderer: renderer)
@@ -220,8 +244,9 @@ final class SessionWindowController: NSWindowController, NSWindowDelegate, NSMen
         defer { display.applyingRemoteSize = false }
         let visible = screen.visibleFrame
         let chrome = window.frame.height - window.contentRect(forFrameRect: window.frame).height
-        let desired = NSSize(width: CGFloat(size.width) / window.backingScaleFactor,
-                             height: CGFloat(size.height) / window.backingScaleFactor)
+        let pixelsPerPoint = connection.resolution == .fitToWindow ? window.backingScaleFactor : 1
+        let desired = NSSize(width: CGFloat(size.width) / pixelsPerPoint,
+                             height: CGFloat(size.height) / pixelsPerPoint)
         let factor = min(1, visible.width / desired.width, max(1, visible.height - chrome) / desired.height)
         var frame = window.frameRect(forContentRect: NSRect(origin: .zero, size: NSSize(
             width: desired.width * factor, height: desired.height * factor
@@ -230,6 +255,8 @@ final class SessionWindowController: NSWindowController, NSWindowDelegate, NSMen
         frame.origin.x = max(visible.minX, min(frame.minX, visible.maxX - frame.width))
         frame.origin.y = max(visible.minY, min(frame.minY, visible.maxY - frame.height))
         window.setFrame(frame, display: true)
+        let content = window.contentRect(forFrameRect: window.frame).size
+        sessionLog.info("Window content: \(content.width)x\(content.height) points, backing scale=\(window.backingScaleFactor)")
     }
 
     private func showCredentials(_ challenge: CredentialsChallenge) {
