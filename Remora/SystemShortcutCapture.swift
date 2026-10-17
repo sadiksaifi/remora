@@ -10,8 +10,9 @@ final class SystemShortcutCapture {
     static let enabledKey = "CaptureSystemShortcuts"
     static var isEnabled: Bool { UserDefaults.standard.object(forKey: enabledKey) as? Bool ?? true }
 
-    /// Opens Privacy & Security > Accessibility. An untrusted Remora first asks to be added to
-    /// that list, which can also show the system prompt.
+    /// Opens the Privacy & Security pane that grants Accessibility trust. macOS 27 names it
+    /// Device Control and Data Access. An untrusted Remora first asks to be added to that list,
+    /// which can also show the system prompt.
     static func openAccessibilitySettings() {
         if !isTrusted {
             let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary

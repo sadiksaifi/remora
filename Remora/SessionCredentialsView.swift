@@ -81,7 +81,7 @@ struct SessionCredentialsView: View {
             .padding([.horizontal, .bottom], 20)
         }
         .frame(width: 460)
-        .defaultFocus($focusedField, challenge.username.isEmpty ? .username : .password)
+        .onAppear { focusedField = challenge.username.isEmpty ? .username : .password }
     }
 
     private var title: String {

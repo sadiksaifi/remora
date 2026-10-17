@@ -34,12 +34,13 @@ final class SessionOverlays: NSObject {
             onOpenSettings: { [weak self] in self?.openSettings() },
             onDismiss: { [weak self] in self?.dismissPermission() }
         ))
+        banner.sizingOptions = .intrinsicContentSize
         banner.translatesAutoresizingMaskIntoConstraints = false
         desktop.addSubview(banner)
         NSLayoutConstraint.activate([
-            banner.topAnchor.constraint(equalTo: desktop.topAnchor),
+            banner.topAnchor.constraint(equalTo: desktop.topAnchor, constant: 12),
             banner.centerXAnchor.constraint(equalTo: desktop.centerXAnchor),
-            banner.widthAnchor.constraint(lessThanOrEqualTo: desktop.widthAnchor),
+            banner.widthAnchor.constraint(lessThanOrEqualTo: desktop.widthAnchor, constant: -24),
         ])
         permissionView = banner
     }

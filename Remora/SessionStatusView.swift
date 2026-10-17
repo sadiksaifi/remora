@@ -181,11 +181,11 @@ struct ShortcutPermissionBanner: View {
             VStack(alignment: .leading, spacing: 3) {
                 Text("Send System Shortcuts to the Remote Computer")
                     .font(.headline)
-                Text("Shortcuts like Command-Tab and Command-Space stay on this Mac until you allow Remora in Privacy & Security > Accessibility.")
+                Text("Shortcuts like Command-Tab and Command-Space stay on this Mac until you allow Remora to control this Mac in Privacy & Security settings.")
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
-            .frame(maxWidth: 380, alignment: .leading)
+            .frame(maxWidth: 440, alignment: .leading)
             HStack(spacing: 8) {
                 Button("Not Now", action: onDismiss)
                 Button("Open System Settings", action: onOpenSettings)
@@ -195,6 +195,5 @@ struct ShortcutPermissionBanner: View {
         }
         .padding(16)
         .glassEffect(.regular, in: .rect(cornerRadius: 22))
-        .padding(12)
     }
 }

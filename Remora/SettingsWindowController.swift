@@ -35,7 +35,7 @@ private struct SettingsView: View {
                 LabeledContent {
                     Button("Open System Settings") { SystemShortcutCapture.openAccessibilitySettings() }
                 } label: {
-                    Text("Accessibility access")
+                    Text("Permission to control this Mac")
                     Label(trusted ? "Allowed" : "Not allowed. System shortcuts stay on this Mac.",
                           systemImage: trusted ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
                         .foregroundStyle(trusted ? .green : .orange)
