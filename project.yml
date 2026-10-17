@@ -1,0 +1,49 @@
+name: Remora
+options:
+  minimumXcodeGenVersion: 2.46.0
+  xcodeVersion: "27.1"
+  deploymentTarget:
+    macOS: "26.0"
+packages:
+  RemoraKit:
+    path: Packages/RemoraKit
+settings:
+  base:
+    ARCHS: arm64
+    SWIFT_VERSION: "6.0"
+    SWIFT_STRICT_CONCURRENCY: complete
+    SWIFT_DEFAULT_ACTOR_ISOLATION: nonisolated
+    MACOSX_DEPLOYMENT_TARGET: "26.0"
+targets:
+  Remora:
+    type: application
+    platform: macOS
+    sources:
+      - path: Remora
+        type: syncedFolder
+    dependencies:
+      - package: RemoraKit
+        product: RemoraCore
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dev.sadiksaifi.Remora
+        PRODUCT_NAME: Remora
+        CODE_SIGN_STYLE: Automatic
+        DEVELOPMENT_TEAM: LZ3V3WUPWR
+        ENABLE_APP_SANDBOX: NO
+        ENABLE_HARDENED_RUNTIME: NO
+        GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_KEY_NSLocalNetworkUsageDescription: Remora connects to remote computers on your local network.
+        INFOPLIST_KEY_LSApplicationCategoryType: public.app-category.utilities
+        INFOPLIST_KEY_NSPrincipalClass: NSApplication
+        MARKETING_VERSION: "0.1.0"
+        CURRENT_PROJECT_VERSION: 1
+schemes:
+  Remora:
+    build:
+      targets:
+        Remora: all
+    run:
+      config: Debug
+    archive:
+      config: Release
