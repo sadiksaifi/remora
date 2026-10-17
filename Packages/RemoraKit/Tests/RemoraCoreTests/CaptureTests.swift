@@ -132,3 +132,60 @@ private func desktop(width: Int, height: Int, bgra: [UInt8], sink: MetalDesktop)
     let top = 40 * stride + 160 * 4
     #expect(pixels[top] > 200 && pixels[top + 1] < 55)
 }
+
+@Test(arguments: [0, 2]) func movieHoldsLastFrameUntilStop(changes: Int) async throws {
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let url = directory.appendingPathComponent("static.mov")
+    #expect(FileManager.default.createFile(atPath: url.path, contents: Data()))
+    let frames = try MetalDesktop(device: #require(MTLCreateSystemDefaultDevice()))
+    desktop(width: 320, height: 240, bgra: [20, 30, 240, 0], sink: frames)
+    let startedAt = ProcessInfo.processInfo.systemUptime
+    let movie = try AppleCaptureMedia().movie(at: url, source: frames)
+    frames.setFrameObserver { movie.submit(arrival: $0) }
+    for change in 0..<changes {
+        try await Task.sleep(for: .milliseconds(100))
+        desktop(width: 320, height: 240, bgra: [UInt8(40 + change), 30, 240, 0], sink: frames)
+    }
+    // No more source frames. Exceed the encoder's default last-sample duration.
+    try await Task.sleep(for: .milliseconds(1350))
+    frames.setFrameObserver(nil)
+    let elapsed = ProcessInfo.processInfo.systemUptime - startedAt
+    _ = try await movie.finish().get()
+    let asset = AVURLAsset(url: url)
+    #expect(try await asset.load(.isPlayable))
+    let duration = try await asset.load(.duration).seconds
+    #expect(abs(duration - elapsed) < 0.15)
+    let track = try #require(try await asset.loadTracks(withMediaType: .video).first)
+    #expect(abs(try await track.load(.timeRange).duration.seconds - elapsed) < 0.15)
+    // AVFoundation extends edit-list timing even when the encoded media ends early.
+    let mediaDuration = try #require(movieMediaDuration(Data(contentsOf: url)))
+    #expect(mediaDuration >= elapsed - 0.15)
+}
+
+/// Read the video-only movie's media header, independent of AVFoundation's edit-list expansion.
+private func movieMediaDuration(_ data: Data, range: Range<Int>? = nil) -> Double? {
+    let range = range ?? 0..<data.count
+    func integer(_ start: Int, bytes: Int = 4) -> UInt64 {
+        data[start..<start + bytes].reduce(0) { ($0 << 8) | UInt64($1) }
+    }
+    var offset = range.lowerBound
+    while offset + 8 <= range.upperBound {
+        let size = Int(integer(offset))
+        guard size >= 8, offset + size <= range.upperBound else { return nil }
+        let type = String(decoding: data[offset + 4..<offset + 8], as: UTF8.self)
+        if type == "mdhd" {
+            guard size >= 32 else { return nil }
+            let version = data[offset + 8]
+            let field = offset + (version == 1 ? 28 : 20)
+            let bytes = version == 1 ? 8 : 4
+            guard version <= 1, field + 4 + bytes <= offset + size, integer(field) > 0 else { return nil }
+            return Double(integer(field + 4, bytes: bytes)) / Double(integer(field))
+        }
+        if ["moov", "trak", "mdia"].contains(type),
+           let duration = movieMediaDuration(data, range: offset + 8..<offset + size) { return duration }
+        offset += size
+    }
+    return nil
+}

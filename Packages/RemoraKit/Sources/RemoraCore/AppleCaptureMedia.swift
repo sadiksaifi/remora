@@ -66,7 +66,7 @@ public struct AppleCaptureMedia: CaptureMedia {
     }
 }
 
-/// After construction, media operations run on queue. The mailbox is one owned frame.
+/// After construction, media operations run on queue. The mailbox holds one arrival time.
 /// @unchecked covers queue-confined framework objects; mailbox and outcome use lock.
 final class AppleCaptureMovie: CaptureMovie, @unchecked Sendable {
     private let queue = DispatchQueue(label: "dev.sadiksaifi.Remora.capture", qos: .utility)
@@ -87,6 +87,7 @@ final class AppleCaptureMovie: CaptureMovie, @unchecked Sendable {
     private let size: DesktopSize
     private let origin: TimeInterval
     private var lastPTS: TimeInterval = -1
+    private var lastPixelBuffer: CVPixelBuffer?
     private var lastAppend: TimeInterval = 0
     private var lastArrival: TimeInterval = -.infinity
     private var finishTimer: DispatchSourceTimer?
@@ -160,7 +161,8 @@ final class AppleCaptureMovie: CaptureMovie, @unchecked Sendable {
     }
 
     func finish() async -> Result<URL, CaptureFailure> {
-        await withCheckedContinuation { continuation in
+        let stoppedAt = ProcessInfo.processInfo.systemUptime - origin
+        return await withCheckedContinuation { continuation in
             let begin = lock.withLock {
                 if let outcome { continuation.resume(returning: outcome); return false }
                 waiters.append(continuation)
@@ -171,7 +173,7 @@ final class AppleCaptureMovie: CaptureMovie, @unchecked Sendable {
             if begin {
                 queue.async {
                     self.finishing = true
-                    self.stopTime = ProcessInfo.processInfo.systemUptime - self.origin
+                    self.stopTime = stoppedAt
                     self.finishDeadline = ProcessInfo.processInfo.systemUptime + 5
                     self.drain()
                 }
@@ -215,8 +217,21 @@ final class AppleCaptureMovie: CaptureMovie, @unchecked Sendable {
             return false
         }
         if finishing && !hasPending {
+            let endTime = CMTime(seconds: max(stopTime, lastPTS + 1.0 / 60), preferredTimescale: 60_000)
+            // endSession alone creates an extended edit, but leaves the encoded media short.
+            // Reuse the last immutable pool buffer so its preceding sample holds through Stop.
+            if let lastPixelBuffer, endTime.seconds > lastPTS + 1.0 / 60 {
+                guard input.isReadyForMoreMediaData else {
+                    queue.asyncAfter(deadline: .now() + 1.0 / 60) { self.drain() }
+                    return
+                }
+                guard adaptor.append(lastPixelBuffer, withPresentationTime: endTime) else {
+                    fail(.recording(writer.error?.localizedDescription ?? "Final frame append failed."))
+                    return
+                }
+            }
             finishingWriter = true
-            writer.endSession(atSourceTime: CMTime(seconds: max(stopTime, lastPTS + 1.0 / 60), preferredTimescale: 60_000))
+            writer.endSession(atSourceTime: endTime)
             input.markAsFinished()
             writer.finishWriting { self.queue.async {
                 if self.writer.status == .completed {
@@ -285,6 +300,7 @@ final class AppleCaptureMovie: CaptureMovie, @unchecked Sendable {
             throw CaptureFailure.recording(writer.error?.localizedDescription ?? "Frame append failed.")
         }
         lastPTS = timestamp
+        lastPixelBuffer = pixelBuffer
         return submission.arrival
     }
 
@@ -300,6 +316,7 @@ final class AppleCaptureMovie: CaptureMovie, @unchecked Sendable {
     }
 
     private func complete(_ result: Result<URL, CaptureFailure>) {
+        lastPixelBuffer = nil
         finishTimer?.cancel()
         finishTimer = nil
         writerObservation?.invalidate()
