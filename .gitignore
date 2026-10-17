@@ -22,6 +22,6 @@ build/
 .swiftpm/
 
 # Engine build output (rebuilt by Vendor/build-engine.sh)
-Vendor/build/
+Vendor/build
 Vendor/src/
 *.xcframework
