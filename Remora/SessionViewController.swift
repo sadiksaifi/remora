@@ -10,7 +10,7 @@ private let sessionLog = Logger(subsystem: "dev.sadiksaifi.Remora", category: "S
 /// Sheets attach to the main window only while the tab shows; a hidden tab's request waits and marks the tab.
 @MainActor
 final class SessionViewController: NSViewController {
-    let connection: Connection
+    private(set) var connection: Connection
     private let credentialStore: CredentialStore
     private let onStateChange: (SessionState) -> Void
     private let onAttentionChange: (Bool) -> Void
@@ -79,6 +79,13 @@ final class SessionViewController: NSViewController {
     }
 
     /// Ends the session and removes the tab's views. The tab can't reconnect afterwards.
+    /// Takes the saved connection after an edit. A running session keeps its settings; the next
+    /// attempt uses the new ones and reads the password from the Keychain again.
+    func update(_ connection: Connection) {
+        self.connection = connection
+        credentials = nil
+    }
+
     func close() {
         closed = true
         disconnect()

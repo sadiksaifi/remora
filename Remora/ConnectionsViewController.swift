@@ -390,6 +390,7 @@ final class ConnectionsViewController: NSViewController, NSTableViewDataSource, 
             showAlert("Couldn’t Save Connection", error: error, on: editorController?.view.window ?? hostWindow)
             return
         }
+        sessionTabs.update(connection)
         dismissEditor()
         select(id: connection.id)
     }

@@ -9,7 +9,7 @@ final class SessionTabs {
     struct Tab: Identifiable, Equatable {
         /// The connection ID.
         let id: UUID
-        let title: String
+        var title: String
         var state: SessionState
         /// A credentials or certificate request waits until the tab shows.
         var needsAttention = false
@@ -62,6 +62,14 @@ final class SessionTabs {
         select(id)
         session.start()
         return true
+    }
+
+    /// Renames the connection's tab after an edit. Its session uses the saved settings from the next
+    /// connection attempt on.
+    func update(_ connection: Connection) {
+        guard let session = sessions[connection.id] else { return }
+        session.update(connection)
+        update(connection.id) { $0.title = connection.name }
     }
 
     /// Shows the tab, or the connections list for nil.
