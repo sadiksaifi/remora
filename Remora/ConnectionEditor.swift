@@ -15,7 +15,28 @@ struct ConnectionEditor: View {
     @State private var username: String
     @State private var password: String
     @State private var domain: String
+    @State private var resolutionChoice: ResolutionChoice
+    @State private var customWidth: String
+    @State private var customHeight: String
     @FocusState private var focusedField: Field?
+
+    private enum ResolutionChoice: String, CaseIterable {
+        case fitToWindow = "Fit to Window"
+        case hd = "1280 × 720"
+        case fullHD = "1920 × 1080"
+        case quadHD = "2560 × 1440"
+        case custom = "Custom"
+
+        var resolution: ConnectionResolution? {
+            switch self {
+            case .fitToWindow: .fitToWindow
+            case .hd: .fixed(width: 1280, height: 720)
+            case .fullHD: .fixed(width: 1920, height: 1080)
+            case .quadHD: .fixed(width: 2560, height: 1440)
+            case .custom: nil
+            }
+        }
+    }
 
     private enum Field {
         case host
@@ -38,6 +59,16 @@ struct ConnectionEditor: View {
         _username = State(initialValue: connection.username)
         _password = State(initialValue: password)
         _domain = State(initialValue: connection.domain ?? "")
+        _resolutionChoice = State(initialValue: ResolutionChoice.allCases.first {
+            $0.resolution == connection.resolution
+        } ?? .custom)
+        if case .fixed(let width, let height) = connection.resolution {
+            _customWidth = State(initialValue: String(width))
+            _customHeight = State(initialValue: String(height))
+        } else {
+            _customWidth = State(initialValue: "")
+            _customHeight = State(initialValue: "")
+        }
     }
 
     var body: some View {
@@ -72,6 +103,48 @@ struct ConnectionEditor: View {
                 } footer: {
                     Text("Remora saves the password in your keychain.")
                         .foregroundStyle(.secondary)
+                }
+                Section {
+                    Picker("Resolution", selection: $resolutionChoice) {
+                        ForEach(ResolutionChoice.allCases, id: \.self) { choice in
+                            Text(choice.rawValue).tag(choice)
+                        }
+                    }
+                    .pickerStyle(.menu)
+                    .onChange(of: resolutionChoice) { previous, current in
+                        guard current == .custom else { return }
+                        if case .fixed(let width, let height) = previous.resolution {
+                            customWidth = String(width)
+                            customHeight = String(height)
+                        } else {
+                            let screen = NSApp.keyWindow?.screen ?? NSScreen.main
+                            let size = screen?.frame.size ?? NSSize(width: 1440, height: 900)
+                            customWidth = String(Int(size.width))
+                            customHeight = String(Int(size.height))
+                        }
+                    }
+                    if resolutionChoice == .custom {
+                        LabeledContent("Size") {
+                            HStack(spacing: 6) {
+                                TextField("Width", text: $customWidth)
+                                    .labelsHidden()
+                                    .accessibilityLabel("Width")
+                                Text("×")
+                                TextField("Height", text: $customHeight)
+                                    .labelsHidden()
+                                    .accessibilityLabel("Height")
+                                Text("pixels").foregroundStyle(.secondary)
+                            }
+                            .textFieldStyle(.roundedBorder)
+                            .frame(width: 230)
+                        }
+                    }
+                } header: {
+                    Text("Display")
+                } footer: {
+                    if let resolutionProblem {
+                        ValidationMessage(resolutionProblem)
+                    }
                 }
                 Section {
                     TextField("Name", text: $name, prompt: Text(trimmedHost.isEmpty ? "Optional" : trimmedHost))
@@ -126,12 +199,25 @@ struct ConnectionEditor: View {
         return problems
     }
 
+    private var resolution: ConnectionResolution? {
+        if let preset = resolutionChoice.resolution { return preset }
+        guard let width = Int(customWidth), let height = Int(customHeight) else { return nil }
+        return .fixed(width: width, height: height)
+    }
+
+    private var resolutionProblem: String? {
+        guard resolutionChoice == .custom, resolution?.isValid != true else { return nil }
+        return "Enter a width and height from 200 to 8192 pixels. Width must be even."
+    }
+
     /// The edited connection, or nil while the host is empty or the address is invalid.
     private var draft: Connection? {
-        guard !trimmedHost.isEmpty, addressProblems.isEmpty, let port = parsedPort else { return nil }
+        guard !trimmedHost.isEmpty, addressProblems.isEmpty, let port = parsedPort,
+              let resolution, resolution.isValid else { return nil }
         let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
         let trimmedDomain = domain.trimmingCharacters(in: .whitespacesAndNewlines)
         var connection = original
+        connection.resolution = resolution
         connection.name = trimmedName.isEmpty ? trimmedHost : trimmedName
         connection.host = trimmedHost
         connection.port = port
