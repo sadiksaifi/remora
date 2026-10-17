@@ -11,6 +11,7 @@ private let sessionLog = Logger(subsystem: "dev.sadiksaifi.Remora", category: "S
 final class SessionWindowController: NSWindowController, NSWindowDelegate, NSMenuItemValidation {
     let connection: Connection
     private let credentialStore: CredentialStore
+    private let onStateChange: (SessionState) -> Void
     private let onClose: (SessionWindowController) -> Void
     private var session: (any RemoteSession)?
     private var clipboardSync: ClipboardSync?
@@ -20,14 +21,24 @@ final class SessionWindowController: NSWindowController, NSWindowDelegate, NSMen
     private var sheet: NSWindow?
     private var cancelChallenge: (() -> Void)?
     private var credentials: SessionCredentials?
-    private var state: SessionState?
+    /// The state the window shows. Setup failures and teardown count as disconnected.
+    private(set) var state: SessionState = .connecting {
+        didSet {
+            if state != oldValue { onStateChange(state) }
+        }
+    }
     private var statusView: NSHostingView<SessionStatusView>?
     private var closed = false
     private let display = SessionWindowDisplay()
 
-    init(connection: Connection, credentialStore: CredentialStore, onClose: @escaping (SessionWindowController) -> Void) {
+    init(
+        connection: Connection, credentialStore: CredentialStore,
+        onStateChange: @escaping (SessionState) -> Void,
+        onClose: @escaping (SessionWindowController) -> Void
+    ) {
         self.connection = connection
         self.credentialStore = credentialStore
+        self.onStateChange = onStateChange
         self.onClose = onClose
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 1440, height: 900),
@@ -53,7 +64,7 @@ final class SessionWindowController: NSWindowController, NSWindowDelegate, NSMen
         startSession()
     }
 
-    required init?(coder: NSCoder) { fatalError("Use init(connection:credentialStore:onClose:)") }
+    required init?(coder: NSCoder) { fatalError("Use init(connection:credentialStore:onStateChange:onClose:)") }
 
     isolated deinit {
         eventTask?.cancel()
@@ -63,7 +74,7 @@ final class SessionWindowController: NSWindowController, NSWindowDelegate, NSMen
     }
 
     func disconnect() {
-        state = nil
+        state = .disconnected(nil)
         desktopView?.setSessionConnected(false)
         overlays = nil
         desktopView = nil
@@ -120,14 +131,15 @@ final class SessionWindowController: NSWindowController, NSWindowDelegate, NSMen
     private func startSession() {
         guard !closed, let window else { return }
         disconnect()
+        state = .connecting
         let connectingView = showStatus(.connecting)
         do {
             guard let port = UInt16(exactly: connection.port), port > 0 else {
-                showStatus(.disconnected(.protocolError("The connection port must be between 1 and 65535.")))
+                fail(.protocolError("The connection port must be between 1 and 65535."))
                 return
             }
             guard connection.resolution.isValid else {
-                showStatus(.disconnected(.protocolError("The resolution must be 200 to 8192 pixels per side with an even width.")))
+                fail(.protocolError("The resolution must be 200 to 8192 pixels per side with an even width."))
                 return
             }
             let currentCredentials: SessionCredentials
@@ -183,8 +195,14 @@ final class SessionWindowController: NSWindowController, NSWindowDelegate, NSMen
             session.connect()
         } catch {
             sessionLog.error("Session setup failed: \(error.localizedDescription, privacy: .public)")
-            showStatus(.disconnected(.protocolError(error.localizedDescription)))
+            fail(.protocolError(error.localizedDescription))
         }
+    }
+
+    /// Shows a session that ended before it started.
+    private func fail(_ reason: DisconnectReason) {
+        state = .disconnected(reason)
+        showStatus(.disconnected(reason))
     }
 
     private func receive(_ event: SessionEvent, desktopView: RemoteDesktopView) {
