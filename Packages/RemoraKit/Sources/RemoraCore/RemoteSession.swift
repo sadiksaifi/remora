@@ -63,6 +63,7 @@ public enum SessionState: Sendable, Equatable {
     case awaitingCredentials
     case awaitingTrust
     case connected
+    case reconnecting(attempt: Int)
     case disconnected(DisconnectReason?)
 }
 

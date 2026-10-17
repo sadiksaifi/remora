@@ -1,6 +1,7 @@
 #include "CFreeRDPBridge.h"
 #include "input.h"
 #include "clipboard.h"
+#include "reconnect.h"
 
 #define WITH_OPAQUE_SETTINGS
 /* WinPR's own public sspi.h declares fields with deprecated WinPR types. */
@@ -44,6 +45,7 @@ struct RMRDPSession {
     atomic_bool aborted;
     RMInput *input;
     RMClipboard *clipboard;
+    bool reconnecting;
     bool credentials_cancelled;
     bool certificate_rejected;
     unsigned credential_requests;
@@ -219,6 +221,8 @@ static BOOL authenticate(freerdp *instance, char **username, char **password,
                          char **domain, rdp_auth_reason reason) {
     (void)reason;
     RMRDPSession *s = session_of(instance->context);
+    if (s->reconnecting)
+        return FALSE; /* A rejected credential ends recovery without prompting/retrying. */
     if (!request_credentials(s, username, password, domain,
                               *username && (*username)[0] && *password))
         return FALSE;
@@ -391,7 +395,8 @@ RMRDPSession *rm_rdp_create(const RMRDPConfiguration *config, const RMRDPCallbac
         freerdp_settings_set_bool(settings, FreeRDP_GfxAVC444, FALSE) &&
         freerdp_settings_set_bool(settings, FreeRDP_SupportDisplayControl, TRUE) &&
         freerdp_settings_set_bool(settings, FreeRDP_DynamicResolutionUpdate, TRUE) &&
-        freerdp_settings_set_bool(settings, FreeRDP_AutoReconnectionEnabled, FALSE) &&
+        freerdp_settings_set_bool(settings, FreeRDP_AutoReconnectionEnabled, TRUE) &&
+        freerdp_settings_set_uint32(settings, FreeRDP_AutoReconnectMaxRetries, 20) &&
         /* These require rdpdr, which forces an rdpsnd addin even with sound off.
          * This engine omits rdpsnd. None are needed for the session slice. */
         freerdp_settings_set_bool(settings, FreeRDP_NetworkAutoDetect, FALSE) &&
@@ -464,14 +469,24 @@ void rm_rdp_run(RMRDPSession *s) {
     if (connected) {
         if (s->callbacks.connected)
             s->callbacks.connected(s->user);
-        while (!atomic_load(&s->aborted) && !freerdp_shall_disconnect_context(context)) {
+        while (!atomic_load(&s->aborted)) {
             HANDLE handles[MAXIMUM_WAIT_OBJECTS] = { 0 };
             const DWORD count = freerdp_get_event_handles(context, handles, MAXIMUM_WAIT_OBJECTS - 2);
             handles[count] = rm_input_event(s->input);
             handles[count + 1] = rm_clipboard_event(s->clipboard);
-            if (!count || WaitForMultipleObjects(count + 2, handles, FALSE, INFINITE) == WAIT_FAILED ||
+            if (freerdp_shall_disconnect_context(context) || !count ||
+                WaitForMultipleObjects(count + 2, handles, FALSE, INFINITE) == WAIT_FAILED ||
                 !freerdp_check_event_handles(context) || !rm_input_drain(s->input) ||
                 !rm_clipboard_drain(s->clipboard)) {
+                s->reconnecting = true;
+                const BOOL recovered = rm_reconnect(instance, s->input, &s->callbacks, s->user, &s->aborted);
+                s->reconnecting = false;
+                if (recovered) {
+                    rm_rdp_release_all(s);
+                    if (s->callbacks.connected)
+                        s->callbacks.connected(s->user);
+                    continue;
+                }
                 loop_failed = true;
                 break;
             }

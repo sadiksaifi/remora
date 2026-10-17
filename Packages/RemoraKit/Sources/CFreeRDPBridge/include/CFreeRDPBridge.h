@@ -47,6 +47,7 @@ typedef enum { RMRDP_CURSOR_IMAGE, RMRDP_CURSOR_HIDDEN, RMRDP_CURSOR_DEFAULT } R
  * All callback arguments are borrowed for the duration of that call. */
 typedef struct {
     void (*connected)(void *user);
+    void (*reconnecting)(void *user, uint32_t attempt);
     void (*disconnected)(void *user, RMRDPDisconnectReason reason, const char *message);
     void (*desktop_size)(void *user, uint32_t width, uint32_t height);
     /* BGRA32 bytes, alpha ignored. Copy pixels before returning. */

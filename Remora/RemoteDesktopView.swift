@@ -11,6 +11,8 @@ final class RemoteDesktopView: NSView {
             window?.invalidateCursorRects(for: self)
         }
     }
+    func setSessionConnected(_ connected: Bool) { desktopInput.setConnected(connected) }
+
     var onFocus: (() -> Void)?
     private lazy var desktopInput = RemoteDesktopInput(view: self)
     private var inputTrackingArea: NSTrackingArea?

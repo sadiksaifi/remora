@@ -12,6 +12,21 @@ final class RemoteDesktopInput: NSObject {
             focusIn()
         }
     }
+    private var connected = false
+    private lazy var shortcutCapture = SystemShortcutCapture(
+        isFocused: { [weak self] in self?.hasFocus == true },
+        receive: { [weak self] event in
+            guard let self else { return }
+            if event.type == .flagsChanged { flagsChanged(event, captured: true) }
+            else { key(event, down: event.type == .keyDown, captured: true) }
+        },
+        releaseKeys: { [weak self] in self?.releaseKeys() },
+        releaseCapture: { [weak self] in self?.view?.window?.makeFirstResponder(nil) }
+    )
+    private var hasFocus: Bool {
+        connected && input != nil && NSApp.isActive && view?.window?.isKeyWindow == true &&
+            view?.window?.firstResponder === view
+    }
     private var keyboard = KeyboardState()
     private var scroll = ScrollAccumulator()
     private var buttons: PointerButtons = []
@@ -21,6 +36,7 @@ final class RemoteDesktopInput: NSObject {
     init(view: RemoteDesktopView) { self.view = view }
 
     isolated deinit {
+        shortcutCapture.stop()
         if let keyUpMonitor { NSEvent.removeMonitor(keyUpMonitor) }
     }
 
@@ -35,7 +51,7 @@ final class RemoteDesktopInput: NSObject {
         // before dispatch so every forwarded shortcut gets its matching release.
         keyUpMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyUp) { [weak self] event in
             let handled = MainActor.assumeIsolated {
-                guard let self, self.input != nil, let view = self.view,
+                guard let self, self.connected, !self.shortcutCapture.isActive, self.input != nil, let view = self.view,
                       view.window?.isKeyWindow == true, view.window?.firstResponder === view,
                       event.window === view.window else { return false }
                 self.key(event, down: false)
@@ -52,14 +68,22 @@ final class RemoteDesktopInput: NSObject {
     @objc private func focusGained(_ notification: Notification) { focusIn() }
     @objc private func focusLost(_ notification: Notification) { focusOut() }
 
+    func setConnected(_ connected: Bool) {
+        if !connected { focusOut() }
+        self.connected = connected
+        if connected { focusIn() }
+    }
+
     func focusIn() {
-        guard input != nil, let view, let window = view.window,
-              window.isKeyWindow, NSApp.isActive, window.firstResponder === view else { return }
+        guard hasFocus else { return }
         becameFirstResponder()
     }
 
     func becameFirstResponder() {
-        guard input != nil, view?.window?.isKeyWindow == true, NSApp.isActive else { return }
+        guard connected, input != nil, view?.window?.isKeyWindow == true, NSApp.isActive else { return }
+        shortcutCapture.start()
+        // AppKit can call becomeFirstResponder before assigning window.firstResponder.
+        Task { @MainActor [weak self] in self?.shortcutCapture.start() }
         view?.onFocus?()
         let caps = NSEvent.modifierFlags.contains(.capsLock)
         keyboard.reset(capsLockOn: caps)
@@ -67,6 +91,11 @@ final class RemoteDesktopInput: NSObject {
     }
 
     func focusOut() {
+        shortcutCapture.stop()
+        releaseKeys()
+    }
+
+    private func releaseKeys() {
         input?.releaseAll()
         reset()
     }
@@ -78,22 +107,22 @@ final class RemoteDesktopInput: NSObject {
         lastPosition = nil
     }
 
-    func key(_ event: NSEvent, down: Bool) {
-        guard let input else { return }
+    func key(_ event: NSEvent, down: Bool, captured: Bool = false) {
+        guard connected, captured || !shortcutCapture.isActive, let input else { return }
         for key in keyboard.key(keyCode: event.keyCode, isDown: down) {
             input.sendKey(key)
         }
     }
 
-    func flagsChanged(_ event: NSEvent) {
-        guard let input else { return }
+    func flagsChanged(_ event: NSEvent, captured: Bool = false) {
+        guard connected, captured || !shortcutCapture.isActive, let input else { return }
         for key in keyboard.flagsChanged(keyCode: event.keyCode, rawFlags: event.modifierFlags.rawValue) {
             input.sendKey(key)
         }
     }
 
     func performKeyEquivalent(_ event: NSEvent) -> Bool {
-        guard input != nil, let view, view.window?.firstResponder === view,
+        guard connected, !shortcutCapture.isActive, input != nil, let view, view.window?.firstResponder === view,
               event.modifierFlags.contains(.command) else { return false }
         let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask).subtracting([.capsLock, .numericPad, .function])
         // Keep Cmd-Q and Cmd-Ctrl-F local as explicit exit/full-screen shortcuts.
@@ -104,7 +133,7 @@ final class RemoteDesktopInput: NSObject {
     }
 
     func pointer(_ event: NSEvent, down: Bool? = nil) {
-        guard let input, let view else { return }
+        guard connected, let input, let view else { return }
         if down == true { view.window?.makeFirstResponder(view) }
         let point = view.remotePoint(for: view.convert(event.locationInWindow, from: nil))
         let button: PointerButtons
@@ -138,7 +167,7 @@ final class RemoteDesktopInput: NSObject {
     }
 
     func scrollWheel(_ event: NSEvent) {
-        guard let input, let view,
+        guard connected, let input, let view,
               view.remotePoint(for: view.convert(event.locationInWindow, from: nil)) != nil else { return }
         let wheel = scroll.accumulate(x: event.scrollingDeltaX, y: event.scrollingDeltaY,
                                       precise: event.hasPreciseScrollingDeltas)

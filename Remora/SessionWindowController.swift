@@ -14,6 +14,8 @@ final class SessionWindowController: NSWindowController, NSWindowDelegate {
     private let onClose: (SessionWindowController) -> Void
     private var session: (any RemoteSession)?
     private var clipboardSync: ClipboardSync?
+    private var overlays: SessionOverlays?
+    private weak var desktopView: RemoteDesktopView?
     private var eventTask: Task<Void, Never>?
     private var sheet: NSWindow?
     private var cancelChallenge: (() -> Void)?
@@ -50,6 +52,9 @@ final class SessionWindowController: NSWindowController, NSWindowDelegate {
     }
 
     func disconnect() {
+        desktopView?.setSessionConnected(false)
+        overlays = nil
+        desktopView = nil
         clipboardSync = nil
         session?.disconnect()
         session = nil
@@ -102,6 +107,8 @@ final class SessionWindowController: NSWindowController, NSWindowDelegate {
             let session = RDPSession(configuration: configuration, frameSink: RendererFrameSink(renderer: renderer))
             let desktopView = RemoteDesktopView(renderer: renderer)
             desktopView.input = session
+            self.desktopView = desktopView
+            overlays = SessionOverlays(desktop: desktopView) { [weak session] in session?.disconnect() }
             self.session = session
             clipboardSync = ClipboardSync(session: session)
             desktopView.onFocus = { [weak self] in self?.clipboardSync?.focusGained() }
@@ -130,9 +137,17 @@ final class SessionWindowController: NSWindowController, NSWindowDelegate {
             case .connected:
                 clipboardSync?.sessionDidConnect()
                 dismissChallenge()
-                window.contentView = desktopView
+                if window.contentView !== desktopView { window.contentView = desktopView }
+                overlays?.connected()
                 window.makeFirstResponder(desktopView)
+                desktopView.setSessionConnected(true)
+            case .reconnecting(let attempt):
+                desktopView.setSessionConnected(false)
+                window.makeFirstResponder(nil)
+                overlays?.reconnecting(attempt: attempt)
             case .disconnected(let reason):
+                desktopView.setSessionConnected(false)
+                overlays = nil
                 clipboardSync = nil
                 dismissChallenge()
                 session = nil
