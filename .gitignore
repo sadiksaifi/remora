@@ -25,3 +25,4 @@ build/
 Vendor/build
 Vendor/src/
 *.xcframework
+Packages/RemoraKit/Package.resolved
