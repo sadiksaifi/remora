@@ -21,7 +21,10 @@ let package = Package(
                 .linkedFramework("CoreFoundation"),
                 .linkedFramework("IOKit"),
                 .linkedFramework("Carbon"),
-                .linkedFramework("CoreServices")
+                .linkedFramework("CoreServices"),
+                .linkedFramework("VideoToolbox"),
+                .linkedFramework("CoreMedia"),
+                .linkedFramework("CoreVideo")
             ]
         ),
         .target(

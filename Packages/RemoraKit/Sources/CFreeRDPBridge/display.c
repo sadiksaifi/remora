@@ -2,6 +2,7 @@
 #include <freerdp/client/disp.h>
 #include <winpr/sysinfo.h>
 #include <math.h>
+#include <os/log.h>
 #include <pthread.h>
 #include <stdlib.h>
 #include <string.h>
@@ -14,6 +15,7 @@ struct RMDisplay {
     void *user;
     pthread_mutex_t lock;
     HANDLE wake;
+    os_log_t log;
     DispClientContext *channel;
     uint32_t max_monitors;
     uint64_t max_area;
@@ -34,6 +36,7 @@ static UINT display_caps(DispClientContext *channel, UINT32 monitors, UINT32 a, 
     d->max_area = (uint64_t)monitors * a;
     d->max_area = b && d->max_area > UINT64_MAX / b ? UINT64_MAX : d->max_area * b;
     d->available = monitors > 0 && d->max_area >= 200 * 200;
+    os_log_info(d->log, "Display Control caps: monitors=%u, max area=%llu", monitors, (unsigned long long)d->max_area);
     SetEvent(d->wake);
     pthread_mutex_unlock(&d->lock);
     return CHANNEL_RC_OK;
@@ -76,6 +79,7 @@ RMDisplay *rm_display_new(rdpContext *context, const RMRDPCallbacks *callbacks, 
         free(d);
         return NULL;
     }
+    d->log = os_log_create("dev.sadiksaifi.Remora", "Display");
     d->wake = CreateEvent(NULL, TRUE, FALSE, NULL);
     if (!d->wake || PubSub_SubscribeChannelConnected(context->pubSub, channel_connected) < 0 ||
         PubSub_SubscribeChannelDisconnected(context->pubSub, channel_disconnected) < 0) {
@@ -91,6 +95,7 @@ void rm_display_free(RMDisplay *d) {
     if (!d)
         return;
     if (d->wake) CloseHandle(d->wake);
+    os_release(d->log);
     pthread_mutex_destroy(&d->lock);
     free(d);
 }
@@ -152,6 +157,9 @@ DWORD rm_display_process(RMDisplay *d) {
         if (now >= due) {
             d->last_layout = d->desired;
             const UINT status = d->channel->SendMonitorLayout(d->channel, 1, &d->last_layout);
+            os_log_info(d->log, "Display Control layout: %ux%u, scale=%u, retry=%u, status=%u",
+                        d->last_layout.Width, d->last_layout.Height, d->last_layout.DesktopScaleFactor,
+                        d->queued ? 0 : d->retries + 1, status);
             d->last_sent = now;
             d->sent = true;
             if (d->queued) d->retries = 0;
