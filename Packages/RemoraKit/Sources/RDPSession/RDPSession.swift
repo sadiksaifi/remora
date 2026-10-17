@@ -1,6 +1,9 @@
 import CFreeRDPBridge
 import Foundation
 import RemoraCore
+import os
+
+private let rdpLog = Logger(subsystem: "dev.sadiksaifi.Remora", category: "RDP")
 
 /// Owns one single-use RDP connection.
 /// Invariant: stored properties are immutable except for the lock-protected StateBox.
@@ -27,6 +30,7 @@ public final class RDPSession: RemoteSession, @unchecked Sendable {
             thread.name = "Remora RDP session"
             state.thread = thread
             continuation.yield(.stateChanged(.connecting))
+            rdpLog.info("Starting session thread")
             thread.start()
         }
     }
@@ -168,6 +172,7 @@ public final class RDPSession: RemoteSession, @unchecked Sendable {
     private func finish(_ reason: DisconnectReason?) {
         state.lock.withLock {
             guard !state.ended else { return }
+            rdpLog.info("Session thread ended: \(self.state.cancelled ? "Cancelled" : reason?.description ?? "Session ended", privacy: .public)")
             state.ended = true
             state.thread = nil
             state.cancelChallenge = nil
