@@ -158,6 +158,7 @@ public struct TrustChallenge: Sendable {
 public enum SessionEvent: Sendable {
     case stateChanged(SessionState)
     case desktopSizeChanged(DesktopSize)
+    case cursorChanged(RemoteCursor)
     case credentialsChallenge(CredentialsChallenge)
     case trustChallenge(TrustChallenge)
 }
@@ -168,6 +169,11 @@ public protocol RemoteSession: AnyObject, Sendable {
     var events: AsyncStream<SessionEvent> { get }
     func connect()
     func disconnect()
+    func sendKey(_ key: KeyInput)
+    func sendPointer(position: RemotePoint, buttons: PointerButtons)
+    func sendWheel(_ wheel: WheelInput)
+    func synchronize(locks: LockKeys)
+    func releaseAll()
 }
 
 public struct DirtyRectangle: Sendable, Equatable {

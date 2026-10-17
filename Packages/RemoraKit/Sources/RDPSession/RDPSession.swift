@@ -7,18 +7,23 @@ private let rdpLog = Logger(subsystem: "dev.sadiksaifi.Remora", category: "RDP")
 
 /// Owns one single-use RDP connection.
 /// Invariant: stored properties are immutable except for the lock-protected StateBox.
-/// The owned Thread creates, runs and frees FreeRDP. Only abort crosses threads.
+/// The owned Thread creates, runs and frees FreeRDP. Other threads enqueue or abort.
 /// Channel callbacks may arrive on FreeRDP workers; they never dispatch a Task.
 public final class RDPSession: RemoteSession, @unchecked Sendable {
     public let events: AsyncStream<SessionEvent>
     private let continuation: AsyncStream<SessionEvent>.Continuation
     private let configuration: SessionConfiguration
     private let frameSink: any FrameSink
+    private let keyboardLayout: UInt32
+    private let isoKeyboard: Bool
     private let state = StateBox()
 
+    @MainActor
     public init(configuration: SessionConfiguration, frameSink: any FrameSink) {
         self.configuration = configuration
         self.frameSink = frameSink
+        keyboardLayout = KeyboardLayout.current()
+        isoKeyboard = KeyboardLayout.isISO()
         (events, continuation) = AsyncStream.makeStream()
     }
 
@@ -54,6 +59,39 @@ public final class RDPSession: RemoteSession, @unchecked Sendable {
         }
     }
 
+    public func sendKey(_ key: KeyInput) {
+        enqueue { rm_rdp_key($0, key.keyCode, key.isDown) }
+    }
+
+    public func sendPointer(position: RemotePoint, buttons: PointerButtons) {
+        enqueue { rm_rdp_pointer($0, position.x, position.y, buttons.rawValue) }
+    }
+
+    public func sendWheel(_ wheel: WheelInput) {
+        enqueue { rm_rdp_wheel($0, wheel.vertical, wheel.horizontal) }
+    }
+
+    public func synchronize(locks: LockKeys) {
+        state.lock.withLock {
+            state.locks = locks
+            if state.connected, !state.cancelled, let handle = state.handle {
+                rm_rdp_synchronize(handle, locks.rawValue)
+            }
+        }
+    }
+
+    public func releaseAll() {
+        enqueue { rm_rdp_release_all($0) }
+    }
+
+    private func enqueue(_ command: (OpaquePointer) -> Void) {
+        state.lock.withLock {
+            guard state.connected, !state.cancelled, let handle = state.handle else { return }
+            // Excludes handle teardown for the entire C enqueue operation.
+            command(handle)
+        }
+    }
+
     private func run() {
         autoreleasepool {
             guard !state.lock.withLock({ state.cancelled }) else {
@@ -73,7 +111,7 @@ public final class RDPSession: RemoteSession, @unchecked Sendable {
                     if state.cancelled { rm_rdp_abort(handle) }
                 }
                 rm_rdp_run(handle)
-                state.lock.withLock { state.handle = nil }
+                state.lock.withLock { state.connected = false; state.handle = nil }
                 // run has stopped all channel workers. No callback can use the Unmanaged
                 // pointer after free. The Thread's strong capture keeps self alive here.
                 rm_rdp_free(handle)
@@ -98,11 +136,19 @@ public final class RDPSession: RemoteSession, @unchecked Sendable {
             host: UnsafePointer(strings[0]), port: configuration.port,
             username: UnsafePointer(strings[1]), domain: UnsafePointer(strings[2]),
             password: UnsafePointer(strings[3]), config_path: UnsafePointer(strings[4]),
-            width: width, height: height, scale_factor: configuration.scaleFactor
+            width: width, height: height, scale_factor: configuration.scaleFactor,
+            keyboard_layout: keyboardLayout, iso_keyboard: isoKeyboard
         )
         var callbacks = RMRDPCallbacks()
         callbacks.connected = { user in
-            session(user).emit(.stateChanged(.connected))
+            let owner = session(user)
+            owner.state.lock.withLock {
+                owner.state.connected = true
+                if let handle = owner.state.handle {
+                    rm_rdp_synchronize(handle, owner.state.locks.rawValue)
+                }
+            }
+            owner.emit(.stateChanged(.connected))
         }
         callbacks.disconnected = { user, reason, message in
             let owner = session(user)
@@ -121,6 +167,19 @@ public final class RDPSession: RemoteSession, @unchecked Sendable {
                 pixels: UnsafeRawPointer(pixels), width: Int(width), height: Int(height),
                 stride: Int(stride), dirtyRectangles: dirty
             ))
+        }
+        callbacks.cursor = { user, kind, pixels, width, height, hotspotX, hotspotY in
+            let cursor: RemoteCursor
+            switch kind {
+            case RMRDP_CURSOR_IMAGE:
+                guard let pixels, width > 0, height > 0,
+                      let x = UInt16(exactly: hotspotX), let y = UInt16(exactly: hotspotY) else { return }
+                cursor = .image(pixels: Data(bytes: pixels, count: Int(width) * Int(height) * 4),
+                                width: Int(width), height: Int(height), hotspot: RemotePoint(x: x, y: y))
+            case RMRDP_CURSOR_HIDDEN: cursor = .hidden
+            default: cursor = .systemDefault
+            }
+            session(user).emit(.cursorChanged(cursor))
         }
         callbacks.credentials = { user, username, domain, rejected, newUsername, newDomain, newPassword in
             let owner = session(user)
@@ -204,6 +263,8 @@ public final class RDPSession: RemoteSession, @unchecked Sendable {
 private final class StateBox: @unchecked Sendable {
     let lock = NSLock()
     // Every access, including abort and removing the handle before free, holds lock.
+    var connected = false
+    var locks: LockKeys = []
     var started = false
     var ended = false
     var cancelled = false
