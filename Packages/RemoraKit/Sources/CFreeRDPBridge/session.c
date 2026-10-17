@@ -19,6 +19,7 @@
 #include <netdb.h>
 #include <netinet/tcp.h>
 #include <poll.h>
+#include <os/log.h>
 #include <pthread.h>
 #include <stdatomic.h>
 #include <stdio.h>
@@ -43,8 +44,24 @@ struct RMRDPSession {
 static rdpContext *context_of(RMRDPSession *s) { return &s->client.context; }
 static RMRDPSession *session_of(rdpContext *context) { return (RMRDPSession *)context; }
 
+static os_log_t engine_log;
+
+static BOOL log_message(const wLogMessage *message) {
+    os_log_with_type(engine_log, message->Level >= WLOG_ERROR ? OS_LOG_TYPE_ERROR : OS_LOG_TYPE_DEFAULT,
+                     "%{public}s: %{public}s", message->FunctionName ? message->FunctionName : "FreeRDP",
+                     message->TextString ? message->TextString : "");
+    return TRUE;
+}
+
 static void configure_logging(void) {
-    (void)WLog_SetLogLevel(WLog_GetRoot(), WLOG_WARN);
+    engine_log = os_log_create("dev.sadiksaifi.Remora", "FreeRDP");
+    wLog *root = WLog_GetRoot();
+    (void)WLog_SetLogLevel(root, WLOG_WARN);
+    if (WLog_SetLogAppenderType(root, WLOG_APPENDER_CALLBACK)) {
+        wLogCallbacks callbacks = { .message = log_message };
+        (void)WLog_ConfigureAppender(WLog_GetLogAppender(root), "callbacks", &callbacks);
+        (void)WLog_OpenAppender(root);
+    }
 }
 
 static uint64_t milliseconds(void) {

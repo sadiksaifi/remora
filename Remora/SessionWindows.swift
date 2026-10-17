@@ -5,7 +5,11 @@ import RemoraCore
 @MainActor
 final class SessionWindows {
     private var controllers: [UUID: SessionWindowController] = [:]
-    private var cascadePoint = NSPoint.zero
+    private let credentialStore = CredentialStore()
+
+    func disconnectAll() {
+        for controller in controllers.values { controller.disconnect() }
+    }
 
     /// Brings the connection's session window to front, opening one if needed.
     /// Returns true when it opened a new session.
@@ -15,13 +19,10 @@ final class SessionWindows {
             existing.showWindow(nil)
             return false
         }
-        let controller = SessionWindowController(connection: connection) { [weak self] closed in
+        let controller = SessionWindowController(connection: connection, credentialStore: credentialStore) { [weak self] closed in
             self?.controllers[closed.connection.id] = nil
         }
         controllers[connection.id] = controller
-        if let window = controller.window {
-            cascadePoint = window.cascadeTopLeft(from: cascadePoint)
-        }
         controller.showWindow(nil)
         return true
     }

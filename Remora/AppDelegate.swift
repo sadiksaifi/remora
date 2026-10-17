@@ -40,6 +40,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        sessionWindows.disconnectAll()
+        return .terminateNow
+    }
+
     func applicationWillTerminate(_ notification: Notification) {
         #if DEBUG
         rendererDemo?.stop()
