@@ -1,6 +1,14 @@
 import RemoraCore
 import Testing
 
+@Test func modifierTransitionsUseDeviceFlagsWhenTheEventHasNoKeyCode() {
+    var state = KeyboardState()
+    #expect(state.flagsChanged(keyCode: 0, rawFlags: 0x100008) == [KeyInput(keyCode: 0x37, isDown: true)])
+    #expect(state.flagsChanged(keyCode: 0, rawFlags: 0x100018) == [KeyInput(keyCode: 0x36, isDown: true)])
+    #expect(state.flagsChanged(keyCode: 0, rawFlags: 0x100010) == [KeyInput(keyCode: 0x37, isDown: false)])
+    #expect(state.flagsChanged(keyCode: 0, rawFlags: 0) == [KeyInput(keyCode: 0x36, isDown: false)])
+}
+
 @Test func eachModifierSideReleasesIndependently() {
     let modifiers: [(UInt16, UInt, UInt16, UInt)] = [
         (0x38, 0x02, 0x3C, 0x04), (0x3B, 0x01, 0x3E, 0x2000),

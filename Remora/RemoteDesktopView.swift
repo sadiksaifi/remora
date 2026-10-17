@@ -135,10 +135,10 @@ final class RemoteDesktopView: NSView {
     /// Maps this flipped view's points to top-left remote pixel coordinates.
     /// Letterbox bars and the exclusive right/bottom edges return nil. No input is sent.
     func remotePoint(for viewPoint: NSPoint) -> CGPoint? {
-        let backingBounds = convertToBacking(bounds)
-        let backingPoint = convertToBacking(viewPoint)
-        return DesktopGeometry(remoteSize: remoteSize, drawableSize: backingBounds.size).remotePoint(
-            for: CGPoint(x: backingPoint.x - backingBounds.minX, y: backingPoint.y - backingBounds.minY)
+        // Work in flipped view points. AppKit's backing conversion can reverse Y
+        // for a layer-backed view; the aspect-fit scale cancels the backing scale.
+        return DesktopGeometry(remoteSize: remoteSize, drawableSize: bounds.size).remotePoint(
+            for: CGPoint(x: viewPoint.x - bounds.minX, y: viewPoint.y - bounds.minY)
         )
     }
 
