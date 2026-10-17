@@ -12,6 +12,8 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
     private static let homeItem = NSToolbarItem.Identifier("home")
     private static let tabsItem = NSToolbarItem.Identifier("tabs")
     private static let newConnectionItem = NSToolbarItem.Identifier("newConnection")
+    /// Also the toggle's accessibility identifier, so a test can read the capture state.
+    private static let keyboardCaptureItem = NSToolbarItem.Identifier("keyboardCapture")
     private static let searchItem = NSToolbarItem.Identifier("search")
     /// Narrower than the search field's minimum, so the toolbar shows the collapsed search button.
     private static let collapsedSearchWidth: CGFloat = 30
@@ -25,6 +27,8 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
     private var currentPage: NSViewController
     private let homeToolbarItem = NSToolbarItem(itemIdentifier: MainWindowController.homeItem)
     private let tabsToolbarItem = NSToolbarItem(itemIdentifier: MainWindowController.tabsItem)
+    private let keyboardCaptureToolbarItem = NSToolbarItem(itemIdentifier: MainWindowController.keyboardCaptureItem)
+    private let keyboardCaptureButton = NSButton()
     private let tabStrip: NSHostingView<SessionTabStrip>
     private let tabStripLayout = SessionTabStripLayout()
     private let tabStripWidth: NSLayoutConstraint
@@ -184,6 +188,10 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
         let tabs = sessionTabs.tabs
         homeToolbarItem.isHidden = tabs.isEmpty
         tabsToolbarItem.isHidden = tabs.isEmpty
+        // Shown with the tabs, not only on a session tab, so the tab strip doesn't shift between pages.
+        keyboardCaptureToolbarItem.isHidden = tabs.isEmpty
+        let shownTab = tabs.first { $0.id == sessionTabs.selection }
+        updateKeyboardCapture(captured: shownTab?.isKeyboardCaptured == true, available: shownTab?.state == .connected)
         window.titleVisibility = tabs.isEmpty ? .visible : .hidden
         window.title = tabs.first { $0.id == sessionTabs.selection }?.title ?? "Connections"
         tabStripWidth.constant = SessionTabStrip.idealWidth(forTabCount: tabs.count)
@@ -237,6 +245,32 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
     @objc func reconnectSession(_ sender: Any?) { sessionTabs.selectedSession?.reconnect() }
     @objc func sendCtrlAltDelete(_ sender: Any?) { sessionTabs.selectedSession?.sendCtrlAltDelete() }
     @objc func releaseKeyboardCapture(_ sender: Any?) { sessionTabs.selectedSession?.releaseKeyboardCapture() }
+
+    /// The button has already switched to the state the click asks for.
+    @objc private func toggleKeyboardCapture(_ sender: NSButton) {
+        guard let session = sessionTabs.selectedSession else { return }
+        if sender.state == .on { session.focusDesktop() } else { session.releaseKeyboardCapture() }
+        updateKeyboardCapture(captured: session.hasKeyboard, available: session.isConnected)
+    }
+
+    /// Shows whether the shown tab's desktop has the keyboard. The toggle is off and disabled without a
+    /// connected session tab.
+    private func updateKeyboardCapture(captured: Bool, available: Bool) {
+        let button = keyboardCaptureButton
+        button.isEnabled = available
+        button.state = captured ? .on : .off
+        button.image = NSImage(systemSymbolName: captured ? "keyboard.fill" : "keyboard", accessibilityDescription: nil)
+        button.contentTintColor = captured ? .controlAccentColor : nil
+        let description = if captured {
+            "Keyboard captured. Click or press Control-Option-Command-Escape to release it."
+        } else if available {
+            "Keyboard not captured. Click to capture it. Control-Option-Command-Escape releases it."
+        } else {
+            "Keyboard not captured."
+        }
+        button.toolTip = description
+        button.setAccessibilityLabel(description)
+    }
 
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
         let session = sessionTabs.selectedSession
@@ -450,6 +484,17 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
         tabsToolbarItem.label = "Tabs"
         tabsToolbarItem.visibilityPriority = .high
 
+        // A toggle, so accessibility reports a check box whose value is the capture state.
+        keyboardCaptureButton.setButtonType(.pushOnPushOff)
+        keyboardCaptureButton.bezelStyle = .toolbar
+        keyboardCaptureButton.imagePosition = .imageOnly
+        keyboardCaptureButton.refusesFirstResponder = true
+        keyboardCaptureButton.target = self
+        keyboardCaptureButton.action = #selector(toggleKeyboardCapture(_:))
+        keyboardCaptureButton.setAccessibilityIdentifier(Self.keyboardCaptureItem.rawValue)
+        keyboardCaptureToolbarItem.view = keyboardCaptureButton
+        keyboardCaptureToolbarItem.label = "Keyboard Capture"
+
         let field = searchToolbarItem.searchField
         field.placeholderString = "Search"
         field.target = self
@@ -462,7 +507,10 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
     }
 
     func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
-        [Self.homeItem, .flexibleSpace, Self.tabsItem, .flexibleSpace, Self.newConnectionItem, Self.searchItem]
+        [
+            Self.homeItem, .flexibleSpace, Self.tabsItem, .flexibleSpace,
+            Self.keyboardCaptureItem, Self.newConnectionItem, Self.searchItem,
+        ]
     }
 
     func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
@@ -479,6 +527,8 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
             return homeToolbarItem
         case Self.tabsItem:
             return tabsToolbarItem
+        case Self.keyboardCaptureItem:
+            return keyboardCaptureToolbarItem
         case Self.newConnectionItem:
             let item = NSToolbarItem(itemIdentifier: itemIdentifier)
             item.image = NSImage(systemSymbolName: "plus", accessibilityDescription: "New Connection")
