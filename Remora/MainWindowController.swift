@@ -94,7 +94,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
             return item
         }
         sessionTabs.onSelectionChange = { [weak self] _, selection in self?.showPage(selection) }
-        eventMonitor = NSEvent.addLocalMonitorForEvents(matching: [.rightMouseDown, .leftMouseDown]) {
+        eventMonitor = NSEvent.addLocalMonitorForEvents(matching: [.rightMouseDown, .leftMouseDown, .keyDown]) {
             [weak self] event in
             let consumed = MainActor.assumeIsolated { self?.consume(event) ?? false }
             return consumed ? nil : event
@@ -111,7 +111,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
         if let eventMonitor { NSEvent.removeMonitor(eventMonitor) }
     }
 
-    /// Handles the secondary clicks that the toolbar would otherwise take.
+    /// Handles the events that the toolbar and the suggestions list would otherwise take.
     /// Returns true for an event it consumed.
     private func consume(_ event: NSEvent) -> Bool {
         switch event.type {
@@ -119,6 +119,8 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
             showTabMenu(for: event)
         case .leftMouseDown where event.modifierFlags.contains(.control):
             showTabMenu(for: event)
+        case .keyDown:
+            finishSessionSearch(onEscape: event)
         default:
             false
         }
@@ -316,8 +318,10 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
 
     /// Closes the search on a session tab and gives the keyboard back to the desktop.
     private func finishSessionSearch() {
-        searchToolbarItem.searchField.stringValue = ""
+        let field = searchToolbarItem.searchField
+        field.stringValue = ""
         searchToolbarItem.endSearchInteraction()
+        if field.currentEditor() != nil { field.window?.makeFirstResponder(nil) }
         updateSearchWidth()
         sessionTabs.selectedSession?.focusDesktop()
     }
@@ -336,6 +340,19 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
             updateSearchWidth()
             if searchToolbarItem.searchField.stringValue.isEmpty { searchToolbarItem.endSearchInteraction() }
         }
+    }
+
+    /// The suggestions list takes the first Escape to close itself, so a key monitor sees Escape
+    /// first and closes the list and the search together.
+    private func finishSessionSearch(onEscape event: NSEvent) -> Bool {
+        let field = searchToolbarItem.searchField
+        guard event.keyCode == 0x35,
+              event.modifierFlags.intersection(.deviceIndependentFlagsMask).isEmpty,
+              currentPage !== connectionsViewController,
+              field.currentEditor() != nil,
+              event.window === window || event.window === field.window else { return false }
+        finishSessionSearch()
+        return true
     }
 
     /// On a session tab, Escape clears and closes the search in one step.
