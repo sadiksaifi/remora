@@ -172,6 +172,11 @@ public final class RDPSession: RemoteSession, @unchecked Sendable {
             }
             owner.emit(.stateChanged(.connected))
         }
+        callbacks.reconnecting = { user, attempt in
+            let owner = session(user)
+            owner.state.lock.withLock { owner.state.connected = false }
+            owner.emit(.stateChanged(.reconnecting(attempt: Int(attempt))))
+        }
         callbacks.disconnected = { user, reason, message in
             let owner = session(user)
             let mapped = disconnectReason(reason, message: string(message))

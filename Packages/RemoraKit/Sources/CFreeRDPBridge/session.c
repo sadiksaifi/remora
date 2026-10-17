@@ -2,6 +2,7 @@
 #include "input.h"
 #include "clipboard.h"
 #include "display.h"
+#include "reconnect.h"
 
 #define WITH_OPAQUE_SETTINGS
 /* WinPR's own public sspi.h declares fields with deprecated WinPR types. */
@@ -50,6 +51,7 @@ struct RMRDPSession {
     RMDisplay *display;
     pcRdpgfxSurfaceCommand surface_command;
     UINT32 last_codec;
+    bool reconnecting;
     bool credentials_cancelled;
     bool certificate_rejected;
     unsigned credential_requests;
@@ -164,6 +166,11 @@ static int tcp_connect(rdpContext *context, rdpSettings *settings, const char *h
          * latency. The core's TCP layer configures keepalive and SO_NOSIGPIPE. */
         const int enabled = 1;
         (void)setsockopt(result, IPPROTO_TCP, TCP_NODELAY, &enabled, sizeof(enabled));
+        /* FreeRDP configures TCP_KEEPIDLE, which macOS does not expose. Use
+         * its TCP_KEEPALIVE equivalent so an idle lost path reaches recovery. */
+        const int idle = (int)freerdp_settings_get_uint32(settings, FreeRDP_TcpKeepAliveDelay);
+        if (freerdp_settings_get_bool(settings, FreeRDP_TcpKeepAlive))
+            (void)setsockopt(result, IPPROTO_TCP, TCP_KEEPALIVE, &idle, sizeof(idle));
         struct sockaddr_storage local = { 0 };
         socklen_t length = sizeof(local);
         char address[NI_MAXHOST];
@@ -228,6 +235,8 @@ static BOOL authenticate(freerdp *instance, char **username, char **password,
                          char **domain, rdp_auth_reason reason) {
     (void)reason;
     RMRDPSession *s = session_of(instance->context);
+    if (s->reconnecting)
+        return FALSE; /* A rejected credential ends recovery without prompting/retrying. */
     if (!request_credentials(s, username, password, domain,
                               *username && (*username)[0] && *password))
         return FALSE;
@@ -437,7 +446,8 @@ RMRDPSession *rm_rdp_create(const RMRDPConfiguration *config, const RMRDPCallbac
         freerdp_settings_set_uint32(settings, FreeRDP_TcpKeepAliveRetries, 6) &&
         freerdp_settings_set_bool(settings, FreeRDP_SupportDisplayControl, TRUE) &&
         freerdp_settings_set_bool(settings, FreeRDP_DynamicResolutionUpdate, TRUE) &&
-        freerdp_settings_set_bool(settings, FreeRDP_AutoReconnectionEnabled, FALSE) &&
+        freerdp_settings_set_bool(settings, FreeRDP_AutoReconnectionEnabled, TRUE) &&
+        freerdp_settings_set_uint32(settings, FreeRDP_AutoReconnectMaxRetries, 20) &&
         /* These require rdpdr, which forces an rdpsnd addin even with sound off.
          * This engine omits rdpsnd. None are needed for the session slice. */
         freerdp_settings_set_bool(settings, FreeRDP_NetworkAutoDetect, FALSE) &&
@@ -510,16 +520,26 @@ void rm_rdp_run(RMRDPSession *s) {
     if (connected) {
         if (s->callbacks.connected)
             s->callbacks.connected(s->user);
-        while (!atomic_load(&s->aborted) && !freerdp_shall_disconnect_context(context)) {
+        while (!atomic_load(&s->aborted)) {
             const DWORD resize_timeout = rm_display_process(s->display);
             HANDLE handles[MAXIMUM_WAIT_OBJECTS] = { 0 };
             const DWORD count = freerdp_get_event_handles(context, handles, MAXIMUM_WAIT_OBJECTS - 3);
             handles[count] = rm_input_event(s->input);
             handles[count + 1] = rm_clipboard_event(s->clipboard);
             handles[count + 2] = rm_display_event(s->display);
-            if (!count || WaitForMultipleObjects(count + 3, handles, FALSE, resize_timeout) == WAIT_FAILED ||
+            if (freerdp_shall_disconnect_context(context) || !count ||
+                WaitForMultipleObjects(count + 3, handles, FALSE, resize_timeout) == WAIT_FAILED ||
                 !freerdp_check_event_handles(context) || !rm_input_drain(s->input) ||
                 !rm_clipboard_drain(s->clipboard)) {
+                s->reconnecting = true;
+                const BOOL recovered = rm_reconnect(instance, s->input, &s->callbacks, s->user, &s->aborted);
+                s->reconnecting = false;
+                if (recovered) {
+                    rm_rdp_release_all(s);
+                    if (s->callbacks.connected)
+                        s->callbacks.connected(s->user);
+                    continue;
+                }
                 loop_failed = true;
                 break;
             }
