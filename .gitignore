@@ -1,0 +1,27 @@
+# Scratch: research, prototypes, logs. Safe to delete.
+.snap/
+
+# Agent tooling
+.codex/
+.agents/
+.claude/
+.opencode/
+.pi/
+
+# macOS
+.DS_Store
+
+# Xcode
+xcuserdata/
+*.xcuserstate
+DerivedData/
+build/
+
+# SwiftPM
+.build/
+.swiftpm/
+
+# Engine build output (rebuilt by Vendor/build-engine.sh)
+Vendor/build/
+Vendor/src/
+*.xcframework
