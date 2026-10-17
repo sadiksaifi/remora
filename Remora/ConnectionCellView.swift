@@ -2,7 +2,7 @@ import AppKit
 import RemoraCore
 
 /// One saved connection: icon, name, a secondary subtitle, and trailing detail text that gives way
-/// to an action button while the pointer is over the row. Without a session window the detail is the
+/// to an action button while the pointer is over the row. Without a session tab the detail is the
 /// last-connected date and the action is Connect. With one, a status dot leads the subtitle, the
 /// detail names the session state, and the action is Disconnect until the session ends.
 @MainActor
@@ -90,20 +90,19 @@ final class ConnectionCellView: NSTableCellView {
         fatalError("Use init()")
     }
 
-    /// - Parameter session: The state of the connection's session window, or nil without one.
+    /// - Parameter session: The state of the connection's session tab, or nil without one.
     func configure(with connection: Connection, session: SessionState?, hovered: Bool) {
         let subtitle = Self.subtitle(for: connection)
         nameField.stringValue = connection.name
         addressField.stringValue = subtitle
         if let session {
-            let status = Self.status(for: session)
             // A palette color keeps the dot green or orange on a selected row too.
             statusView.symbolConfiguration = Self.statusSymbolConfiguration
-                .applying(NSImage.SymbolConfiguration(paletteColors: [status.color]))
+                .applying(NSImage.SymbolConfiguration(paletteColors: [session.statusColor]))
             statusView.isHidden = false
-            detailField.stringValue = status.title
+            detailField.stringValue = session.statusTitle
             actionButton.title = session.isLive ? "Disconnect" : "Connect"
-            setAccessibilityLabel([connection.name, status.title.lowercased(), subtitle].joined(separator: ", "))
+            setAccessibilityLabel([connection.name, session.statusTitle.lowercased(), subtitle].joined(separator: ", "))
         } else {
             statusView.isHidden = true
             detailField.stringValue = connection.lastConnected.map {
@@ -121,18 +120,6 @@ final class ConnectionCellView: NSTableCellView {
     }
 
     private static let statusSymbolConfiguration = NSImage.SymbolConfiguration(pointSize: 7, weight: .regular)
-
-    /// The dot color and detail text.
-    private static func status(for state: SessionState) -> (color: NSColor, title: String) {
-        switch state {
-        case .connecting: (.systemOrange, "Connecting…")
-        case .awaitingCredentials: (.systemOrange, "Waiting for Credentials")
-        case .awaitingTrust: (.systemOrange, "Waiting for Approval")
-        case .connected: (.systemGreen, "Connected")
-        case .reconnecting: (.systemOrange, "Reconnecting…")
-        case .disconnected: (.systemGray, "Disconnected")
-        }
-    }
 
     /// The account and address, leaving out the address when the name already shows it.
     static func subtitle(for connection: Connection) -> String {

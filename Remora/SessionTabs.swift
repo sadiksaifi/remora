@@ -1,0 +1,147 @@
+import AppKit
+import Observation
+import RemoraCore
+
+/// The open session tabs of the main window, at most one per connection, and which page the window shows:
+/// the connections list (home) or one tab. Views observe it; the main window shows the selected page.
+@MainActor @Observable
+final class SessionTabs {
+    struct Tab: Identifiable, Equatable {
+        /// The connection ID.
+        let id: UUID
+        let title: String
+        var state: SessionState
+        /// A credentials or certificate request waits until the tab shows.
+        var needsAttention = false
+    }
+
+    private(set) var tabs: [Tab] = []
+    /// The shown tab, or nil while the connections list shows.
+    private(set) var selection: UUID?
+    /// Called synchronously after the selection changes, so the window shows the page before a session starts.
+    @ObservationIgnored var onSelectionChange: ((_ old: UUID?, _ new: UUID?) -> Void)?
+    @ObservationIgnored private var sessions: [UUID: SessionViewController] = [:]
+    @ObservationIgnored private let credentialStore = CredentialStore()
+
+    /// The session state of each open tab, keyed by connection ID. A connection without a tab has no entry.
+    var states: [UUID: SessionState] {
+        Dictionary(uniqueKeysWithValues: tabs.map { ($0.id, $0.state) })
+    }
+
+    var liveCount: Int {
+        tabs.count { $0.state.isLive }
+    }
+
+    var selectedSession: SessionViewController? {
+        selection.flatMap { sessions[$0] }
+    }
+
+    func session(for id: UUID) -> SessionViewController? {
+        sessions[id]
+    }
+
+    /// Shows the connection's tab, opening one if needed. A tab whose session ended reconnects in place.
+    /// Returns true when it started a new session.
+    @discardableResult
+    func open(_ connection: Connection) -> Bool {
+        let id = connection.id
+        if let existing = sessions[id] {
+            select(id)
+            guard !existing.state.isLive else { return false }
+            existing.reconnect()
+            return true
+        }
+        let session = SessionViewController(
+            connection: connection, credentialStore: credentialStore,
+            onStateChange: { [weak self] state in self?.update(id) { $0.state = state } },
+            onAttentionChange: { [weak self] attention in self?.update(id) { $0.needsAttention = attention } },
+            onClose: { [weak self] in self?.close(id) }
+        )
+        sessions[id] = session
+        tabs.append(Tab(id: id, title: connection.name, state: session.state))
+        select(id)
+        session.start()
+        return true
+    }
+
+    /// Shows the tab, or the connections list for nil.
+    func select(_ id: UUID?) {
+        guard id != selection, id.map({ sessions[$0] != nil }) ?? true else { return }
+        let old = selection
+        selection = id
+        onSelectionChange?(old, id)
+    }
+
+    /// Shows the tab at the zero-based index.
+    func select(index: Int) {
+        guard tabs.indices.contains(index) else { return }
+        select(tabs[index].id)
+    }
+
+    /// Moves to the next or previous tab, wrapping around. From the connections list it moves to the first or last tab.
+    func selectAdjacent(forward: Bool) {
+        guard !tabs.isEmpty else { return }
+        let current = selection.flatMap { id in tabs.firstIndex { $0.id == id } }
+        let index = current.map { ($0 + (forward ? 1 : -1) + tabs.count) % tabs.count }
+            ?? (forward ? 0 : tabs.count - 1)
+        select(tabs[index].id)
+    }
+
+    /// Disconnects the session without asking and removes its tab. A shown tab gives way to its right
+    /// neighbor, then its left neighbor, then the connections list.
+    func close(_ id: UUID) {
+        guard let index = tabs.firstIndex(where: { $0.id == id }) else { return }
+        if selection == id {
+            let neighbor = tabs.indices.contains(index + 1) ? tabs[index + 1].id : index > 0 ? tabs[index - 1].id : nil
+            select(neighbor)
+        }
+        sessions.removeValue(forKey: id)?.close()
+        tabs.remove(at: index)
+    }
+
+    func closeAll() {
+        select(nil)
+        for tab in tabs { close(tab.id) }
+    }
+
+    /// Ends the connection's session the way Session > Disconnect does. The tab stays open.
+    func disconnect(_ id: UUID) {
+        sessions[id]?.disconnectSession()
+    }
+
+    func disconnectAll() {
+        for session in sessions.values { session.disconnect() }
+    }
+
+    private func update(_ id: UUID, _ change: (inout Tab) -> Void) {
+        guard let index = tabs.firstIndex(where: { $0.id == id }) else { return }
+        change(&tabs[index])
+    }
+}
+
+extension SessionState {
+    /// True until the session ends. A live session can be disconnected; an ended one reconnects.
+    var isLive: Bool {
+        if case .disconnected = self { false } else { true }
+    }
+
+    /// The status dot color in the connections list and the tab strip.
+    var statusColor: NSColor {
+        switch self {
+        case .connected: .systemGreen
+        case .connecting, .awaitingCredentials, .awaitingTrust, .reconnecting: .systemOrange
+        case .disconnected: .systemGray
+        }
+    }
+
+    var statusTitle: String {
+        switch self {
+        case .connecting: "Connecting…"
+        case .awaitingCredentials: "Waiting for Credentials"
+        case .awaitingTrust: "Waiting for Approval"
+        case .connected: "Connected"
+        case .reconnecting: "Reconnecting…"
+        case .disconnected: "Disconnected"
+        }
+    }
+}

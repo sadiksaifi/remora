@@ -9,7 +9,7 @@ final class ConnectionsViewController: NSViewController, NSTableViewDataSource, 
     NSMenuDelegate, NSMenuItemValidation {
     private let connectionStore: ConnectionStore
     private let credentialStore: CredentialStore
-    private let sessionWindows: SessionWindows
+    private let sessionTabs: SessionTabs
     private let tableView = ConnectionsTableView()
     private var emptyStateView: NSHostingView<EmptyStateView>!
     private var editorController: NSViewController?
@@ -20,15 +20,15 @@ final class ConnectionsViewController: NSViewController, NSTableViewDataSource, 
         didSet { reloadRows() }
     }
 
-    init(connectionStore: ConnectionStore, credentialStore: CredentialStore, sessionWindows: SessionWindows) {
+    init(connectionStore: ConnectionStore, credentialStore: CredentialStore, sessionTabs: SessionTabs) {
         self.connectionStore = connectionStore
         self.credentialStore = credentialStore
-        self.sessionWindows = sessionWindows
+        self.sessionTabs = sessionTabs
         super.init(nibName: nil, bundle: nil)
     }
 
     required init?(coder: NSCoder) {
-        fatalError("Use init(connectionStore:credentialStore:sessionWindows:)")
+        fatalError("Use init(connectionStore:credentialStore:sessionTabs:)")
     }
 
     override func loadView() {
@@ -105,7 +105,7 @@ final class ConnectionsViewController: NSViewController, NSTableViewDataSource, 
         presentEditor(title: "New Connection", for: Connection(name: "", host: "", username: ""), password: "")
     }
 
-    /// Opens each target, or brings its session window forward. From the context menu it applies only
+    /// Opens each target in a tab, or shows its tab. From the context menu it applies only
     /// to rows without a live session.
     @objc func connect(_ sender: Any?) {
         var targets = targetRows(for: sender).map { rows[$0] }
@@ -115,13 +115,13 @@ final class ConnectionsViewController: NSViewController, NSTableViewDataSource, 
         open(targets)
     }
 
-    @objc func showSessionWindow(_ sender: Any?) {
-        open(targetRows(for: sender).map { rows[$0] }.filter(hasSessionWindow))
+    @objc func showSessionTab(_ sender: Any?) {
+        open(targetRows(for: sender).map { rows[$0] }.filter(hasSessionTab))
     }
 
     @objc func disconnect(_ sender: Any?) {
         for connection in targetRows(for: sender).map({ rows[$0] }) where hasLiveSession(connection) {
-            sessionWindows.disconnect(connection.id)
+            sessionTabs.disconnect(connection.id)
         }
     }
 
@@ -145,7 +145,7 @@ final class ConnectionsViewController: NSViewController, NSTableViewDataSource, 
 
     @objc func delete(_ sender: Any?) {
         let targets = targetRows(for: sender).map { rows[$0] }
-        guard let window = view.window, let first = targets.first else { return }
+        guard let window = hostWindow, let first = targets.first else { return }
         let alert = NSAlert()
         if targets.count == 1 {
             alert.messageText = "Delete “\(first.name)”?"
@@ -162,7 +162,7 @@ final class ConnectionsViewController: NSViewController, NSTableViewDataSource, 
         }
     }
 
-    /// Connects the double-clicked row, or brings its session window forward.
+    /// Connects the double-clicked row, or shows its tab.
     @objc private func openClickedRow(_ sender: Any?) {
         let row = tableView.clickedRow
         guard row >= 0, row < rows.count else { return }
@@ -174,7 +174,7 @@ final class ConnectionsViewController: NSViewController, NSTableViewDataSource, 
         let row = tableView.row(for: sender)
         guard row >= 0, row < rows.count else { return }
         if hasLiveSession(rows[row]) {
-            sessionWindows.disconnect(rows[row].id)
+            sessionTabs.disconnect(rows[row].id)
         } else {
             open([rows[row]])
         }
@@ -186,8 +186,8 @@ final class ConnectionsViewController: NSViewController, NSTableViewDataSource, 
             isContextMenuItem(menuItem)
                 ? targetRows(for: menuItem).contains { !hasLiveSession(rows[$0]) }
                 : !targetRows(for: menuItem).isEmpty
-        case #selector(showSessionWindow(_:)):
-            targetRows(for: menuItem).contains { hasSessionWindow(rows[$0]) }
+        case #selector(showSessionTab(_:)):
+            targetRows(for: menuItem).contains { hasSessionTab(rows[$0]) }
         case #selector(disconnect(_:)):
             targetRows(for: menuItem).contains { hasLiveSession(rows[$0]) }
         case #selector(delete(_:)):
@@ -209,7 +209,7 @@ final class ConnectionsViewController: NSViewController, NSTableViewDataSource, 
         let cell = tableView.makeView(withIdentifier: ConnectionCellView.identifier, owner: self)
             as? ConnectionCellView ?? makeCell()
         cell.configure(
-            with: rows[row], session: sessionWindows.states[rows[row].id],
+            with: rows[row], session: sessionTabs.states[rows[row].id],
             hovered: row == self.tableView.hoveredRow
         )
         return cell
@@ -230,7 +230,7 @@ final class ConnectionsViewController: NSViewController, NSTableViewDataSource, 
         let menu = NSMenu()
         menu.delegate = self
         menu.addItem(withTitle: "Connect", action: #selector(connect(_:)), keyEquivalent: "")
-        menu.addItem(withTitle: "Show Window", action: #selector(showSessionWindow(_:)), keyEquivalent: "")
+        menu.addItem(withTitle: "Show Tab", action: #selector(showSessionTab(_:)), keyEquivalent: "")
         menu.addItem(withTitle: "Disconnect", action: #selector(disconnect(_:)), keyEquivalent: "")
         menu.addItem(.separator())
         menu.addItem(withTitle: "Edit…", action: #selector(editConnection(_:)), keyEquivalent: "")
@@ -247,7 +247,7 @@ final class ConnectionsViewController: NSViewController, NSTableViewDataSource, 
     func menuNeedsUpdate(_ menu: NSMenu) {
         for item in menu.items {
             switch item.action {
-            case #selector(connect(_:)), #selector(showSessionWindow(_:)), #selector(disconnect(_:)):
+            case #selector(connect(_:)), #selector(showSessionTab(_:)), #selector(disconnect(_:)):
                 item.isHidden = !validateMenuItem(item)
             default:
                 break
@@ -269,12 +269,22 @@ final class ConnectionsViewController: NSViewController, NSTableViewDataSource, 
         (sender as? NSMenuItem)?.menu === tableView.menu
     }
 
-    private func hasSessionWindow(_ connection: Connection) -> Bool {
-        sessionWindows.states[connection.id] != nil
+    private func hasSessionTab(_ connection: Connection) -> Bool {
+        sessionTabs.states[connection.id] != nil
     }
 
     private func hasLiveSession(_ connection: Connection) -> Bool {
-        sessionWindows.states[connection.id]?.isLive ?? false
+        sessionTabs.states[connection.id]?.isLive ?? false
+    }
+
+    /// The main window, also while a session tab shows instead of this list.
+    private var hostWindow: NSWindow? {
+        parent?.view.window ?? view.window
+    }
+
+    /// Sheets attach to the window's content, which stays in the window on every page.
+    private var presenter: NSViewController {
+        parent ?? self
     }
 
     private func singleTarget(for sender: Any?) -> Connection? {
@@ -299,7 +309,7 @@ final class ConnectionsViewController: NSViewController, NSTableViewDataSource, 
 
     private func observeSessions() {
         withObservationTracking {
-            _ = sessionWindows.states
+            _ = sessionTabs.states
         } onChange: { [weak self] in
             Task { @MainActor [weak self] in
                 self?.reconfigureRows()
@@ -312,12 +322,7 @@ final class ConnectionsViewController: NSViewController, NSTableViewDataSource, 
         let selectedIDs = Set(tableView.selectedRowIndexes.compactMap { $0 < rows.count ? rows[$0].id : nil })
         let query = searchText.trimmingCharacters(in: .whitespaces)
         rows = connectionStore.connections
-            .filter {
-                query.isEmpty
-                    || $0.name.localizedStandardContains(query)
-                    || $0.host.localizedStandardContains(query)
-                    || $0.username.localizedStandardContains(query)
-            }
+            .filter { $0.matches(query) }
             .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
         tableView.reloadData()
         tableView.selectRowIndexes(
@@ -344,9 +349,10 @@ final class ConnectionsViewController: NSViewController, NSTableViewDataSource, 
         view.window?.makeFirstResponder(tableView)
     }
 
-    private func open(_ connections: [Connection]) {
+    /// Opens or shows each connection's tab and records when a new session started.
+    func open(_ connections: [Connection]) {
         var failure: (any Error)?
-        for connection in connections where sessionWindows.show(connection) {
+        for connection in connections where sessionTabs.open(connection) {
             do {
                 try connectionStore.markConnected(id: connection.id)
             } catch {
@@ -354,7 +360,7 @@ final class ConnectionsViewController: NSViewController, NSTableViewDataSource, 
             }
         }
         if let failure {
-            showAlert("Couldn’t Save Connection", error: failure, on: view.window)
+            showAlert("Couldn’t Save Connection", error: failure, on: hostWindow)
         }
     }
 
@@ -362,7 +368,7 @@ final class ConnectionsViewController: NSViewController, NSTableViewDataSource, 
         do {
             return try credentialStore.password(for: connection.id) ?? ""
         } catch {
-            showAlert("Couldn’t Read Password", error: error, on: view.window)
+            showAlert("Couldn’t Read Password", error: error, on: hostWindow)
             return nil
         }
     }
@@ -381,7 +387,7 @@ final class ConnectionsViewController: NSViewController, NSTableViewDataSource, 
                 try credentialStore.setPassword(password, for: connection.id)
             }
         } catch {
-            showAlert("Couldn’t Save Connection", error: error, on: editorController?.view.window ?? view.window)
+            showAlert("Couldn’t Save Connection", error: error, on: editorController?.view.window ?? hostWindow)
             return
         }
         dismissEditor()
@@ -395,7 +401,7 @@ final class ConnectionsViewController: NSViewController, NSTableViewDataSource, 
                 try credentialStore.removePassword(for: id)
             }
         } catch {
-            showAlert("Couldn’t Delete Connection", error: error, on: view.window)
+            showAlert("Couldn’t Delete Connection", error: error, on: hostWindow)
         }
     }
 
@@ -413,12 +419,12 @@ final class ConnectionsViewController: NSViewController, NSTableViewDataSource, 
         let controller = NSHostingController(rootView: editor)
         controller.sizingOptions = .preferredContentSize
         editorController = controller
-        presentAsSheet(controller)
+        presenter.presentAsSheet(controller)
     }
 
     private func dismissEditor() {
         guard let editorController else { return }
-        dismiss(editorController)
+        presenter.dismiss(editorController)
         self.editorController = nil
     }
 
@@ -442,6 +448,16 @@ final class ConnectionsViewController: NSViewController, NSTableViewDataSource, 
         default:
             error.localizedDescription
         }
+    }
+}
+
+extension Connection {
+    /// True when the name, host, or username contains the query. An empty query matches everything.
+    func matches(_ query: String) -> Bool {
+        query.isEmpty
+            || name.localizedStandardContains(query)
+            || host.localizedStandardContains(query)
+            || username.localizedStandardContains(query)
     }
 }
 

@@ -3,9 +3,9 @@ import RemoraCore
 
 @main @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
-    private var connectionsWindowController: ConnectionsWindowController?
+    private var mainWindowController: MainWindowController?
     private var settingsWindowController: SettingsWindowController?
-    private let sessionWindows = SessionWindows()
+    private let sessionTabs = SessionTabs()
     #if DEBUG
     private var rendererDemo: RendererDemo?
     private var shortcutCaptureDemo: ShortcutCaptureDemo?
@@ -22,20 +22,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        configureMenu()
         do {
             #if DEBUG
             if CommandLine.arguments.contains("--shortcut-capture-demo") {
+                configureMenu()
                 shortcutCaptureDemo = ShortcutCaptureDemo(renderer: try FrameRenderer())
                 return
             }
             #endif
-            connectionsWindowController = ConnectionsWindowController(
+            mainWindowController = MainWindowController(
                 connectionStore: try ConnectionStore(),
                 credentialStore: CredentialStore(),
-                sessionWindows: sessionWindows
+                sessionTabs: sessionTabs
             )
-            showConnectionsWindow()
+            configureMenu()
+            showMainWindow()
             #if DEBUG
             if UserDefaults.standard.bool(forKey: "RemoraRendererDemo") {
                 rendererDemo = RendererDemo(renderer: try FrameRenderer())
@@ -43,13 +44,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
             #endif
         } catch {
+            configureMenu()
             NSApplication.shared.presentError(error)
             NSApplication.shared.terminate(nil)
         }
     }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-        sessionWindows.disconnectAll()
+        sessionTabs.disconnectAll()
         return .terminateNow
     }
 
@@ -64,13 +66,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
-        showConnectionsWindow()
+        showMainWindow()
         return true
     }
 
     @objc private func newConnection(_ sender: Any?) {
-        showConnectionsWindow()
-        connectionsWindowController?.newConnection(sender)
+        showMainWindow()
+        mainWindowController?.newConnection(sender)
     }
 
     @objc private func showSettings(_ sender: Any?) {
@@ -84,24 +86,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let alert = NSAlert()
         alert.messageText = "Remora Help"
         alert.informativeText = """
-            Double-click a connection to open it in its own window.
+            Double-click a connection to open it in a tab. Each connection has at most one tab.
 
             In a session, Command acts as the Windows or Super key, Control as Control, and Option as Alt.
 
+            These shortcuts stay on this Mac while a session has the keyboard:
+            Control-Option-Command-[ and ] show the previous and next tab.
+            Control-Option-Command-1 through 9 show tab 1 through 9.
+            Control-Option-Command-H shows the connections list.
+            Control-Option-Command-W closes the tab and disconnects it.
             Control-Option-Command-Escape releases the keyboard. Click the remote desktop to capture it again.
-
             Control-Command-F enters or exits full screen. Command-Q quits Remora.
             """
         alert.runModal()
     }
 
-    @objc private func showConnectionsWindow(_ sender: Any?) {
-        showConnectionsWindow()
+    /// Shows the window with the connections list.
+    @objc private func showConnections(_ sender: Any?) {
+        showMainWindow()
+        mainWindowController?.showHome(sender)
     }
 
-    private func showConnectionsWindow() {
-        connectionsWindowController?.showWindow(nil)
-        connectionsWindowController?.window?.makeKeyAndOrderFront(nil)
+    private func showMainWindow() {
+        mainWindowController?.showWindow(nil)
+        mainWindowController?.window?.makeKeyAndOrderFront(nil)
         NSApplication.shared.activate()
     }
 
@@ -149,32 +157,42 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         delete.keyEquivalentModifierMask = .command
         editMenu.addItem(withTitle: "Select All", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
         editMenu.addItem(.separator())
-        editMenu.addItem(withTitle: "Find…", action: #selector(ConnectionsWindowController.startSearch(_:)), keyEquivalent: "f")
+        editMenu.addItem(withTitle: "Find…", action: #selector(MainWindowController.startSearch(_:)), keyEquivalent: "f")
 
         let viewMenu = addMenu("View", to: mainMenu)
         let fullScreen = viewMenu.addItem(withTitle: "Enter Full Screen", action: #selector(NSWindow.toggleFullScreen(_:)), keyEquivalent: "f")
         fullScreen.keyEquivalentModifierMask = [.command, .control]
 
-        // While a connected desktop has the keyboard, only Cmd-Q, Ctrl-Cmd-F, and
-        // Ctrl-Option-Cmd-Escape stay local. Other shortcuts here act once it is released.
+        // While a connected desktop has the keyboard, only Cmd-Q, Ctrl-Cmd-F, and the
+        // Ctrl-Option-Cmd shortcuts stay local. Other shortcuts here act once it is released.
+        let localChord: NSEvent.ModifierFlags = [.control, .option, .command]
         let sessionMenu = addMenu("Session", to: mainMenu)
-        sessionMenu.addItem(withTitle: "Disconnect", action: #selector(SessionWindowController.disconnectSession(_:)), keyEquivalent: "")
-        sessionMenu.addItem(withTitle: "Reconnect", action: #selector(SessionWindowController.reconnectSession(_:)), keyEquivalent: "r")
+        sessionMenu.addItem(withTitle: "Disconnect", action: #selector(MainWindowController.disconnectSession(_:)), keyEquivalent: "")
+        sessionMenu.addItem(withTitle: "Reconnect", action: #selector(MainWindowController.reconnectSession(_:)), keyEquivalent: "r")
         sessionMenu.addItem(.separator())
-        sessionMenu.addItem(withTitle: "Send Ctrl-Alt-Delete", action: #selector(SessionWindowController.sendCtrlAltDelete(_:)), keyEquivalent: "")
+        sessionMenu.addItem(withTitle: "Send Ctrl-Alt-Delete", action: #selector(MainWindowController.sendCtrlAltDelete(_:)), keyEquivalent: "")
         sessionMenu.addItem(.separator())
-        let release = sessionMenu.addItem(
+        sessionMenu.addItem(
             withTitle: "Release Keyboard Capture",
-            action: #selector(SessionWindowController.releaseKeyboardCapture(_:)),
+            action: #selector(MainWindowController.releaseKeyboardCapture(_:)),
             keyEquivalent: "\u{1b}"
-        )
-        release.keyEquivalentModifierMask = [.control, .option, .command]
+        ).keyEquivalentModifierMask = localChord
+        sessionMenu.addItem(.separator())
+        sessionMenu.addItem(withTitle: "Close Tab", action: #selector(MainWindowController.closeTab(_:)), keyEquivalent: "w")
+            .keyEquivalentModifierMask = localChord
 
         let windowMenu = addMenu("Window", to: mainMenu)
         windowMenu.addItem(withTitle: "Minimize", action: #selector(NSWindow.performMiniaturize(_:)), keyEquivalent: "m")
         windowMenu.addItem(withTitle: "Zoom", action: #selector(NSWindow.performZoom(_:)), keyEquivalent: "")
         windowMenu.addItem(.separator())
-        windowMenu.addItem(withTitle: "Connections", action: #selector(showConnectionsWindow(_:)), keyEquivalent: "0").target = self
+        let connections = windowMenu.addItem(withTitle: "Connections", action: #selector(showConnections(_:)), keyEquivalent: "h")
+        connections.keyEquivalentModifierMask = localChord
+        connections.target = self
+        windowMenu.addItem(withTitle: "Show Previous Tab", action: #selector(MainWindowController.showPreviousTab(_:)), keyEquivalent: "[")
+            .keyEquivalentModifierMask = localChord
+        windowMenu.addItem(withTitle: "Show Next Tab", action: #selector(MainWindowController.showNextTab(_:)), keyEquivalent: "]")
+            .keyEquivalentModifierMask = localChord
+        for item in mainWindowController?.tabMenuItems ?? [] { windowMenu.addItem(item) }
         windowMenu.addItem(.separator())
         windowMenu.addItem(withTitle: "Bring All to Front", action: #selector(NSApplication.arrangeInFront(_:)), keyEquivalent: "")
         NSApplication.shared.windowsMenu = windowMenu

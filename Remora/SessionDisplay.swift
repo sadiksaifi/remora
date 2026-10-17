@@ -1,18 +1,21 @@
 import AppKit
 import RemoraCore
 
-/// Tracks native window transitions separately from the remote desktop size.
+/// Requests a Fit to Window desktop size that follows the session's content area,
+/// separately from the remote desktop size. Full-screen transitions defer requests until they end.
 @MainActor
-final class SessionWindowDisplay {
+final class SessionDisplay {
     private weak var session: (any RemoteSession)?
-    private weak var window: NSWindow?
+    private weak var view: NSView?
     private var connected = false
     private var transitioning = false
-    var applyingRemoteSize = false
 
-    func attach(_ session: any RemoteSession, to window: NSWindow) {
+    init(view: NSView) {
+        self.view = view
+    }
+
+    func attach(_ session: any RemoteSession) {
         self.session = session
-        self.window = window
         connected = false
     }
 
@@ -33,10 +36,10 @@ final class SessionWindowDisplay {
         requestResize()
     }
 
+    /// Requests the content area's size in backing pixels. A hidden tab has no window and requests nothing.
     func requestResize() {
-        guard connected, !transitioning, !applyingRemoteSize,
-              let session, session.supportsDynamicResize, let window,
-              !window.inLiveResize, let view = window.contentView else { return }
+        guard connected, !transitioning, let session, session.supportsDynamicResize,
+              let view, let window = view.window, !window.inLiveResize else { return }
         let pixels: NSSize
         if window.styleMask.contains(.fullScreen), let screen = window.screen {
             pixels = NSSize(width: screen.frame.width * window.backingScaleFactor,
