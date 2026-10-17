@@ -19,6 +19,7 @@ final class SessionWindowController: NSWindowController, NSWindowDelegate {
     private var cancelChallenge: (() -> Void)?
     private var credentials: SessionCredentials?
     private var closed = false
+    private let display = SessionWindowDisplay()
 
     init(connection: Connection, credentialStore: CredentialStore, onClose: @escaping (SessionWindowController) -> Void) {
         self.connection = connection
@@ -34,6 +35,7 @@ final class SessionWindowController: NSWindowController, NSWindowDelegate {
         window.minSize = NSSize(width: 480, height: 320)
         window.isReleasedWhenClosed = false
         window.tabbingIdentifier = "Session"
+        window.collectionBehavior.insert(.fullScreenPrimary)
         window.center()
         super.init(window: window)
         window.delegate = self
@@ -51,6 +53,7 @@ final class SessionWindowController: NSWindowController, NSWindowDelegate {
 
     func disconnect() {
         clipboardSync = nil
+        display.disconnect()
         session?.disconnect()
         session = nil
         eventTask?.cancel()
@@ -66,6 +69,17 @@ final class SessionWindowController: NSWindowController, NSWindowDelegate {
         disconnect()
         onClose(self)
     }
+
+    func windowDidResize(_ notification: Notification) { display.requestResize() }
+    func windowDidEndLiveResize(_ notification: Notification) { display.requestResize() }
+    func windowDidChangeBackingProperties(_ notification: Notification) { display.requestResize() }
+    func windowDidChangeScreen(_ notification: Notification) { display.requestResize() }
+    func windowWillEnterFullScreen(_ notification: Notification) { display.willTransition() }
+    func windowWillExitFullScreen(_ notification: Notification) { display.willTransition() }
+    func windowDidEnterFullScreen(_ notification: Notification) { display.didTransition() }
+    func windowDidExitFullScreen(_ notification: Notification) { display.didTransition() }
+    func windowDidFailToEnterFullScreen(_ window: NSWindow) { display.didTransition() }
+    func windowDidFailToExitFullScreen(_ window: NSWindow) { display.didTransition() }
 
     @objc private func reconnect(_ sender: Any?) { startSession() }
     @objc private func closeSession(_ sender: Any?) { window?.performClose(sender) }
@@ -105,6 +119,7 @@ final class SessionWindowController: NSWindowController, NSWindowDelegate {
             self.session = session
             clipboardSync = ClipboardSync(session: session)
             desktopView.onFocus = { [weak self] in self?.clipboardSync?.focusGained() }
+            display.attach(session, to: window)
             let events = session.events
             eventTask = Task { @MainActor [weak self] in
                 for await event in events {
@@ -132,17 +147,21 @@ final class SessionWindowController: NSWindowController, NSWindowDelegate {
                 dismissChallenge()
                 window.contentView = desktopView
                 window.makeFirstResponder(desktopView)
+                display.didConnect()
             case .disconnected(let reason):
                 clipboardSync = nil
                 dismissChallenge()
                 session = nil
+                display.disconnect()
                 showDisconnected(reason?.description ?? "The session ended.")
             }
         case .remoteClipboardText(let text):
             clipboardSync?.receiveRemoteText(text)
-        case .desktopSizeChanged(let size):
+        case .desktopSizeChanged(let size, let requested):
             sessionLog.info("Desktop size: \(size.width)x\(size.height)")
-            resizeWindow(to: size)
+            if !requested { resizeWindow(to: size) }
+        case .dynamicResizeChanged(let available):
+            if available { display.requestResize() }
         case .cursorChanged(let cursor):
             desktopView.apply(cursor: cursor)
         case .credentialsChallenge(let challenge):
@@ -155,6 +174,8 @@ final class SessionWindowController: NSWindowController, NSWindowDelegate {
     private func resizeWindow(to size: DesktopSize) {
         guard let window, !window.styleMask.contains(.fullScreen),
               let screen = window.screen, size.width > 0, size.height > 0 else { return }
+        display.applyingRemoteSize = true
+        defer { display.applyingRemoteSize = false }
         let visible = screen.visibleFrame
         let chrome = window.frame.height - window.contentRect(forFrameRect: window.frame).height
         let desired = NSSize(width: CGFloat(size.width) / window.backingScaleFactor,

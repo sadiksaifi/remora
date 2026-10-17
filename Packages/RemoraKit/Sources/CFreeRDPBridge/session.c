@@ -1,6 +1,7 @@
 #include "CFreeRDPBridge.h"
 #include "input.h"
 #include "clipboard.h"
+#include "display.h"
 
 #define WITH_OPAQUE_SETTINGS
 /* WinPR's own public sspi.h declares fields with deprecated WinPR types. */
@@ -10,6 +11,8 @@
 #include <freerdp/client/cmdline.h>
 #include <freerdp/error.h>
 #include <freerdp/gdi/gdi.h>
+#include <freerdp/utils/gfx.h>
+#include <freerdp/client/rdpgfx.h>
 #include <freerdp/transport_io.h>
 #include <winpr/synch.h>
 #include <winpr/wlog.h>
@@ -44,6 +47,9 @@ struct RMRDPSession {
     atomic_bool aborted;
     RMInput *input;
     RMClipboard *clipboard;
+    RMDisplay *display;
+    pcRdpgfxSurfaceCommand surface_command;
+    UINT32 last_codec;
     bool credentials_cancelled;
     bool certificate_rejected;
     unsigned credential_requests;
@@ -53,6 +59,7 @@ struct RMRDPSession {
 
 RMInput *rm_rdp_input(RMRDPSession *s) { return s->input; }
 RMClipboard *rm_rdp_clipboard(RMRDPSession *s) { return s->clipboard; }
+RMDisplay *rm_rdp_display(RMRDPSession *s) { return s->display; }
 
 static rdpContext *context_of(RMRDPSession *s) { return &s->client.context; }
 static RMRDPSession *session_of(rdpContext *context) { return (RMRDPSession *)context; }
@@ -70,6 +77,8 @@ static void configure_logging(void) {
     engine_log = os_log_create("dev.sadiksaifi.Remora", "FreeRDP");
     wLog *root = WLog_GetRoot();
     (void)WLog_SetLogLevel(root, WLOG_WARN);
+    /* The backend reports the selected hw device and any software fallback. */
+    (void)WLog_SetLogLevel(WLog_Get("com.freerdp.codec"), WLOG_INFO);
     if (WLog_SetLogAppenderType(root, WLOG_APPENDER_CALLBACK)) {
         wLogCallbacks callbacks = { .message = log_message };
         (void)WLog_ConfigureAppender(WLog_GetLogAppender(root), "callbacks", &callbacks);
@@ -286,8 +295,9 @@ static BOOL end_paint(rdpContext *context) {
 
 static void report_size(RMRDPSession *s) {
     rdpGdi *gdi = context_of(s)->gdi;
+    const bool requested = rm_display_resized(s->display, gdi->width, gdi->height);
     if (s->callbacks.desktop_size)
-        s->callbacks.desktop_size(s->user, gdi->width, gdi->height);
+        s->callbacks.desktop_size(s->user, gdi->width, gdi->height, requested);
 }
 
 static BOOL desktop_resize(rdpContext *context) {
@@ -321,6 +331,30 @@ static void post_disconnect(freerdp *instance) {
     gdi_free(instance); /* Also safe when PostConnect was never reached. */
 }
 
+/* Observe the actual wire codec after client-common installs GDI. Keep its
+ * context and decoder callbacks intact; GDI still owns all rendering. */
+static UINT surface_command(RdpgfxClientContext *gfx, const RDPGFX_SURFACE_COMMAND *command) {
+    rdpGdi *gdi = gfx->custom;
+    RMRDPSession *s = session_of(gdi->context);
+    const UINT status = s->surface_command(gfx, command);
+    if (status == CHANNEL_RC_OK && s->last_codec != command->codecId) {
+        s->last_codec = command->codecId;
+        os_log_info(engine_log, "GFX codec: %{public}s (0x%04x)",
+                    rdpgfx_get_codec_id_string(command->codecId), command->codecId);
+    }
+    return status;
+}
+
+static void graphics_connected(void *context, const ChannelConnectedEventArgs *event) {
+    if (strcmp(event->name, RDPGFX_DVC_CHANNEL_NAME) != 0)
+        return;
+    RMRDPSession *s = session_of(context);
+    RdpgfxClientContext *gfx = event->pInterface;
+    s->surface_command = gfx->SurfaceCommand;
+    s->last_codec = UINT32_MAX;
+    gfx->SurfaceCommand = surface_command;
+}
+
 static BOOL client_new(freerdp *instance, rdpContext *context) {
     instance->AuthenticateEx = authenticate;
     instance->VerifyCertificateEx = verify_certificate;
@@ -333,7 +367,8 @@ static BOOL client_new(freerdp *instance, rdpContext *context) {
         PubSub_SubscribeChannelDisconnected(context->pubSub,
             freerdp_client_OnChannelDisconnectedEventHandler) < 0 ||
         PubSub_SubscribeChannelConnected(context->pubSub, rm_clipboard_channel_connected) < 0 ||
-        PubSub_SubscribeChannelDisconnected(context->pubSub, rm_clipboard_channel_disconnected) < 0)
+        PubSub_SubscribeChannelDisconnected(context->pubSub, rm_clipboard_channel_disconnected) < 0 ||
+        PubSub_SubscribeChannelConnected(context->pubSub, graphics_connected) < 0)
         return FALSE;
     rdpTransportIo io = *freerdp_get_io_callbacks(context);
     io.TCPConnect = tcp_connect;
@@ -363,7 +398,8 @@ RMRDPSession *rm_rdp_create(const RMRDPConfiguration *config, const RMRDPCallbac
     atomic_init(&s->aborted, false);
     s->input = rm_input_new(context, callbacks, user, config->iso_keyboard);
     s->clipboard = rm_clipboard_new(callbacks, user);
-    if (!s->input || !s->clipboard) {
+    s->display = rm_display_new(context, callbacks, user);
+    if (!s->input || !s->clipboard || !s->display) {
         rm_rdp_free(s);
         return NULL;
     }
@@ -387,8 +423,18 @@ RMRDPSession *rm_rdp_create(const RMRDPConfiguration *config, const RMRDPCallbac
         freerdp_settings_set_uint32(settings, FreeRDP_TcpConnectTimeout, 12000) &&
         freerdp_settings_set_bool(settings, FreeRDP_SupportGraphicsPipeline, TRUE) &&
         freerdp_settings_set_bool(settings, FreeRDP_GfxProgressive, TRUE) &&
-        freerdp_settings_set_bool(settings, FreeRDP_GfxH264, FALSE) &&
-        freerdp_settings_set_bool(settings, FreeRDP_GfxAVC444, FALSE) &&
+        freerdp_settings_set_bool(settings, FreeRDP_GfxH264, TRUE) &&
+        freerdp_settings_set_bool(settings, FreeRDP_GfxAVC444, TRUE) &&
+        freerdp_settings_set_bool(settings, FreeRDP_GfxAVC444v2, TRUE) &&
+        /* GDI still converts into our BGRA buffer. This flag lets its H.264
+         * contexts request FFmpeg hardware acceleration with software fallback. */
+        freerdp_settings_set_bool(settings, FreeRDP_SoftwareGdi, FALSE) &&
+        /* Allow transient Tailscale path loss: the defaults (5/2/3 seconds)
+         * abandon an unacknowledged connection after about 11 seconds. */
+        freerdp_settings_set_bool(settings, FreeRDP_TcpKeepAlive, TRUE) &&
+        freerdp_settings_set_uint32(settings, FreeRDP_TcpKeepAliveDelay, 30) &&
+        freerdp_settings_set_uint32(settings, FreeRDP_TcpKeepAliveInterval, 10) &&
+        freerdp_settings_set_uint32(settings, FreeRDP_TcpKeepAliveRetries, 6) &&
         freerdp_settings_set_bool(settings, FreeRDP_SupportDisplayControl, TRUE) &&
         freerdp_settings_set_bool(settings, FreeRDP_DynamicResolutionUpdate, TRUE) &&
         freerdp_settings_set_bool(settings, FreeRDP_AutoReconnectionEnabled, FALSE) &&
@@ -465,11 +511,13 @@ void rm_rdp_run(RMRDPSession *s) {
         if (s->callbacks.connected)
             s->callbacks.connected(s->user);
         while (!atomic_load(&s->aborted) && !freerdp_shall_disconnect_context(context)) {
+            const DWORD resize_timeout = rm_display_process(s->display);
             HANDLE handles[MAXIMUM_WAIT_OBJECTS] = { 0 };
-            const DWORD count = freerdp_get_event_handles(context, handles, MAXIMUM_WAIT_OBJECTS - 2);
+            const DWORD count = freerdp_get_event_handles(context, handles, MAXIMUM_WAIT_OBJECTS - 3);
             handles[count] = rm_input_event(s->input);
             handles[count + 1] = rm_clipboard_event(s->clipboard);
-            if (!count || WaitForMultipleObjects(count + 2, handles, FALSE, INFINITE) == WAIT_FAILED ||
+            handles[count + 2] = rm_display_event(s->display);
+            if (!count || WaitForMultipleObjects(count + 3, handles, FALSE, resize_timeout) == WAIT_FAILED ||
                 !freerdp_check_event_handles(context) || !rm_input_drain(s->input) ||
                 !rm_clipboard_drain(s->clipboard)) {
                 loop_failed = true;
@@ -519,8 +567,10 @@ void rm_rdp_free(RMRDPSession *s) {
     if (s) {
         RMInput *input = s->input;
         RMClipboard *clipboard = s->clipboard;
+        RMDisplay *display = s->display;
         freerdp_client_context_free(context_of(s));
         rm_input_free(input);
         rm_clipboard_free(clipboard);
+        rm_display_free(display);
     }
 }
