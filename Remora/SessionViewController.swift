@@ -4,15 +4,17 @@ import RemoraCore
 import SwiftUI
 import os
 
-private let sessionLog = Logger(subsystem: "dev.sadiksaifi.Remora", category: "SessionWindow")
+private let sessionLog = Logger(subsystem: "dev.sadiksaifi.Remora", category: "Session")
 
-/// Owns a single-use session per attempt. Closing cancels both the stream and any sheet.
+/// One tab's page. Owns a single-use session per attempt. Closing cancels both the stream and any sheet.
+/// Sheets attach to the main window only while the tab shows; a hidden tab's request waits and marks the tab.
 @MainActor
-final class SessionWindowController: NSWindowController, NSWindowDelegate, NSMenuItemValidation {
-    let connection: Connection
+final class SessionViewController: NSViewController {
+    private(set) var connection: Connection
     private let credentialStore: CredentialStore
     private let onStateChange: (SessionState) -> Void
-    private let onClose: (SessionWindowController) -> Void
+    private let onAttentionChange: (Bool) -> Void
+    private let onClose: () -> Void
     private var session: (any RemoteSession)?
     private var clipboardSync: ClipboardSync?
     private var overlays: SessionOverlays?
@@ -20,57 +22,76 @@ final class SessionWindowController: NSWindowController, NSWindowDelegate, NSMen
     private var eventTask: Task<Void, Never>?
     private var sheet: NSWindow?
     private var cancelChallenge: (() -> Void)?
+    /// Presents the waiting credentials or certificate sheet once the tab shows.
+    private var pendingSheet: ((NSWindow) -> Void)?
     private var credentials: SessionCredentials?
-    /// The state the window shows. Setup failures and teardown count as disconnected.
+    /// The state the tab shows. Setup failures and teardown count as disconnected.
     private(set) var state: SessionState = .connecting {
         didSet {
             if state != oldValue { onStateChange(state) }
         }
     }
+    private let container = SessionContainerView()
+    /// The status view or the desktop, filling the container.
+    private var content: NSView?
     private var statusView: NSHostingView<SessionStatusView>?
     private var closed = false
-    private let display = SessionWindowDisplay()
+    private let display: SessionDisplay
 
     init(
         connection: Connection, credentialStore: CredentialStore,
         onStateChange: @escaping (SessionState) -> Void,
-        onClose: @escaping (SessionWindowController) -> Void
+        onAttentionChange: @escaping (Bool) -> Void,
+        onClose: @escaping () -> Void
     ) {
         self.connection = connection
         self.credentialStore = credentialStore
         self.onStateChange = onStateChange
+        self.onAttentionChange = onAttentionChange
         self.onClose = onClose
-        let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 1440, height: 900),
-            styleMask: [.titled, .closable, .miniaturizable, .resizable],
-            backing: .buffered, defer: false
-        )
-        window.title = connection.name
-        window.subtitle = connection.displayAddress
-        window.minSize = NSSize(width: 480, height: 320)
-        window.isReleasedWhenClosed = false
-        window.tabbingIdentifier = "Session"
-        window.collectionBehavior.insert(.fullScreenPrimary)
-        if case .fixed = connection.resolution {
-            window.minSize = NSSize(width: 200, height: 200)
-        }
-        window.center()
-        super.init(window: window)
-        window.delegate = self
-        if case .fixed(let width, let height) = connection.resolution, connection.resolution.isValid {
-            resizeWindow(to: DesktopSize(width: width, height: height))
-            window.center()
-        }
-        startSession()
+        display = SessionDisplay(view: container)
+        super.init(nibName: nil, bundle: nil)
+        container.onResize = { [weak self] in self?.display.requestResize() }
+        container.onVisibilityChange = { [weak self] in self?.display.visibilityChanged() }
     }
 
-    required init?(coder: NSCoder) { fatalError("Use init(connection:credentialStore:onStateChange:onClose:)") }
+    required init?(coder: NSCoder) {
+        fatalError("Use init(connection:credentialStore:onStateChange:onAttentionChange:onClose:)")
+    }
 
     isolated deinit {
         eventTask?.cancel()
         session?.disconnect()
         cancelChallenge?()
-        sessionLog.info("Session window released")
+        sessionLog.info("Session released")
+    }
+
+    override func loadView() {
+        view = container
+    }
+
+    /// Starts the first session. Call after the tab shows, so Fit to Window can measure the content area.
+    func start() {
+        startSession()
+    }
+
+    func reconnect() {
+        startSession()
+    }
+
+    /// Takes the saved connection after an edit. A running session keeps its settings; the next
+    /// attempt uses the new ones and reads the password from the Keychain again.
+    func update(_ connection: Connection) {
+        self.connection = connection
+        credentials = nil
+    }
+
+    /// Ends the session and removes the tab's views. The tab can't reconnect afterwards.
+    func close() {
+        closed = true
+        disconnect()
+        view.removeFromSuperview()
+        removeFromParent()
     }
 
     func disconnect() {
@@ -85,51 +106,48 @@ final class SessionWindowController: NSWindowController, NSWindowDelegate, NSMen
         eventTask?.cancel()
         eventTask = nil
         dismissChallenge()
-        // Removing the view stops its display link as well.
-        window?.contentViewController = nil
-        window?.contentView = nil
+        // Removing the desktop stops its display link as well.
+        content?.removeFromSuperview()
+        content = nil
     }
 
-    func windowWillClose(_ notification: Notification) {
-        closed = true
-        disconnect()
-        onClose(self)
+    // MARK: Showing and hiding
+
+    /// Called after the tab's view joins the window. The desktop redraws and takes the keyboard on its own.
+    func didShow() {
+        presentPendingSheet()
+        display.requestResize()
     }
 
-    func windowDidResize(_ notification: Notification) { display.requestResize() }
-    func windowDidEndLiveResize(_ notification: Notification) { display.requestResize() }
-    func windowDidChangeBackingProperties(_ notification: Notification) { display.requestResize() }
-    func windowDidChangeScreen(_ notification: Notification) { display.requestResize() }
-    func windowWillEnterFullScreen(_ notification: Notification) { display.willTransition() }
-    func windowWillExitFullScreen(_ notification: Notification) { display.willTransition() }
-    func windowDidEnterFullScreen(_ notification: Notification) { display.didTransition() }
-    func windowDidExitFullScreen(_ notification: Notification) { display.didTransition() }
-    func windowDidFailToEnterFullScreen(_ window: NSWindow) { display.didTransition() }
-    func windowDidFailToExitFullScreen(_ window: NSWindow) { display.didTransition() }
+    /// Gives the keyboard back to a connected desktop, for example after the search field closes.
+    func focusDesktop() {
+        guard state == .connected, let desktopView, let window = view.window else { return }
+        window.makeFirstResponder(desktopView)
+    }
+
+    func windowWillTransition() { display.willTransition() }
+    func windowDidTransition() { display.didTransition() }
+    func windowDidChangeSize() { display.requestResize() }
 
     // MARK: Session menu
 
-    @objc func disconnectSession(_ sender: Any?) { session?.disconnect() }
-    @objc func reconnectSession(_ sender: Any?) { startSession() }
-    @objc func sendCtrlAltDelete(_ sender: Any?) { desktopView?.sendCtrlAltDelete() }
+    var canDisconnect: Bool { session != nil }
+    var canReconnect: Bool { session == nil && !closed }
+    var isConnected: Bool { state == .connected }
+    var hasKeyboard: Bool { state == .connected && view.window?.firstResponder === desktopView }
 
-    @objc func releaseKeyboardCapture(_ sender: Any?) {
-        guard let window, window.firstResponder === desktopView else { return }
+    func disconnectSession() { session?.disconnect() }
+    func sendCtrlAltDelete() { desktopView?.sendCtrlAltDelete() }
+
+    func releaseKeyboardCapture() {
+        guard let window = view.window, window.firstResponder === desktopView else { return }
         window.makeFirstResponder(nil)
     }
 
-    func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
-        switch menuItem.action {
-        case #selector(disconnectSession(_:)): session != nil
-        case #selector(reconnectSession(_:)): session == nil && !closed
-        case #selector(sendCtrlAltDelete(_:)): state == .connected
-        case #selector(releaseKeyboardCapture(_:)): state == .connected && window?.firstResponder === desktopView
-        default: true
-        }
-    }
+    // MARK: Session
 
     private func startSession() {
-        guard !closed, let window else { return }
+        guard !closed else { return }
         disconnect()
         state = .connecting
         let connectingView = showStatus(.connecting)
@@ -153,14 +171,19 @@ final class SessionWindowController: NSWindowController, NSWindowDelegate, NSMen
                 credentials = currentCredentials
             }
             let renderer = try FrameRenderer()
-            let size = window.convertToBacking(connectingView.bounds).size
+            view.window?.contentView?.layoutSubtreeIfNeeded()
+            let backingScale = view.window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2
+            let points = connectingView.bounds.size
             let desktopSize: DesktopSize
             let scaleFactor: Double
             let allowsDynamicResize: Bool
             switch connection.resolution {
             case .fitToWindow:
-                desktopSize = DesktopSize(width: Int(size.width), height: Int(size.height))
-                scaleFactor = window.backingScaleFactor
+                // A tab always shows before it starts. The fallback covers a content area that has no size yet.
+                desktopSize = points.width > 0 && points.height > 0
+                    ? DesktopSize(width: Int(points.width * backingScale), height: Int(points.height * backingScale))
+                    : DesktopSize(width: 1920, height: 1080)
+                scaleFactor = backingScale
                 allowsDynamicResize = true
             case .fixed(let width, let height):
                 desktopSize = DesktopSize(width: width, height: height)
@@ -184,7 +207,7 @@ final class SessionWindowController: NSWindowController, NSWindowDelegate, NSMen
             self.session = session
             clipboardSync = ClipboardSync(session: session)
             desktopView.onFocus = { [weak self] in self?.clipboardSync?.focusGained() }
-            display.attach(session, to: window)
+            display.attach(session)
             let events = session.events
             eventTask = Task { @MainActor [weak self] in
                 for await event in events {
@@ -206,29 +229,34 @@ final class SessionWindowController: NSWindowController, NSWindowDelegate, NSMen
     }
 
     private func receive(_ event: SessionEvent, desktopView: RemoteDesktopView) {
-        guard !closed, let window else { return }
+        guard !closed else { return }
         switch event {
         case .stateChanged(let state):
             sessionLog.info("State: \(String(describing: state), privacy: .public)")
             self.state = state
             switch state {
             case .connecting:
-                if window.contentView !== desktopView { showStatus(.connecting) }
+                if content !== desktopView { showStatus(.connecting) }
             case .awaitingCredentials:
-                if window.contentView !== desktopView { showStatus(.awaitingCredentials) }
+                if content !== desktopView { showStatus(.awaitingCredentials) }
             case .awaitingTrust:
-                if window.contentView !== desktopView { showStatus(.awaitingTrust) }
+                if content !== desktopView { showStatus(.awaitingTrust) }
             case .connected:
                 clipboardSync?.sessionDidConnect()
                 dismissChallenge()
-                if window.contentView !== desktopView { window.contentView = desktopView }
+                setContent(desktopView)
                 overlays?.connected()
-                window.makeFirstResponder(desktopView)
+                // Leave the keyboard with the search field while the user types in it.
+                if let window = view.window, (window.firstResponder as? NSTextView)?.isFieldEditor != true {
+                    window.makeFirstResponder(desktopView)
+                }
                 display.didConnect()
                 desktopView.setSessionConnected(true)
             case .reconnecting(let attempt):
                 desktopView.setSessionConnected(false)
-                window.makeFirstResponder(nil)
+                if let window = view.window, window.firstResponder === desktopView {
+                    window.makeFirstResponder(nil)
+                }
                 overlays?.reconnecting(attempt: attempt)
             case .disconnected(let reason):
                 desktopView.setSessionConnected(false)
@@ -241,46 +269,43 @@ final class SessionWindowController: NSWindowController, NSWindowDelegate, NSMen
             }
         case .remoteClipboardText(let text):
             clipboardSync?.receiveRemoteText(text)
-        case .desktopSizeChanged(let size, let requested):
+        case .desktopSizeChanged(let size, _):
+            // The window never resizes for a session. The renderer aspect-fits any desktop size.
             sessionLog.info("Desktop size: \(size.width)x\(size.height)")
-            if !requested { resizeWindow(to: size) }
         case .dynamicResizeChanged(let available):
             if available { display.requestResize() }
         case .cursorChanged(let cursor):
             desktopView.apply(cursor: cursor)
         case .credentialsChallenge(let challenge):
-            showCredentials(challenge)
+            dismissChallenge()
+            cancelChallenge = { challenge.responder.respond(nil) }
+            presentWhenShown { [weak self] window in self?.showCredentials(challenge, on: window) }
         case .trustChallenge(let challenge):
-            showTrust(challenge)
+            dismissChallenge()
+            cancelChallenge = { challenge.responder.respond(.reject) }
+            presentWhenShown { [weak self] window in self?.showTrust(challenge, on: window) }
         }
     }
 
-    private func resizeWindow(to size: DesktopSize) {
-        guard let window, !window.styleMask.contains(.fullScreen),
-              let screen = window.screen, size.width > 0, size.height > 0 else { return }
-        display.applyingRemoteSize = true
-        defer { display.applyingRemoteSize = false }
-        let visible = screen.visibleFrame
-        let chrome = window.frame.height - window.contentRect(forFrameRect: window.frame).height
-        let pixelsPerPoint = connection.resolution == .fitToWindow ? window.backingScaleFactor : 1
-        let desired = NSSize(width: CGFloat(size.width) / pixelsPerPoint,
-                             height: CGFloat(size.height) / pixelsPerPoint)
-        let factor = min(1, visible.width / desired.width, max(1, visible.height - chrome) / desired.height)
-        var frame = window.frameRect(forContentRect: NSRect(origin: .zero, size: NSSize(
-            width: desired.width * factor, height: desired.height * factor
-        )))
-        frame.origin = NSPoint(x: window.frame.midX - frame.width / 2, y: window.frame.midY - frame.height / 2)
-        frame.origin.x = max(visible.minX, min(frame.minX, visible.maxX - frame.width))
-        frame.origin.y = max(visible.minY, min(frame.minY, visible.maxY - frame.height))
-        window.setFrame(frame, display: true)
-        let content = window.contentRect(forFrameRect: window.frame).size
-        sessionLog.info("Window content: \(content.width)x\(content.height) points, backing scale=\(window.backingScaleFactor)")
+    // MARK: Sheets
+
+    private func presentWhenShown(_ present: @escaping (NSWindow) -> Void) {
+        pendingSheet = present
+        presentPendingSheet()
     }
 
-    private func showCredentials(_ challenge: CredentialsChallenge) {
-        guard let window else { challenge.responder.respond(nil); return }
-        dismissChallenge()
-        cancelChallenge = { challenge.responder.respond(nil) }
+    private func presentPendingSheet() {
+        guard let present = pendingSheet else { return }
+        guard let window = view.window else {
+            onAttentionChange(true)
+            return
+        }
+        pendingSheet = nil
+        onAttentionChange(false)
+        present(window)
+    }
+
+    private func showCredentials(_ challenge: CredentialsChallenge, on window: NSWindow) {
         let form = SessionCredentialsView(
             challenge: challenge, computerName: connection.name, address: connection.displayAddress,
             password: credentials?.password ?? "",
@@ -310,10 +335,7 @@ final class SessionWindowController: NSWindowController, NSWindowDelegate, NSMen
         window.beginSheet(sheet)
     }
 
-    private func showTrust(_ challenge: TrustChallenge) {
-        guard let window else { challenge.responder.respond(.reject); return }
-        dismissChallenge()
-        cancelChallenge = { challenge.responder.respond(.reject) }
+    private func showTrust(_ challenge: TrustChallenge, on window: NSWindow) {
         let address = challenge.port == UInt16(Connection.defaultPort)
             ? challenge.host : "\(challenge.host):\(challenge.port)"
         let alert = NSAlert()
@@ -377,36 +399,91 @@ final class SessionWindowController: NSWindowController, NSWindowDelegate, NSMen
         return stack
     }
 
+    /// Cancels a waiting or shown credentials or certificate request.
     private func dismissChallenge() {
         let cancel = cancelChallenge
         cancelChallenge = nil
         cancel?()
+        if pendingSheet != nil {
+            pendingSheet = nil
+            onAttentionChange(false)
+        }
         if let sheet {
             self.sheet = nil
-            window?.endSheet(sheet, returnCode: .cancel)
+            sheet.sheetParent?.endSheet(sheet, returnCode: .cancel)
             sheet.orderOut(nil)
             sheet.contentViewController = nil
         }
     }
 
-    /// Replaces the window content with a status view, removing any desktop.
+    // MARK: Content
+
+    private func setContent(_ newContent: NSView) {
+        guard newContent !== content else { return }
+        content?.removeFromSuperview()
+        newContent.frame = container.bounds
+        newContent.autoresizingMask = [.width, .height]
+        container.addSubview(newContent)
+        content = newContent
+    }
+
+    /// Replaces the tab's content with a status view, removing any desktop.
     @discardableResult
     private func showStatus(_ status: SessionStatus) -> NSView {
-        let content = SessionStatusView(
+        let rootView = SessionStatusView(
             status: status, computerName: connection.name, address: connection.displayAddress,
             onCancel: { [weak self] in self?.session?.disconnect() },
             onReconnect: { [weak self] in self?.startSession() },
-            onClose: { [weak self] in self?.window?.performClose(nil) }
+            onClose: { [weak self] in self?.onClose() }
         )
-        if let statusView, window?.contentView === statusView {
-            statusView.rootView = content
+        if let statusView, content === statusView {
+            statusView.rootView = rootView
             return statusView
         }
-        let view = NSHostingView(rootView: content)
+        let view = NSHostingView(rootView: rootView)
         view.sizingOptions = []
-        window?.contentView = view
+        setContent(view)
         statusView = view
         return view
+    }
+}
+
+/// The session's content area below the toolbar. Fit to Window follows its size and backing scale.
+/// It reports joining or leaving the window and the window's occlusion changes.
+@MainActor
+private final class SessionContainerView: NSView {
+    var onResize: (() -> Void)?
+    var onVisibilityChange: (() -> Void)?
+
+    override func viewWillMove(toWindow newWindow: NSWindow?) {
+        super.viewWillMove(toWindow: newWindow)
+        NotificationCenter.default.removeObserver(self, name: NSWindow.didChangeOcclusionStateNotification, object: nil)
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        if let window {
+            NotificationCenter.default.addObserver(
+                self, selector: #selector(windowDidChangeOcclusionState(_:)),
+                name: NSWindow.didChangeOcclusionStateNotification, object: window
+            )
+        }
+        onVisibilityChange?()
+    }
+
+    @objc private func windowDidChangeOcclusionState(_ notification: Notification) {
+        onVisibilityChange?()
+    }
+
+    override func setFrameSize(_ newSize: NSSize) {
+        let changed = newSize != frame.size
+        super.setFrameSize(newSize)
+        if changed { onResize?() }
+    }
+
+    override func viewDidChangeBackingProperties() {
+        super.viewDidChangeBackingProperties()
+        onResize?()
     }
 }
 

@@ -12,8 +12,10 @@ typedef struct RMDisplay RMDisplay;
 RMDisplay *rm_display_new(rdpContext *context, const RMRDPCallbacks *callbacks, void *user);
 void rm_display_free(RMDisplay *display);
 HANDLE rm_display_event(RMDisplay *display);
-/* Session thread only. Drains the latest resize command and returns the next deadline. */
+/* Session thread only. Drains the latest resize and display update commands and returns the next deadline. */
 DWORD rm_display_process(RMDisplay *display);
+/* Session thread only. A new connection starts with display updates on. */
+void rm_display_reconnected(RMDisplay *display);
 /* Called by DesktopResize, including on the GFX worker. Returns the change's origin. */
 bool rm_display_resized(RMDisplay *display, uint32_t width, uint32_t height);
 RMDisplay *rm_rdp_display(RMRDPSession *session);

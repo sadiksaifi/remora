@@ -79,6 +79,9 @@ void rm_rdp_abort(RMRDPSession *session);
 void rm_rdp_free(RMRDPSession *session);
 /* Thread-safe enqueue only. The caller excludes free until the call returns. */
 void rm_rdp_request_resize(RMRDPSession *session, uint32_t width, uint32_t height, double scale);
+/* Thread-safe enqueue. Sends Suppress Output (MS-RDPBCGR 2.2.11.3) when the server supports it;
+ * enabling again also requests a refresh of the whole desktop. Survives automatic reconnection. */
+void rm_rdp_set_display_updates(RMRDPSession *session, bool enabled);
 void rm_rdp_key(RMRDPSession *session, uint16_t key, bool down);
 void rm_rdp_pointer(RMRDPSession *session, uint16_t x, uint16_t y, uint8_t buttons);
 void rm_rdp_wheel(RMRDPSession *session, int32_t vertical, int32_t horizontal);

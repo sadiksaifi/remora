@@ -21,6 +21,28 @@ final class SystemShortcutCapture {
         NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension?Privacy_Accessibility")!)
     }
 
+    /// The release chord: Control-Option-Command-Escape.
+    static func isReleaseChord(keyCode: UInt16, flags: NSEvent.ModifierFlags) -> Bool {
+        keyCode == 0x35 && flags.intersection(shortcutModifiers) == [.control, .option, .command]
+    }
+
+    /// Shortcuts that act on this Mac even while the desktop has the keyboard: Command-Q,
+    /// Control-Command-F, and the Control-Option-Command family for tabs, Connections, and the release chord.
+    static func staysLocal(keyCode: UInt16, flags: NSEvent.ModifierFlags) -> Bool {
+        switch flags.intersection(shortcutModifiers) {
+        case .command: keyCode == 0x0C // Q
+        case [.control, .command]: keyCode == 0x03 // F
+        case [.control, .option, .command]: localChordKeys.contains(keyCode)
+        default: false
+        }
+    }
+
+    private static let shortcutModifiers: NSEvent.ModifierFlags = [.command, .control, .option, .shift]
+    /// Escape, [, ], H, W, and 1 through 9.
+    private static let localChordKeys: Set<UInt16> = [
+        0x35, 0x21, 0x1E, 0x04, 0x0D, 0x12, 0x13, 0x14, 0x15, 0x17, 0x16, 0x1A, 0x1C, 0x19,
+    ]
+
     private var tap: CFMachPort?
     private var source: CFRunLoopSource?
     private var localChord = false
@@ -94,21 +116,20 @@ final class SystemShortcutCapture {
             return false
         }
         guard let key = NSEvent(cgEvent: event) else { return false }
-        let flags = key.modifierFlags.intersection([.command, .control, .option, .shift])
         if type == .keyDown {
             // Ctrl-Option-Cmd-Escape releases capture locally. Click the desktop to capture again.
-            if key.keyCode == 0x35 && flags == [.control, .option, .command] {
+            if Self.isReleaseChord(keyCode: key.keyCode, flags: key.modifierFlags) {
                 releaseCapture()
                 return true
             }
-            if (key.keyCode == 0x0C && flags == .command) ||
-               (key.keyCode == 0x03 && flags == [.control, .command]) {
+            // Other local shortcuts reach the menus while the desktop keeps the keyboard.
+            if Self.staysLocal(keyCode: key.keyCode, flags: key.modifierFlags) {
                 releaseKeys()
                 localChord = true
             }
         }
         if localChord {
-            if flags.isEmpty { localChord = false }
+            if key.modifierFlags.intersection(Self.shortcutModifiers).isEmpty { localChord = false }
             return false
         }
         receive(key)

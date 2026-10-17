@@ -28,6 +28,9 @@ final class RemoteDesktopInput: NSObject {
             view?.window?.firstResponder === view
     }
     private var keyboard = KeyboardState()
+    /// Device modifier bits held when the key state last reset, for example the rest of a tab shortcut.
+    /// They stay out of the remote state until released, so a lone Command release can't reach the remote.
+    private var staleModifiers: UInt = 0
     private var scroll = ScrollAccumulator()
     private var buttons: PointerButtons = []
     private var lastPosition: RemotePoint?
@@ -85,9 +88,8 @@ final class RemoteDesktopInput: NSObject {
         // AppKit can call becomeFirstResponder before assigning window.firstResponder.
         Task { @MainActor [weak self] in self?.shortcutCapture.start() }
         view?.onFocus?()
-        let caps = NSEvent.modifierFlags.contains(.capsLock)
-        keyboard.reset(capsLockOn: caps)
-        input?.synchronize(locks: caps ? [.capsLock] : [])
+        resetKeyboard()
+        input?.synchronize(locks: NSEvent.modifierFlags.contains(.capsLock) ? [.capsLock] : [])
     }
 
     func focusOut() {
@@ -101,7 +103,7 @@ final class RemoteDesktopInput: NSObject {
     }
 
     private func reset() {
-        keyboard.reset(capsLockOn: NSEvent.modifierFlags.contains(.capsLock))
+        resetKeyboard()
         scroll.reset()
         buttons = []
         lastPosition = nil
@@ -114,9 +116,19 @@ final class RemoteDesktopInput: NSObject {
         }
     }
 
+    private func resetKeyboard() {
+        keyboard.reset(capsLockOn: NSEvent.modifierFlags.contains(.capsLock))
+        staleModifiers = UInt(CGEventSource.flagsState(.combinedSessionState).rawValue) & Self.deviceModifierBits
+    }
+
+    /// NX_DEVICE* bits for left and right Shift, Control, Option, and Command.
+    private static let deviceModifierBits: UInt = 0x207F
+
     func flagsChanged(_ event: NSEvent, captured: Bool = false) {
         guard connected, captured || !shortcutCapture.isActive, let input else { return }
-        for key in keyboard.flagsChanged(keyCode: event.keyCode, rawFlags: event.modifierFlags.rawValue) {
+        staleModifiers &= event.modifierFlags.rawValue
+        let flags = event.modifierFlags.rawValue & ~staleModifiers
+        for key in keyboard.flagsChanged(keyCode: event.keyCode, rawFlags: flags) {
             input.sendKey(key)
         }
     }
@@ -124,12 +136,8 @@ final class RemoteDesktopInput: NSObject {
     func performKeyEquivalent(_ event: NSEvent) -> Bool {
         guard connected, !shortcutCapture.isActive, input != nil, let view, view.window?.firstResponder === view,
               event.modifierFlags.contains(.command) else { return false }
-        let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask).subtracting([.capsLock, .numericPad, .function])
-        // Keep Cmd-Q and Cmd-Ctrl-F local as explicit exit/full-screen shortcuts, and
-        // Ctrl-Option-Cmd-Escape for the Release Keyboard Capture menu item.
-        if (event.keyCode == 0x0C && flags == .command) ||
-           (event.keyCode == 0x03 && flags == [.command, .control]) ||
-           (event.keyCode == 0x35 && flags == [.command, .control, .option]) { return false }
+        // Cmd-Q, Ctrl-Cmd-F, and the Ctrl-Option-Cmd tab, Connections, and release shortcuts go to the menus.
+        if SystemShortcutCapture.staysLocal(keyCode: event.keyCode, flags: event.modifierFlags) { return false }
         key(event, down: true)
         return true
     }

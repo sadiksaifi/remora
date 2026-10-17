@@ -8,6 +8,8 @@ private let renderLog = OSLog(subsystem: "dev.sadiksaifi.Remora", category: "Ren
 
 /// Copies only damaged bytes into one pending staging slot. Three semaphore-owned
 /// slots overlap CPU copies with GPU reads; a slot stays immutable until completion.
+/// A slot is taken when it becomes pending and given back when its draw completes or when
+/// the pending frame is dropped, so every semaphore is balanced before its storage is freed.
 /// One serial queue blits exact damage into a private texture, then draws, in the
 /// same command buffer, with at most one command buffer in flight. Pending ingests
 /// overwrite/coalesce in place, never queue frames.
@@ -77,6 +79,12 @@ final class FrameRenderer: Sendable {
         self.linear = linear
     }
 
+    /// A pending frame that was never drawn still holds its slot. Release it, or libdispatch
+    /// traps when it frees a semaphore below its initial value.
+    deinit {
+        state.withLock { $0.dropPending() }
+    }
+
     convenience init() throws(Failure) {
         guard let device = MTLCreateSystemDefaultDevice() else { throw Failure.metalUnavailable }
         try self.init(device: device)
@@ -105,10 +113,9 @@ final class FrameRenderer: Sendable {
                     counters.withLock { $0.lastFailure = .allocationFailed }
                     return
                 }
+                state.dropPending()
                 state.storage = storage
-                state.pending = nil
                 state.nextSlot = 0
-                state.damage = FrameDamage()
             }
             guard let storage = state.storage else { return }
             var damage = FrameDamage()
@@ -203,9 +210,8 @@ final class FrameRenderer: Sendable {
             state.withLock {
                 $0.inFlight = false
                 if command.status == .error, $0.storage === submission.storage {
+                    $0.dropPending()
                     $0.storage = nil
-                    $0.pending = nil
-                    $0.damage = FrameDamage()
                 }
             }
             os_signpost(.end, log: renderLog, name: "Present", signpostID: signpost, "rects=%{public}ld", submission.rectangleCount)
@@ -222,6 +228,13 @@ final class FrameRenderer: Sendable {
         var nextSlot = 0
         var inFlight = false
         var damage = FrameDamage()
+
+        /// Discards the pending frame and gives its slot back.
+        mutating func dropPending() {
+            if let pending, let storage { storage.slots[pending].available.signal() }
+            pending = nil
+            damage = FrameDamage()
+        }
     }
 
     private struct Submission: Sendable {
