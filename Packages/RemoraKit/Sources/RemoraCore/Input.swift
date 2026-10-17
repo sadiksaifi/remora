@@ -109,11 +109,16 @@ public struct KeyboardState: Sendable {
             capsLockOn = on
             return [KeyInput(keyCode: keyCode, isDown: true), KeyInput(keyCode: keyCode, isDown: false)]
         }
-        guard let mask = Self.modifierMask(keyCode) else { return [] }
-        let down = rawFlags & mask != 0
-        guard down != pressed.contains(keyCode) else { return [] }
-        if down { pressed.insert(keyCode) } else { pressed.remove(keyCode) }
-        return [KeyInput(keyCode: keyCode, isDown: down)]
+        // Accessibility-generated flags events can carry keyCode zero. The
+        // device flags still describe both sides, so reconcile the full state.
+        var changes: [KeyInput] = []
+        for key: UInt16 in [0x36, 0x37, 0x38, 0x3A, 0x3B, 0x3C, 0x3D, 0x3E] {
+            let down = rawFlags & Self.modifierMask(key)! != 0
+            guard down != pressed.contains(key) else { continue }
+            if down { pressed.insert(key) } else { pressed.remove(key) }
+            changes.append(KeyInput(keyCode: key, isDown: down))
+        }
+        return changes
     }
 
     public mutating func releaseAll() -> [KeyInput] {

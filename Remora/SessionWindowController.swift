@@ -98,12 +98,14 @@ final class SessionWindowController: NSWindowController, NSWindowDelegate {
                 scaleFactor: window.backingScaleFactor
             )
             let session = RDPSession(configuration: configuration, frameSink: RendererFrameSink(renderer: renderer))
+            let desktopView = RemoteDesktopView(renderer: renderer)
+            desktopView.input = session
             self.session = session
             let events = session.events
             eventTask = Task { @MainActor [weak self] in
                 for await event in events {
                     guard !Task.isCancelled else { break }
-                    self?.receive(event, renderer: renderer)
+                    self?.receive(event, desktopView: desktopView)
                 }
             }
             session.connect()
@@ -113,7 +115,7 @@ final class SessionWindowController: NSWindowController, NSWindowDelegate {
         }
     }
 
-    private func receive(_ event: SessionEvent, renderer: FrameRenderer) {
+    private func receive(_ event: SessionEvent, desktopView: RemoteDesktopView) {
         guard !closed, let window else { return }
         switch event {
         case .stateChanged(let state):
@@ -123,8 +125,8 @@ final class SessionWindowController: NSWindowController, NSWindowDelegate {
                 break
             case .connected:
                 dismissChallenge()
-                window.contentView = RemoteDesktopView(renderer: renderer)
-                window.makeFirstResponder(window.contentView)
+                window.contentView = desktopView
+                window.makeFirstResponder(desktopView)
             case .disconnected(let reason):
                 dismissChallenge()
                 session = nil
@@ -133,6 +135,8 @@ final class SessionWindowController: NSWindowController, NSWindowDelegate {
         case .desktopSizeChanged(let size):
             sessionLog.info("Desktop size: \(size.width)x\(size.height)")
             resizeWindow(to: size)
+        case .cursorChanged(let cursor):
+            desktopView.apply(cursor: cursor)
         case .credentialsChallenge(let challenge):
             showCredentials(challenge)
         case .trustChallenge(let challenge):
