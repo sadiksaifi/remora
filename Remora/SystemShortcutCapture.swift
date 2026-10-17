@@ -5,9 +5,20 @@ import AppKit
 @MainActor
 final class SystemShortcutCapture {
     static var isTrusted: Bool { AXIsProcessTrusted() }
-    static func requestPermission() {
-        let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
-        _ = AXIsProcessTrustedWithOptions(options)
+
+    /// The Settings toggle. Capture is on unless the user turned it off.
+    static let enabledKey = "CaptureSystemShortcuts"
+    static var isEnabled: Bool { UserDefaults.standard.object(forKey: enabledKey) as? Bool ?? true }
+
+    /// Opens the Privacy & Security pane that grants Accessibility trust. macOS 27 names it
+    /// Device Control and Data Access. An untrusted Remora first asks to be added to that list,
+    /// which can also show the system prompt.
+    static func openAccessibilitySettings() {
+        if !isTrusted {
+            let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
+            _ = AXIsProcessTrustedWithOptions(options)
+        }
+        NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension?Privacy_Accessibility")!)
     }
 
     private var tap: CFMachPort?
@@ -32,7 +43,7 @@ final class SystemShortcutCapture {
 
     func start() {
         guard isFocused() else { return }
-        guard Self.isTrusted else { stop(); return }
+        guard Self.isEnabled, Self.isTrusted else { stop(); return }
         if let tap {
             if CFMachPortIsValid(tap) {
                 CGEvent.tapEnable(tap: tap, enable: true)
@@ -77,7 +88,7 @@ final class SystemShortcutCapture {
     }
 
     private func filter(type: CGEventType, event: CGEvent) -> Bool {
-        guard isFocused() else { stop(); return false }
+        guard isFocused(), Self.isEnabled else { stop(); return false }
         if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
             if let tap { CGEvent.tapEnable(tap: tap, enable: true) }
             return false

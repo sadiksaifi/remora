@@ -125,11 +125,22 @@ final class RemoteDesktopInput: NSObject {
         guard connected, !shortcutCapture.isActive, input != nil, let view, view.window?.firstResponder === view,
               event.modifierFlags.contains(.command) else { return false }
         let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask).subtracting([.capsLock, .numericPad, .function])
-        // Keep Cmd-Q and Cmd-Ctrl-F local as explicit exit/full-screen shortcuts.
+        // Keep Cmd-Q and Cmd-Ctrl-F local as explicit exit/full-screen shortcuts, and
+        // Ctrl-Option-Cmd-Escape for the Release Keyboard Capture menu item.
         if (event.keyCode == 0x0C && flags == .command) ||
-           (event.keyCode == 0x03 && flags == [.command, .control]) { return false }
+           (event.keyCode == 0x03 && flags == [.command, .control]) ||
+           (event.keyCode == 0x35 && flags == [.command, .control, .option]) { return false }
         key(event, down: true)
         return true
+    }
+
+    /// Presses and releases Control, Option, and Forward Delete, which RDP maps to Ctrl-Alt-Del.
+    func sendCtrlAltDelete() {
+        guard connected, let input else { return }
+        releaseKeys()
+        let keys: [UInt16] = [0x3B, 0x3A, 0x75]
+        for key in keys { input.sendKey(KeyInput(keyCode: key, isDown: true)) }
+        for key in keys.reversed() { input.sendKey(KeyInput(keyCode: key, isDown: false)) }
     }
 
     func pointer(_ event: NSEvent, down: Bool? = nil) {

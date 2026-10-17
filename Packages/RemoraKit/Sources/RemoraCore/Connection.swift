@@ -5,6 +5,9 @@ public struct Connection: Codable, Sendable, Identifiable, Hashable {
         case rdp
     }
 
+    /// The standard RDP port.
+    public static let defaultPort = 3389
+
     public var id: UUID
     public var name: String
     public var host: String
@@ -18,7 +21,7 @@ public struct Connection: Codable, Sendable, Identifiable, Hashable {
         id: UUID = UUID(),
         name: String,
         host: String,
-        port: Int = 3389,
+        port: Int = Connection.defaultPort,
         username: String,
         domain: String? = nil,
         kind: Kind = .rdp,
@@ -35,6 +38,6 @@ public struct Connection: Codable, Sendable, Identifiable, Hashable {
     }
 
     public var displayAddress: String {
-        port == 3389 ? host : "\(host):\(port)"
+        port == Self.defaultPort ? host : "\(host):\(port)"
     }
 }

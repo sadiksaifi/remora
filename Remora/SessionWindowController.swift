@@ -8,7 +8,7 @@ private let sessionLog = Logger(subsystem: "dev.sadiksaifi.Remora", category: "S
 
 /// Owns a single-use session per attempt. Closing cancels both the stream and any sheet.
 @MainActor
-final class SessionWindowController: NSWindowController, NSWindowDelegate {
+final class SessionWindowController: NSWindowController, NSWindowDelegate, NSMenuItemValidation {
     let connection: Connection
     private let credentialStore: CredentialStore
     private let onClose: (SessionWindowController) -> Void
@@ -20,6 +20,8 @@ final class SessionWindowController: NSWindowController, NSWindowDelegate {
     private var sheet: NSWindow?
     private var cancelChallenge: (() -> Void)?
     private var credentials: SessionCredentials?
+    private var state: SessionState?
+    private var statusView: NSHostingView<SessionStatusView>?
     private var closed = false
     private let display = SessionWindowDisplay()
 
@@ -54,6 +56,7 @@ final class SessionWindowController: NSWindowController, NSWindowDelegate {
     }
 
     func disconnect() {
+        state = nil
         desktopView?.setSessionConnected(false)
         overlays = nil
         desktopView = nil
@@ -86,17 +89,34 @@ final class SessionWindowController: NSWindowController, NSWindowDelegate {
     func windowDidFailToEnterFullScreen(_ window: NSWindow) { display.didTransition() }
     func windowDidFailToExitFullScreen(_ window: NSWindow) { display.didTransition() }
 
-    @objc private func reconnect(_ sender: Any?) { startSession() }
-    @objc private func closeSession(_ sender: Any?) { window?.performClose(sender) }
+    // MARK: Session menu
+
+    @objc func disconnectSession(_ sender: Any?) { session?.disconnect() }
+    @objc func reconnectSession(_ sender: Any?) { startSession() }
+    @objc func sendCtrlAltDelete(_ sender: Any?) { desktopView?.sendCtrlAltDelete() }
+
+    @objc func releaseKeyboardCapture(_ sender: Any?) {
+        guard let window, window.firstResponder === desktopView else { return }
+        window.makeFirstResponder(nil)
+    }
+
+    func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        switch menuItem.action {
+        case #selector(disconnectSession(_:)): session != nil
+        case #selector(reconnectSession(_:)): session == nil && !closed
+        case #selector(sendCtrlAltDelete(_:)): state == .connected
+        case #selector(releaseKeyboardCapture(_:)): state == .connected && window?.firstResponder === desktopView
+        default: true
+        }
+    }
 
     private func startSession() {
         guard !closed, let window else { return }
         disconnect()
-        let connectingView = Self.connectingView(name: connection.name)
-        window.contentView = connectingView
+        let connectingView = showStatus(.connecting)
         do {
             guard let port = UInt16(exactly: connection.port), port > 0 else {
-                showDisconnected("The connection port must be between 1 and 65535.")
+                showStatus(.disconnected(.protocolError("The connection port must be between 1 and 65535.")))
                 return
             }
             let currentCredentials: SessionCredentials
@@ -122,7 +142,9 @@ final class SessionWindowController: NSWindowController, NSWindowDelegate {
             let desktopView = RemoteDesktopView(renderer: renderer)
             desktopView.input = session
             self.desktopView = desktopView
-            overlays = SessionOverlays(desktop: desktopView) { [weak session] in session?.disconnect() }
+            overlays = SessionOverlays(
+                desktop: desktopView, computerName: connection.name, address: connection.displayAddress
+            ) { [weak session] in session?.disconnect() }
             self.session = session
             clipboardSync = ClipboardSync(session: session)
             desktopView.onFocus = { [weak self] in self?.clipboardSync?.focusGained() }
@@ -137,7 +159,7 @@ final class SessionWindowController: NSWindowController, NSWindowDelegate {
             session.connect()
         } catch {
             sessionLog.error("Session setup failed: \(error.localizedDescription, privacy: .public)")
-            showDisconnected(error.localizedDescription)
+            showStatus(.disconnected(.protocolError(error.localizedDescription)))
         }
     }
 
@@ -146,9 +168,14 @@ final class SessionWindowController: NSWindowController, NSWindowDelegate {
         switch event {
         case .stateChanged(let state):
             sessionLog.info("State: \(String(describing: state), privacy: .public)")
+            self.state = state
             switch state {
-            case .connecting, .awaitingCredentials, .awaitingTrust:
-                break
+            case .connecting:
+                if window.contentView !== desktopView { showStatus(.connecting) }
+            case .awaitingCredentials:
+                if window.contentView !== desktopView { showStatus(.awaitingCredentials) }
+            case .awaitingTrust:
+                if window.contentView !== desktopView { showStatus(.awaitingTrust) }
             case .connected:
                 clipboardSync?.sessionDidConnect()
                 dismissChallenge()
@@ -168,7 +195,7 @@ final class SessionWindowController: NSWindowController, NSWindowDelegate {
                 dismissChallenge()
                 session = nil
                 display.disconnect()
-                showDisconnected(reason?.description ?? "The session ended.")
+                showStatus(.disconnected(reason))
             }
         case .remoteClipboardText(let text):
             clipboardSync?.receiveRemoteText(text)
@@ -210,7 +237,8 @@ final class SessionWindowController: NSWindowController, NSWindowDelegate {
         dismissChallenge()
         cancelChallenge = { challenge.responder.respond(nil) }
         let form = SessionCredentialsView(
-            challenge: challenge, password: credentials?.password ?? "",
+            challenge: challenge, computerName: connection.name, address: connection.displayAddress,
+            password: credentials?.password ?? "",
             onCancel: { [weak self] in self?.dismissChallenge() },
             onConnect: { [weak self] answer, remember in
                 guard let self else { challenge.responder.respond(nil); return }
@@ -241,26 +269,67 @@ final class SessionWindowController: NSWindowController, NSWindowDelegate {
         guard let window else { challenge.responder.respond(.reject); return }
         dismissChallenge()
         cancelChallenge = { challenge.responder.respond(.reject) }
+        let address = challenge.port == UInt16(Connection.defaultPort)
+            ? challenge.host : "\(challenge.host):\(challenge.port)"
         let alert = NSAlert()
-        var warning = ""
+        var details = [("Subject", challenge.subject), ("Issuer", challenge.issuer), ("SHA-256", challenge.fingerprint)]
+        let connectButton: NSApplication.ModalResponse
         if case .changed(let oldFingerprint) = challenge.status {
-            alert.alertStyle = .warning
-            alert.messageText = "The server certificate has changed"
-            warning = "A changed certificate may mean someone is impersonating this server. Only trust it if you expected this change.\n\nPrevious SHA-256 fingerprint:\n\(oldFingerprint)\n\n"
+            alert.alertStyle = .critical
+            alert.messageText = "The certificate for “\(address)” has changed."
+            alert.informativeText = "Someone might be impersonating this computer. Connect only if you know its certificate was replaced."
+            details.append(("Previous SHA-256", oldFingerprint))
+            alert.addButton(withTitle: "Cancel")
+            alert.addButton(withTitle: "Connect Anyway").hasDestructiveAction = true
+            connectButton = .alertSecondButtonReturn
         } else {
-            alert.messageText = "Trust this server certificate?"
+            alert.alertStyle = .warning
+            alert.messageText = "Remora can’t verify the identity of “\(address)”."
+            alert.informativeText = "Connect only if this certificate belongs to the computer you expect. Remora remembers it after you connect."
+            alert.addButton(withTitle: "Connect")
+            alert.addButton(withTitle: "Cancel").keyEquivalent = "\u{1b}"
+            connectButton = .alertFirstButtonReturn
         }
-        alert.informativeText = "\(warning)Host: \(challenge.host):\(challenge.port)\n\nSubject: \(challenge.subject)\nIssuer: \(challenge.issuer)\n\nSHA-256 fingerprint:\n\(challenge.fingerprint)"
-        alert.addButton(withTitle: "Trust")
-        alert.addButton(withTitle: "Cancel").keyEquivalent = "\u{1b}"
+        alert.accessoryView = Self.certificateDetails(details)
         let certificateSheet = alert.window
         sheet = certificateSheet
         alert.beginSheetModal(for: window) { [weak self, weak certificateSheet] response in
-            challenge.responder.respond(response == .alertFirstButtonReturn ? .trust : .reject)
+            challenge.responder.respond(response == connectButton ? .trust : .reject)
             guard let self, sheet === certificateSheet else { return }
             cancelChallenge = nil
             sheet = nil
         }
+    }
+
+    /// Labeled, selectable certificate fields for the trust alert.
+    private static func certificateDetails(_ rows: [(String, String)]) -> NSView {
+        let width: CGFloat = 300
+        let stack = NSStackView()
+        stack.orientation = .vertical
+        stack.alignment = .leading
+        stack.spacing = 8
+        for (label, value) in rows {
+            let title = NSTextField(labelWithString: label)
+            title.font = .systemFont(ofSize: NSFont.smallSystemFontSize, weight: .semibold)
+            title.textColor = .secondaryLabelColor
+            let field = NSTextField(wrappingLabelWithString: value)
+            field.font = label.hasSuffix("SHA-256")
+                ? .monospacedSystemFont(ofSize: NSFont.smallSystemFontSize, weight: .regular)
+                : .systemFont(ofSize: NSFont.smallSystemFontSize)
+            field.lineBreakMode = .byCharWrapping
+            field.isSelectable = true
+            field.preferredMaxLayoutWidth = width
+            let group = NSStackView(views: [title, field])
+            group.orientation = .vertical
+            group.alignment = .leading
+            group.spacing = 2
+            stack.addArrangedSubview(group)
+        }
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        stack.widthAnchor.constraint(equalToConstant: width).isActive = true
+        stack.layoutSubtreeIfNeeded()
+        stack.frame.size = stack.fittingSize
+        return stack
     }
 
     private func dismissChallenge() {
@@ -275,39 +344,23 @@ final class SessionWindowController: NSWindowController, NSWindowDelegate {
         }
     }
 
-    private func showDisconnected(_ message: String) {
-        let label = NSTextField(wrappingLabelWithString: message)
-        label.alignment = .center
-        let reconnect = NSButton(title: "Reconnect", target: self, action: #selector(reconnect(_:)))
-        reconnect.keyEquivalent = "\r"
-        let close = NSButton(title: "Close", target: self, action: #selector(closeSession(_:)))
-        let buttons = NSStackView(views: [close, reconnect])
-        buttons.spacing = 8
-        window?.contentView = Self.centered([label, buttons])
-    }
-
-    private static func connectingView(name: String) -> NSView {
-        let progress = NSProgressIndicator()
-        progress.style = .spinning
-        progress.startAnimation(nil)
-        let label = NSTextField(labelWithString: "Connecting to \(name)...")
-        label.textColor = .secondaryLabelColor
-        return centered([progress, label])
-    }
-
-    private static func centered(_ views: [NSView]) -> NSView {
-        let stack = NSStackView(views: views)
-        stack.orientation = .vertical
-        stack.spacing = 12
-        stack.translatesAutoresizingMaskIntoConstraints = false
-        let view = NSView()
-        view.addSubview(stack)
-        NSLayoutConstraint.activate([
-            stack.centerXAnchor.constraint(equalTo: view.centerXAnchor),
-            stack.centerYAnchor.constraint(equalTo: view.centerYAnchor),
-            stack.widthAnchor.constraint(lessThanOrEqualToConstant: 520),
-            stack.leadingAnchor.constraint(greaterThanOrEqualTo: view.leadingAnchor, constant: 20),
-        ])
+    /// Replaces the window content with a status view, removing any desktop.
+    @discardableResult
+    private func showStatus(_ status: SessionStatus) -> NSView {
+        let content = SessionStatusView(
+            status: status, computerName: connection.name, address: connection.displayAddress,
+            onCancel: { [weak self] in self?.session?.disconnect() },
+            onReconnect: { [weak self] in self?.startSession() },
+            onClose: { [weak self] in self?.window?.performClose(nil) }
+        )
+        if let statusView, window?.contentView === statusView {
+            statusView.rootView = content
+            return statusView
+        }
+        let view = NSHostingView(rootView: content)
+        view.sizingOptions = []
+        window?.contentView = view
+        statusView = view
         return view
     }
 }

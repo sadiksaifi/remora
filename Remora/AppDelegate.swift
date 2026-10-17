@@ -4,6 +4,7 @@ import RemoraCore
 @main @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var connectionsWindowController: ConnectionsWindowController?
+    private var settingsWindowController: SettingsWindowController?
     private let sessionWindows = SessionWindows()
     #if DEBUG
     private var rendererDemo: RendererDemo?
@@ -73,16 +74,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func showSettings(_ sender: Any?) {
-        let alert = NSAlert()
-        alert.messageText = "Settings"
-        alert.informativeText = "Remora has no settings yet."
-        alert.runModal()
+        let controller = settingsWindowController ?? SettingsWindowController()
+        settingsWindowController = controller
+        controller.showWindow(sender)
+        controller.window?.makeKeyAndOrderFront(sender)
     }
 
     @objc private func showHelp(_ sender: Any?) {
         let alert = NSAlert()
         alert.messageText = "Remora Help"
-        alert.informativeText = "Remora is a personal remote desktop client."
+        alert.informativeText = """
+            Double-click a connection to open it in its own window.
+
+            In a session, Command acts as the Windows or Super key, Control as Control, and Option as Alt.
+
+            Control-Option-Command-Escape releases the keyboard. Click the remote desktop to capture it again.
+
+            Control-Command-F enters or exits full screen. Command-Q quits Remora.
+            """
         alert.runModal()
     }
 
@@ -117,7 +126,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         let fileMenu = addMenu("File", to: mainMenu)
         fileMenu.addItem(withTitle: "New Connection", action: #selector(newConnection(_:)), keyEquivalent: "n").target = self
+        fileMenu.addItem(.separator())
         fileMenu.addItem(withTitle: "Connect", action: #selector(ConnectionsViewController.connect(_:)), keyEquivalent: "o")
+        fileMenu.addItem(withTitle: "Edit Connection…", action: #selector(ConnectionsViewController.editConnection(_:)), keyEquivalent: "")
+        fileMenu.addItem(withTitle: "Duplicate", action: #selector(ConnectionsViewController.duplicateConnection(_:)), keyEquivalent: "d")
         fileMenu.addItem(.separator())
         fileMenu.addItem(withTitle: "Close Window", action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w")
 
@@ -142,6 +154,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let viewMenu = addMenu("View", to: mainMenu)
         let fullScreen = viewMenu.addItem(withTitle: "Enter Full Screen", action: #selector(NSWindow.toggleFullScreen(_:)), keyEquivalent: "f")
         fullScreen.keyEquivalentModifierMask = [.command, .control]
+
+        // While a connected desktop has the keyboard, only Cmd-Q, Ctrl-Cmd-F, and
+        // Ctrl-Option-Cmd-Escape stay local. Other shortcuts here act once it is released.
+        let sessionMenu = addMenu("Session", to: mainMenu)
+        sessionMenu.addItem(withTitle: "Disconnect", action: #selector(SessionWindowController.disconnectSession(_:)), keyEquivalent: "")
+        sessionMenu.addItem(withTitle: "Reconnect", action: #selector(SessionWindowController.reconnectSession(_:)), keyEquivalent: "r")
+        sessionMenu.addItem(.separator())
+        sessionMenu.addItem(withTitle: "Send Ctrl-Alt-Delete", action: #selector(SessionWindowController.sendCtrlAltDelete(_:)), keyEquivalent: "")
+        sessionMenu.addItem(.separator())
+        let release = sessionMenu.addItem(
+            withTitle: "Release Keyboard Capture",
+            action: #selector(SessionWindowController.releaseKeyboardCapture(_:)),
+            keyEquivalent: "\u{1b}"
+        )
+        release.keyEquivalentModifierMask = [.control, .option, .command]
 
         let windowMenu = addMenu("Window", to: mainMenu)
         windowMenu.addItem(withTitle: "Minimize", action: #selector(NSWindow.performMiniaturize(_:)), keyEquivalent: "m")

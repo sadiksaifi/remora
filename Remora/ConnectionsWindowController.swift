@@ -41,6 +41,7 @@ final class ConnectionsWindowController: NSWindowController, NSWindowDelegate, N
         toolbar.delegate = self
         toolbar.displayMode = .iconOnly
         toolbar.allowsUserCustomization = false
+        toolbar.allowsDisplayModeCustomization = false
         window.toolbar = toolbar
         window.toolbarStyle = .unified
         window.initialFirstResponder = connectionsViewController.initialFirstResponder

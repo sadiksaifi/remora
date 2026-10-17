@@ -12,6 +12,7 @@ final class RemoteDesktopView: NSView {
         }
     }
     func setSessionConnected(_ connected: Bool) { desktopInput.setConnected(connected) }
+    func sendCtrlAltDelete() { desktopInput.sendCtrlAltDelete() }
 
     var onFocus: (() -> Void)?
     private lazy var desktopInput = RemoteDesktopInput(view: self)

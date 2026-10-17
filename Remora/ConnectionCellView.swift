@@ -1,7 +1,7 @@
 import AppKit
 import RemoraCore
 
-/// One saved connection: icon, bold name, secondary address, and a trailing last-connected date
+/// One saved connection: icon, name, a secondary subtitle, and a trailing last-connected date
 /// that gives way to a Connect button while the pointer is over the row.
 @MainActor
 final class ConnectionCellView: NSTableCellView {
@@ -26,7 +26,7 @@ final class ConnectionCellView: NSTableCellView {
         iconView.setContentHuggingPriority(.required, for: .horizontal)
         imageView = iconView
 
-        nameField.font = .boldSystemFont(ofSize: NSFont.systemFontSize)
+        nameField.font = .systemFont(ofSize: NSFont.systemFontSize, weight: .semibold)
         nameField.lineBreakMode = .byTruncatingTail
         textField = nameField
 
@@ -76,8 +76,9 @@ final class ConnectionCellView: NSTableCellView {
     }
 
     func configure(with connection: Connection, hovered: Bool) {
+        let subtitle = Self.subtitle(for: connection)
         nameField.stringValue = connection.name
-        addressField.stringValue = connection.displayAddress
+        addressField.stringValue = subtitle
         dateField.stringValue = connection.lastConnected.map {
             $0.formatted(Date.RelativeFormatStyle(
                 allowedFields: [.year, .month, .week, .day],
@@ -87,7 +88,21 @@ final class ConnectionCellView: NSTableCellView {
             ))
         } ?? ""
         isHovered = hovered
-        setAccessibilityLabel([connection.name, connection.displayAddress].joined(separator: ", "))
+        setAccessibilityLabel([connection.name, subtitle].joined(separator: ", "))
+    }
+
+    /// The account and address, leaving out the address when the name already shows it.
+    static func subtitle(for connection: Connection) -> String {
+        let name = connection.name.trimmingCharacters(in: .whitespacesAndNewlines)
+        let showsAddress = name.caseInsensitiveCompare(connection.host) != .orderedSame
+            && name.caseInsensitiveCompare(connection.displayAddress) != .orderedSame
+        let address = showsAddress ? connection.displayAddress : (connection.port == Connection.defaultPort ? "" : "Port \(connection.port)")
+        switch (connection.username.isEmpty, address.isEmpty) {
+        case (true, true): return "Remote Desktop"
+        case (true, false): return address
+        case (false, true): return connection.username
+        case (false, false): return showsAddress ? "\(connection.username)@\(address)" : "\(connection.username) · \(address)"
+        }
     }
 
     private func updateTrailingViews() {
