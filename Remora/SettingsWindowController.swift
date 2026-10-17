@@ -30,7 +30,7 @@ private struct SettingsView: View {
             Section("Keyboard") {
                 Toggle(isOn: $captureShortcuts) {
                     Text("Send system shortcuts to the remote computer")
-                    Text("While a session tab is active, shortcuts like Command-Tab and Command-Space go to the remote computer. Command-Q, Control-Command-F, and the Control-Option-Command tab shortcuts stay on this Mac.")
+                    Text("While a session tab is active, shortcuts like Command-Tab and Command-Space go to the remote computer. Command-Q, Control-Command-F, and the Control-Option-Command tab and capture shortcuts stay on this Mac.")
                 }
                 LabeledContent {
                     Button("Open System Settings") { SystemShortcutCapture.openAccessibilitySettings() }

@@ -1,11 +1,13 @@
 import AppKit
 import RemoraCore
+import os
 
 @main @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var mainWindowController: MainWindowController?
     private var settingsWindowController: SettingsWindowController?
     private let sessionTabs = SessionTabs()
+    private var terminationPending = false
     #if DEBUG
     private var rendererDemo: RendererDemo?
     private var shortcutCaptureDemo: ShortcutCaptureDemo?
@@ -51,8 +53,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        guard !terminationPending else { return .terminateLater }
+        terminationPending = true
         sessionTabs.disconnectAll()
-        return .terminateNow
+        Task { @MainActor in
+            await sessionTabs.finishCaptures()
+            if terminationPending {
+                terminationPending = false
+                sender.reply(toApplicationShouldTerminate: true)
+            }
+        }
+        // Writers have their own eight-second cancellation deadline. This is the app-level bound.
+        Task { @MainActor in
+            try? await Task.sleep(for: .seconds(10))
+            if terminationPending {
+                let log = Logger(subsystem: "dev.sadiksaifi.Remora", category: "Capture")
+                for url in sessionTabs.unfinishedCaptureURLs {
+                    log.error("Quit timed out finishing \(url.path, privacy: .public). The reserved file and a hidden .Remora-*.partial.mov may remain in its folder.")
+                }
+                terminationPending = false
+                sender.reply(toApplicationShouldTerminate: true)
+            }
+        }
+        return .terminateLater
     }
 
     func applicationWillTerminate(_ notification: Notification) {
@@ -95,6 +118,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             Control-Option-Command-1 through 9 show tab 1 through 9.
             Control-Option-Command-H shows the connections list.
             Control-Option-Command-W closes the tab and disconnects it.
+            Control-Option-Command-S saves a screenshot of the remote desktop. Add Shift to copy it instead.
+            Control-Option-Command-R starts or stops recording the remote desktop.
             Control-Option-Command-Escape releases the keyboard. Click the remote desktop to capture it again.
             Control-Command-F enters or exits full screen. Command-Q quits Remora.
             """
@@ -171,6 +196,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         sessionMenu.addItem(withTitle: "Reconnect", action: #selector(MainWindowController.reconnectSession(_:)), keyEquivalent: "r")
         sessionMenu.addItem(.separator())
         sessionMenu.addItem(withTitle: "Send Ctrl-Alt-Delete", action: #selector(MainWindowController.sendCtrlAltDelete(_:)), keyEquivalent: "")
+        sessionMenu.addItem(.separator())
+        for item in MainWindowController.makeCaptureItems() { sessionMenu.addItem(item) }
         sessionMenu.addItem(.separator())
         sessionMenu.addItem(
             withTitle: "Release Keyboard Capture",

@@ -152,7 +152,7 @@ final class RemoteDesktopInput: NSObject {
     func performKeyEquivalent(_ event: NSEvent) -> Bool {
         guard connected, !shortcutCapture.isActive, input != nil, let view, view.window?.firstResponder === view,
               event.modifierFlags.contains(.command) else { return false }
-        // Cmd-Q, Ctrl-Cmd-F, and the Ctrl-Option-Cmd tab, Connections, and release shortcuts go to the menus.
+        // Cmd-Q, Ctrl-Cmd-F, and the Ctrl-Option-Cmd tab, Connections, capture, and release shortcuts go to the menus.
         if SystemShortcutCapture.staysLocal(keyCode: event.keyCode, flags: event.modifierFlags) { return false }
         key(event, down: true)
         return true

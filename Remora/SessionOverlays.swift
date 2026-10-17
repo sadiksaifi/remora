@@ -7,6 +7,7 @@ final class SessionOverlays: NSObject {
     private weak var desktop: RemoteDesktopView?
     private var reconnectingView: NSHostingView<SessionStatusView>?
     private var permissionView: NSView?
+    private var confirmationView: NSView?
     private var offeredPermission = false
     private let computerName: String
     private let address: String
@@ -69,6 +70,38 @@ final class SessionOverlays: NSObject {
         reconnectingView = overlay
     }
 
+    /// Shows a short note at the bottom of the desktop and plays the system screen capture sound, like
+    /// macOS screenshots do. The note is not part of any capture and ignores the pointer.
+    func confirm(_ message: String) {
+        confirmationView?.removeFromSuperview()
+        guard let desktop else { return }
+        let note = PassthroughHostingView(rootView: CaptureConfirmation(message: message))
+        note.sizingOptions = .intrinsicContentSize
+        note.translatesAutoresizingMaskIntoConstraints = false
+        desktop.addSubview(note)
+        NSLayoutConstraint.activate([
+            note.bottomAnchor.constraint(equalTo: desktop.bottomAnchor, constant: -16),
+            note.centerXAnchor.constraint(equalTo: desktop.centerXAnchor),
+        ])
+        confirmationView = note
+        NSAccessibility.post(element: note, notification: .announcementRequested,
+                             userInfo: [.announcement: message, .priority: NSAccessibilityPriorityLevel.medium.rawValue])
+        if UserDefaults.standard.object(forKey: "com.apple.sound.uiaudio.enabled") as? Bool ?? true {
+            Self.captureSound?.play()
+        }
+        Task { @MainActor [weak self, weak note] in
+            try? await Task.sleep(for: .seconds(1.5))
+            await NSAnimationContext.runAnimationGroup { $0.duration = 0.3; note?.animator().alphaValue = 0 }
+            note?.removeFromSuperview()
+            if let self, confirmationView === note { confirmationView = nil }
+        }
+    }
+
+    private static let captureSound = NSSound(
+        contentsOfFile: "/System/Library/Components/CoreAudio.component/Contents/SharedSupport/SystemSounds/system/Screen Capture.aif",
+        byReference: true
+    )
+
     private func openSettings() {
         SystemShortcutCapture.openAccessibilitySettings()
     }
@@ -87,4 +120,9 @@ final class SessionOverlays: NSObject {
     @objc private func appBecameActive() {
         if SystemShortcutCapture.isTrusted { removePermissionBanner() }
     }
+}
+
+/// Lets clicks reach the desktop under a note.
+private final class PassthroughHostingView<Content: View>: NSHostingView<Content> {
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
 }

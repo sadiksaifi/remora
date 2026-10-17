@@ -4,13 +4,15 @@ import SwiftUI
 /// The tabs inside the toolbar's glass capsule. The toolbar draws the capsule around this view and
 /// centers it; the window controller limits its width to `idealWidth(forTabCount:)`.
 /// The shown tab sits on a raised pill. Tabs share the width equally and scroll only when
-/// they would be narrower than `minimumTabWidth`.
+/// they would be narrower than `minimumTabWidth`. The shown tab keeps at least `selectedMinimumTabWidth`,
+/// enough for its title and controls.
 struct SessionTabStrip: View {
     static let idealTabWidth: CGFloat = 220
     static let minimumTabWidth: CGFloat = 76
+    static let selectedMinimumTabWidth: CGFloat = 132
     static let height: CGFloat = 30
     private static let inset: CGFloat = 3
-    private nonisolated static let coordinateSpace = "SessionTabStrip"
+    fileprivate nonisolated static let coordinateSpace = "SessionTabStrip"
 
     static func idealWidth(forTabCount count: Int) -> CGFloat {
         CGFloat(max(1, count)) * idealTabWidth + 2 * inset
@@ -20,28 +22,36 @@ struct SessionTabStrip: View {
     let layout: SessionTabStripLayout
     var onSelect: (UUID) -> Void = { _ in }
     var onClose: (UUID) -> Void = { _ in }
+    var onStopRecording: (UUID) -> Void = { _ in }
+    /// Passes the actions button's frame in the hosting view's flipped coordinates.
+    var onShowActions: (UUID, CGRect) -> Void = { _, _ in }
+    var onSetKeyboardCapture: (UUID, Bool) -> Void = { _, _ in }
     @State private var hovered: UUID?
 
     var body: some View {
         GeometryReader { proxy in
-            let count = CGFloat(max(1, tabs.tabs.count))
-            let width = max(Self.minimumTabWidth, proxy.size.width / count)
+            let widths = tabWidths(in: proxy.size.width)
             ScrollViewReader { scroller in
                 ScrollView(.horizontal) {
                     HStack(spacing: 0) {
                         ForEach(Array(tabs.tabs.enumerated()), id: \.element.id) { index, tab in
+                            let isSelected = tab.id == tabs.selection
                             SessionTabView(
                                 tab: tab,
-                                isSelected: tab.id == tabs.selection,
+                                capture: tabs.session(for: tab.id)?.capture,
+                                isSelected: isSelected,
                                 isHovered: tab.id == hovered,
                                 showsDivider: index > 0 && !isEmphasized(index) && !isEmphasized(index - 1),
                                 onSelect: { onSelect(tab.id) },
                                 onClose: { onClose(tab.id) },
+                                onStopRecording: { onStopRecording(tab.id) },
+                                onShowActions: { onShowActions(tab.id, $0) },
+                                onSetKeyboardCapture: { onSetKeyboardCapture(tab.id, $0) },
                                 onHover: { inside in
                                     if inside { hovered = tab.id } else if hovered == tab.id { hovered = nil }
                                 }
                             )
-                            .frame(width: width, height: proxy.size.height)
+                            .frame(width: isSelected ? widths.selected : widths.other, height: proxy.size.height)
                             .id(tab.id)
                             .onGeometryChange(for: CGRect.self) { $0.frame(in: .named(Self.coordinateSpace)) } action: {
                                 layout.frames[tab.id] = $0
@@ -51,7 +61,7 @@ struct SessionTabStrip: View {
                     }
                 }
                 .scrollIndicators(.never)
-                .scrollDisabled(width * count <= proxy.size.width + 0.5)
+                .scrollDisabled(widths.total <= proxy.size.width + 0.5)
                 .onChange(of: tabs.selection) { _, selection in
                     guard let selection else { return }
                     withAnimation { scroller.scrollTo(selection) }
@@ -64,6 +74,18 @@ struct SessionTabStrip: View {
         .accessibilityLabel("Tabs")
     }
 
+    /// Equal widths, except that the shown tab takes up to `selectedMinimumTabWidth` from the others.
+    private func tabWidths(in available: CGFloat) -> (selected: CGFloat, other: CGFloat, total: CGFloat) {
+        let count = tabs.tabs.count
+        let equal = max(Self.minimumTabWidth, available / CGFloat(max(1, count)))
+        guard tabs.tabs.contains(where: { $0.id == tabs.selection }), equal < Self.selectedMinimumTabWidth else {
+            return (equal, equal, equal * CGFloat(count))
+        }
+        let selected = min(Self.selectedMinimumTabWidth, available)
+        let other = count > 1 ? max(Self.minimumTabWidth, (available - selected) / CGFloat(count - 1)) : 0
+        return (selected, other, selected + other * CGFloat(count - 1))
+    }
+
     /// The shown and hovered tabs hide the dividers on both sides.
     private func isEmphasized(_ index: Int) -> Bool {
         let id = tabs.tabs[index].id
@@ -71,18 +93,30 @@ struct SessionTabStrip: View {
     }
 }
 
+/// Like Safari's compact tabs: the shown tab and the tab under the pointer show a close button on the
+/// left and a menu button on the right. The controls sit in the title's padding, so the title stays centered.
 private struct SessionTabView: View {
     let tab: SessionTabs.Tab
+    /// Read directly, so a hidden tab shows its recording too.
+    let capture: SessionCapture?
     let isSelected: Bool
     let isHovered: Bool
     let showsDivider: Bool
     let onSelect: () -> Void
     let onClose: () -> Void
+    let onStopRecording: () -> Void
+    let onShowActions: (CGRect) -> Void
+    let onSetKeyboardCapture: (Bool) -> Void
     let onHover: (Bool) -> Void
+    /// Hovering the button reevaluates the body, which refreshes the elapsed time in its help.
+    @State private var recordHovered = false
+    @State private var actionsFrame = CGRect.zero
 
     var body: some View {
         HStack(spacing: 6) {
-            if let dotColor {
+            if let recording {
+                recordButton(recording)
+            } else if let dotColor {
                 Circle()
                     .fill(Color(nsColor: dotColor))
                     .frame(width: 7, height: 7)
@@ -105,18 +139,18 @@ private struct SessionTabView: View {
                 Capsule().fill(.quaternary)
             }
         }
-        .overlay(alignment: .trailing) {
-            if isSelected || isHovered {
+        .overlay(alignment: .leading) {
+            if showsControls {
                 Button(action: onClose) {
-                    Image(systemName: "xmark")
-                        .font(.system(size: 9, weight: .semibold))
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.system(size: 13))
                         .frame(width: 16, height: 16)
                         .contentShape(Circle())
                 }
                 .buttonStyle(.plain)
                 .foregroundStyle(.secondary)
                 .help("Close Tab")
-                .padding(.trailing, 7)
+                .padding(.leading, 6)
             }
         }
         .overlay(alignment: .leading) {
@@ -128,14 +162,86 @@ private struct SessionTabView: View {
         }
         .contentShape(Capsule())
         .onTapGesture(perform: onSelect)
-        .onHover(perform: onHover)
         .help(tab.title)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(tab.title)
-        .accessibilityValue(tab.needsAttention ? "Needs attention" : tab.state.statusTitle)
+        .accessibilityValue(accessibilityValue)
         .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
+        .accessibilitySortPriority(1)
         .accessibilityAction(.default, onSelect)
         .accessibilityAction(named: "Close Tab", onClose)
+        .accessibilityActions {
+            if recording == .recording {
+                Button("Stop Recording", action: onStopRecording)
+            }
+            if isSelected, tab.state == .connected {
+                let captured = tab.isKeyboardCaptured
+                Button(captured ? "Release Keyboard Capture" : "Capture Keyboard") { onSetKeyboardCapture(!captured) }
+            }
+        }
+        // Outside the tab's element, so VoiceOver reaches the button on its own, after the tab.
+        .overlay(alignment: .trailing) {
+            if showsControls {
+                Button { onShowActions(actionsFrame) } label: {
+                    Image(systemName: "slider.horizontal.3")
+                        .font(.system(size: 13))
+                        .frame(width: 16, height: 16)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
+                .help("Tab Actions")
+                .accessibilityLabel("Tab Actions")
+                .accessibilityIdentifier("tabActions")
+                .onGeometryChange(for: CGRect.self) { $0.frame(in: .named(SessionTabStrip.coordinateSpace)) } action: {
+                    actionsFrame = $0
+                }
+                .padding(.trailing, 6)
+            }
+        }
+        .onHover(perform: onHover)
+    }
+
+    private var showsControls: Bool { isSelected || isHovered }
+
+    /// Replaces the status dot: recording needs a connected session, so the dot would always be green.
+    private func recordButton(_ recording: Recording) -> some View {
+        Button(action: onStopRecording) {
+            Image(systemName: "record.circle")
+                .font(.system(size: 12))
+                .foregroundStyle(.red)
+                .contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .disabled(recording == .finishing)
+        .opacity(recording == .finishing ? 0.4 : 1)
+        .help(recordingHelp)
+        .onHover { recordHovered = $0 }
+    }
+
+    private enum Recording { case recording, finishing }
+
+    private var recording: Recording? {
+        switch capture?.recordingState {
+        case .recording: .recording
+        case .finishing: .finishing
+        default: nil
+        }
+    }
+
+    private var recordingHelp: String {
+        _ = recordHovered
+        guard let elapsed = capture?.recordingState.elapsed() else { return "Finishing Recording" }
+        return "Recording for \(Duration.seconds(elapsed).formatted(.time(pattern: .minuteSecond))). Click to stop."
+    }
+
+    private var accessibilityValue: String {
+        let status = tab.needsAttention ? "Needs attention" : tab.state.statusTitle
+        switch recording {
+        case .recording: return "\(status), recording"
+        case .finishing: return "\(status), finishing recording"
+        case nil: return status
+        }
     }
 
     /// The shown tab shows its session status. A hidden tab shows an orange dot only while a request waits.

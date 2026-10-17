@@ -25,6 +25,8 @@ final class SessionViewController: NSViewController {
     private var cancelChallenge: (() -> Void)?
     /// Presents the waiting credentials or certificate sheet once the tab shows.
     private var pendingSheet: ((NSWindow) -> Void)?
+    /// A capture failure waits separately, so it never replaces a credentials or certificate request.
+    private var pendingAlert: NSAlert?
     private var credentials: SessionCredentials?
     /// The state the tab shows. Setup failures and teardown count as disconnected.
     private(set) var state: SessionState = .connecting {
@@ -38,6 +40,7 @@ final class SessionViewController: NSViewController {
     private var statusView: NSHostingView<SessionStatusView>?
     private var closed = false
     private let display: SessionDisplay
+    let capture = SessionCapture(media: AppleCaptureMedia(), destination: ScreenshotDestination())
 
     init(
         connection: Connection, credentialStore: CredentialStore,
@@ -54,6 +57,10 @@ final class SessionViewController: NSViewController {
         self.onClose = onClose
         display = SessionDisplay(view: container)
         super.init(nibName: nil, bundle: nil)
+        capture.onRecordingActivityChange = { [weak self] active in
+            self?.display.setRecording(active)
+            if !active { self?.reportRecordingResult() }
+        }
         container.onResize = { [weak self] in self?.display.requestResize() }
         container.onVisibilityChange = { [weak self] in self?.display.visibilityChanged() }
     }
@@ -98,6 +105,8 @@ final class SessionViewController: NSViewController {
     }
 
     func disconnect() {
+        finishCapture()
+        capture.setSource(nil)
         state = .disconnected(nil)
         desktopView?.setSessionConnected(false)
         overlays = nil
@@ -139,7 +148,81 @@ final class SessionViewController: NSViewController {
     var isConnected: Bool { state == .connected }
     var hasKeyboard: Bool { state == .connected && view.window?.firstResponder === desktopView }
 
-    func disconnectSession() { session?.disconnect() }
+    func disconnectSession() {
+        finishCapture()
+        session?.disconnect()
+    }
+
+    private func finishCapture() {
+        let capture = capture
+        Task { await capture.stopRecording() }
+    }
+
+    /// Every stop path, including an encoder failure, ends here. Stop callers share one finish result.
+    private func reportRecordingResult() {
+        let capture = capture
+        Task { [weak self] in
+            guard case .failure(let failure) = await capture.stopRecording() else { return }
+            sessionLog.error("Capture: \(failure.localizedDescription, privacy: .public)")
+            self?.presentCaptureFailure(failure)
+        }
+    }
+
+    /// Saves or copies a screenshot of the desktop, with a short confirmation or a failure sheet.
+    func captureScreenshot(copyToClipboard: Bool) {
+        Task {
+            do {
+                _ = try await takeScreenshot(copyToClipboard: copyToClipboard)
+                overlays?.confirm(copyToClipboard ? "Screenshot Copied" : "Screenshot Saved")
+            } catch {
+                presentCaptureFailure(error as? CaptureFailure ?? .image(error.localizedDescription))
+            }
+        }
+    }
+
+    /// Starts a recording, or stops the one in progress. A finishing recording ignores the request.
+    func toggleRecording() {
+        switch capture.recordingState {
+        case .recording:
+            Task { await stopRecording() }
+        case .finishing:
+            break
+        case .idle, .failed:
+            do { try startRecording() } catch {
+                presentCaptureFailure(error as? CaptureFailure ?? .recording(error.localizedDescription))
+            }
+        }
+    }
+
+    /// The failure's description already names any capture file that cleanup could not remove.
+    /// A hidden tab marks itself and shows the sheet when it shows.
+    private func presentCaptureFailure(_ failure: CaptureFailure) {
+        guard !closed else { return }
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = "Capture Failed"
+        alert.informativeText = failure.localizedDescription
+        pendingAlert = alert
+        presentPendingSheet()
+    }
+
+    func takeScreenshot(copyToClipboard: Bool = false) async throws -> URL? {
+        if copyToClipboard {
+            let png = try await capture.screenshotPNG()
+            NSPasteboard.general.clearContents()
+            guard NSPasteboard.general.setData(png, forType: .png) else {
+                throw CaptureFailure.image("Could not write to the clipboard.")
+            }
+            return nil
+        }
+        return try await capture.saveScreenshot(connectionName: connection.name)
+    }
+
+    func startRecording() throws { try capture.startRecording(connectionName: connection.name) }
+
+    @discardableResult
+    func stopRecording() async -> Result<URL, CaptureFailure>? { await capture.stopRecording() }
+
     func sendCtrlAltDelete() { desktopView?.sendCtrlAltDelete() }
 
     func releaseKeyboardCapture() {
@@ -200,7 +283,8 @@ final class SessionViewController: NSViewController {
                 password: currentCredentials.password.isEmpty ? nil : currentCredentials.password,
                 desktopSize: desktopSize, scaleFactor: scaleFactor, allowsDynamicResize: allowsDynamicResize
             )
-            let session = RDPSession(configuration: configuration, frameSink: RendererFrameSink(renderer: renderer))
+            capture.setSource(renderer.desktop)
+            let session = RDPSession(configuration: configuration, frameSink: renderer)
             let desktopView = RemoteDesktopView(renderer: renderer)
             desktopView.input = session
             self.desktopView = desktopView
@@ -263,6 +347,8 @@ final class SessionViewController: NSViewController {
                 }
                 overlays?.reconnecting(attempt: attempt)
             case .disconnected(let reason):
+                finishCapture()
+                capture.setSource(nil)
                 desktopView.setSessionConnected(false)
                 overlays = nil
                 clipboardSync = nil
@@ -298,15 +384,22 @@ final class SessionViewController: NSViewController {
         presentPendingSheet()
     }
 
+    /// AppKit queues a second sheet until the first one ends.
     private func presentPendingSheet() {
-        guard let present = pendingSheet else { return }
+        guard pendingSheet != nil || pendingAlert != nil else { return }
         guard let window = view.window else {
             onAttentionChange(true)
             return
         }
-        pendingSheet = nil
         onAttentionChange(false)
-        present(window)
+        if let present = pendingSheet {
+            pendingSheet = nil
+            present(window)
+        }
+        if let alert = pendingAlert {
+            pendingAlert = nil
+            alert.beginSheetModal(for: window)
+        }
     }
 
     private func showCredentials(_ challenge: CredentialsChallenge, on window: NSWindow) {
@@ -410,7 +503,7 @@ final class SessionViewController: NSViewController {
         cancel?()
         if pendingSheet != nil {
             pendingSheet = nil
-            onAttentionChange(false)
+            onAttentionChange(pendingAlert != nil)
         }
         if let sheet {
             self.sheet = nil
@@ -488,16 +581,5 @@ private final class SessionContainerView: NSView {
     override func viewDidChangeBackingProperties() {
         super.viewDidChangeBackingProperties()
         onResize?()
-    }
-}
-
-private struct RendererFrameSink: FrameSink {
-    let renderer: FrameRenderer
-
-    func consume(_ frame: BorrowedFrame) {
-        renderer.ingest(pixels: frame.pixels, width: frame.width, height: frame.height,
-                        bytesPerRow: frame.stride, dirty: frame.dirtyRectangles.map {
-            DirtyRect(x: $0.x, y: $0.y, width: $0.width, height: $0.height)
-        })
     }
 }

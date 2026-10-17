@@ -12,6 +12,12 @@ final class SessionDisplay {
     private var connected = false
     private var transitioning = false
     private var visible = false
+    private var recording = false
+
+    func setRecording(_ active: Bool) {
+        recording = active
+        session?.setDisplayUpdatesEnabled(visible || recording)
+    }
 
     init(view: NSView) {
         self.view = view
@@ -21,7 +27,7 @@ final class SessionDisplay {
         self.session = session
         connected = false
         visible = isVisible
-        session.setDisplayUpdatesEnabled(visible)
+        session.setDisplayUpdatesEnabled(visible || recording)
     }
 
     /// Call when the view joins or leaves a window, or the window's occlusion changes.
@@ -29,7 +35,7 @@ final class SessionDisplay {
         let visible = isVisible
         guard visible != self.visible else { return }
         self.visible = visible
-        session?.setDisplayUpdatesEnabled(visible)
+        session?.setDisplayUpdatesEnabled(visible || recording)
     }
 
     private var isVisible: Bool {

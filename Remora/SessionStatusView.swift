@@ -197,3 +197,16 @@ struct ShortcutPermissionBanner: View {
         .glassEffect(.regular, in: .rect(cornerRadius: 22))
     }
 }
+
+/// The short confirmation after a screenshot.
+struct CaptureConfirmation: View {
+    let message: String
+
+    var body: some View {
+        Label(message, systemImage: "checkmark.circle.fill")
+            .font(.headline)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 10)
+            .glassEffect(.regular, in: .capsule)
+    }
+}
