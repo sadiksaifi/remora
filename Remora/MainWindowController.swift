@@ -348,7 +348,9 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
         alert.beginSheetModal(for: sender) { [weak self, weak sender] response in
             guard response == .alertFirstButtonReturn else { return }
             self?.sessionTabs.closeAll()
-            sender?.close()
+            // AppKit disables toolbar items during a sheet and enables them again after this handler
+            // returns. Closing the window first leaves the search item disabled for good.
+            Task { @MainActor in sender?.close() }
         }
         return false
     }
