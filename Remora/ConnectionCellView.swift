@@ -1,21 +1,24 @@
 import AppKit
 import RemoraCore
 
-/// One saved connection: icon, name, a secondary subtitle, and a trailing last-connected date
-/// that gives way to a Connect button while the pointer is over the row.
+/// One saved connection: icon, name, a secondary subtitle, and trailing detail text that gives way
+/// to an action button while the pointer is over the row. Without a session window the detail is the
+/// last-connected date and the action is Connect. With one, a status dot leads the subtitle, the
+/// detail names the session state, and the action is Disconnect until the session ends.
 @MainActor
 final class ConnectionCellView: NSTableCellView {
     static let identifier = NSUserInterfaceItemIdentifier("ConnectionCell")
 
-    let connectButton = NSButton(title: "Connect", target: nil, action: nil)
+    let actionButton = NSButton(title: "Connect", target: nil, action: nil)
     var isHovered = false {
         didSet { updateTrailingViews() }
     }
 
     private let iconView = NSImageView()
     private let nameField = NSTextField(labelWithString: "")
+    private let statusView = NSImageView()
     private let addressField = NSTextField(labelWithString: "")
-    private let dateField = NSTextField(labelWithString: "")
+    private let detailField = NSTextField(labelWithString: "")
 
     init() {
         super.init(frame: .zero)
@@ -39,23 +42,35 @@ final class ConnectionCellView: NSTableCellView {
             field.setContentHuggingPriority(.defaultLow, for: .horizontal)
         }
 
-        dateField.font = .preferredFont(forTextStyle: .subheadline)
-        dateField.textColor = .secondaryLabelColor
-        dateField.setContentCompressionResistancePriority(.required, for: .horizontal)
-        dateField.setContentHuggingPriority(.required, for: .horizontal)
+        statusView.image = NSImage(systemSymbolName: "circle.fill", accessibilityDescription: nil)
+        statusView.setContentHuggingPriority(.required, for: .horizontal)
+        statusView.setContentCompressionResistancePriority(.required, for: .horizontal)
+        statusView.setAccessibilityElement(false)
+        statusView.isHidden = true
 
-        connectButton.controlSize = .small
-        connectButton.setContentCompressionResistancePriority(.required, for: .horizontal)
-        connectButton.setContentHuggingPriority(.required, for: .horizontal)
-        connectButton.isHidden = true
+        detailField.font = .preferredFont(forTextStyle: .subheadline)
+        detailField.textColor = .secondaryLabelColor
+        detailField.setContentCompressionResistancePriority(.required, for: .horizontal)
+        detailField.setContentHuggingPriority(.required, for: .horizontal)
 
-        let labels = NSStackView(views: [nameField, addressField])
+        actionButton.controlSize = .small
+        actionButton.setContentCompressionResistancePriority(.required, for: .horizontal)
+        actionButton.setContentHuggingPriority(.required, for: .horizontal)
+        actionButton.isHidden = true
+
+        let subtitle = NSStackView(views: [statusView, addressField])
+        subtitle.orientation = .horizontal
+        subtitle.alignment = .centerY
+        subtitle.spacing = 4
+        subtitle.setContentHuggingPriority(.defaultLow, for: .horizontal)
+
+        let labels = NSStackView(views: [nameField, subtitle])
         labels.orientation = .vertical
         labels.alignment = .leading
         labels.spacing = 1
         labels.setContentHuggingPriority(.defaultLow, for: .horizontal)
 
-        let row = NSStackView(views: [iconView, labels, dateField, connectButton])
+        let row = NSStackView(views: [iconView, labels, detailField, actionButton])
         row.orientation = .horizontal
         row.alignment = .centerY
         row.distribution = .fill
@@ -75,20 +90,48 @@ final class ConnectionCellView: NSTableCellView {
         fatalError("Use init()")
     }
 
-    func configure(with connection: Connection, hovered: Bool) {
+    /// - Parameter session: The state of the connection's session window, or nil without one.
+    func configure(with connection: Connection, session: SessionState?, hovered: Bool) {
         let subtitle = Self.subtitle(for: connection)
         nameField.stringValue = connection.name
         addressField.stringValue = subtitle
-        dateField.stringValue = connection.lastConnected.map {
-            $0.formatted(Date.RelativeFormatStyle(
-                allowedFields: [.year, .month, .week, .day],
-                presentation: .named,
-                unitsStyle: .wide,
-                capitalizationContext: .beginningOfSentence
-            ))
-        } ?? ""
+        if let session {
+            let status = Self.status(for: session)
+            // A palette color keeps the dot green or orange on a selected row too.
+            statusView.symbolConfiguration = Self.statusSymbolConfiguration
+                .applying(NSImage.SymbolConfiguration(paletteColors: [status.color]))
+            statusView.isHidden = false
+            detailField.stringValue = status.title
+            actionButton.title = session.isLive ? "Disconnect" : "Connect"
+            setAccessibilityLabel([connection.name, status.title.lowercased(), subtitle].joined(separator: ", "))
+        } else {
+            statusView.isHidden = true
+            detailField.stringValue = connection.lastConnected.map {
+                $0.formatted(Date.RelativeFormatStyle(
+                    allowedFields: [.year, .month, .week, .day],
+                    presentation: .named,
+                    unitsStyle: .wide,
+                    capitalizationContext: .beginningOfSentence
+                ))
+            } ?? ""
+            actionButton.title = "Connect"
+            setAccessibilityLabel([connection.name, subtitle].joined(separator: ", "))
+        }
         isHovered = hovered
-        setAccessibilityLabel([connection.name, subtitle].joined(separator: ", "))
+    }
+
+    private static let statusSymbolConfiguration = NSImage.SymbolConfiguration(pointSize: 7, weight: .regular)
+
+    /// The dot color and detail text.
+    private static func status(for state: SessionState) -> (color: NSColor, title: String) {
+        switch state {
+        case .connecting: (.systemOrange, "Connecting…")
+        case .awaitingCredentials: (.systemOrange, "Waiting for Credentials")
+        case .awaitingTrust: (.systemOrange, "Waiting for Approval")
+        case .connected: (.systemGreen, "Connected")
+        case .reconnecting: (.systemOrange, "Reconnecting…")
+        case .disconnected: (.systemGray, "Disconnected")
+        }
     }
 
     /// The account and address, leaving out the address when the name already shows it.
@@ -106,7 +149,7 @@ final class ConnectionCellView: NSTableCellView {
     }
 
     private func updateTrailingViews() {
-        connectButton.isHidden = !isHovered
-        dateField.isHidden = isHovered || dateField.stringValue.isEmpty
+        actionButton.isHidden = !isHovered
+        detailField.isHidden = isHovered || detailField.stringValue.isEmpty
     }
 }

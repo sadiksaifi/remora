@@ -3,9 +3,10 @@ import Observation
 import RemoraCore
 import SwiftUI
 
-/// The list of saved connections and every action on them: connect, add, edit, duplicate, delete.
+/// The list of saved connections and every action on them: connect, disconnect, add, edit, duplicate, delete.
 @MainActor
-final class ConnectionsViewController: NSViewController, NSTableViewDataSource, NSTableViewDelegate, NSMenuItemValidation {
+final class ConnectionsViewController: NSViewController, NSTableViewDataSource, NSTableViewDelegate,
+    NSMenuDelegate, NSMenuItemValidation {
     private let connectionStore: ConnectionStore
     private let credentialStore: CredentialStore
     private let sessionWindows: SessionWindows
@@ -42,7 +43,7 @@ final class ConnectionsViewController: NSViewController, NSTableViewDataSource, 
         tableView.dataSource = self
         tableView.delegate = self
         tableView.target = self
-        tableView.doubleAction = #selector(connectClickedRow(_:))
+        tableView.doubleAction = #selector(openClickedRow(_:))
         tableView.onReturn = { [weak self] in self?.connect(nil) }
         tableView.menu = contextMenu()
         tableView.setAccessibilityLabel("Connections")
@@ -78,6 +79,7 @@ final class ConnectionsViewController: NSViewController, NSTableViewDataSource, 
     override func viewDidLoad() {
         super.viewDidLoad()
         observeConnections()
+        observeSessions()
     }
 
     var initialFirstResponder: NSView {
@@ -86,6 +88,10 @@ final class ConnectionsViewController: NSViewController, NSTableViewDataSource, 
 
     /// Re-renders relative "last connected" dates, which go stale while the window sits open.
     func refreshDates() {
+        reconfigureRows()
+    }
+
+    private func reconfigureRows() {
         guard tableView.numberOfRows > 0 else { return }
         tableView.reloadData(
             forRowIndexes: IndexSet(integersIn: 0..<tableView.numberOfRows),
@@ -99,8 +105,24 @@ final class ConnectionsViewController: NSViewController, NSTableViewDataSource, 
         presentEditor(title: "New Connection", for: Connection(name: "", host: "", username: ""), password: "")
     }
 
+    /// Opens each target, or brings its session window forward. From the context menu it applies only
+    /// to rows without a live session.
     @objc func connect(_ sender: Any?) {
-        open(targetRows(for: sender).map { rows[$0] })
+        var targets = targetRows(for: sender).map { rows[$0] }
+        if isContextMenuItem(sender) {
+            targets.removeAll { hasLiveSession($0) }
+        }
+        open(targets)
+    }
+
+    @objc func showSessionWindow(_ sender: Any?) {
+        open(targetRows(for: sender).map { rows[$0] }.filter(hasSessionWindow))
+    }
+
+    @objc func disconnect(_ sender: Any?) {
+        for connection in targetRows(for: sender).map({ rows[$0] }) where hasLiveSession(connection) {
+            sessionWindows.disconnect(connection.id)
+        }
     }
 
     @objc func editConnection(_ sender: Any?) {
@@ -140,21 +162,35 @@ final class ConnectionsViewController: NSViewController, NSTableViewDataSource, 
         }
     }
 
-    @objc private func connectClickedRow(_ sender: Any?) {
+    /// Connects the double-clicked row, or brings its session window forward.
+    @objc private func openClickedRow(_ sender: Any?) {
         let row = tableView.clickedRow
         guard row >= 0, row < rows.count else { return }
         open([rows[row]])
     }
 
-    @objc private func connectButtonClicked(_ sender: NSButton) {
+    /// The hover button reads Disconnect for a live session and Connect otherwise.
+    @objc private func actionButtonClicked(_ sender: NSButton) {
         let row = tableView.row(for: sender)
         guard row >= 0, row < rows.count else { return }
-        open([rows[row]])
+        if hasLiveSession(rows[row]) {
+            sessionWindows.disconnect(rows[row].id)
+        } else {
+            open([rows[row]])
+        }
     }
 
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
         switch menuItem.action {
-        case #selector(connect(_:)), #selector(delete(_:)):
+        case #selector(connect(_:)):
+            isContextMenuItem(menuItem)
+                ? targetRows(for: menuItem).contains { !hasLiveSession(rows[$0]) }
+                : !targetRows(for: menuItem).isEmpty
+        case #selector(showSessionWindow(_:)):
+            targetRows(for: menuItem).contains { hasSessionWindow(rows[$0]) }
+        case #selector(disconnect(_:)):
+            targetRows(for: menuItem).contains { hasLiveSession(rows[$0]) }
+        case #selector(delete(_:)):
             !targetRows(for: menuItem).isEmpty
         case #selector(editConnection(_:)), #selector(duplicateConnection(_:)):
             targetRows(for: menuItem).count == 1
@@ -172,7 +208,10 @@ final class ConnectionsViewController: NSViewController, NSTableViewDataSource, 
     func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
         let cell = tableView.makeView(withIdentifier: ConnectionCellView.identifier, owner: self)
             as? ConnectionCellView ?? makeCell()
-        cell.configure(with: rows[row], hovered: row == self.tableView.hoveredRow)
+        cell.configure(
+            with: rows[row], session: sessionWindows.states[rows[row].id],
+            hovered: row == self.tableView.hoveredRow
+        )
         return cell
     }
 
@@ -182,14 +221,17 @@ final class ConnectionsViewController: NSViewController, NSTableViewDataSource, 
 
     private func makeCell() -> ConnectionCellView {
         let cell = ConnectionCellView()
-        cell.connectButton.target = self
-        cell.connectButton.action = #selector(connectButtonClicked(_:))
+        cell.actionButton.target = self
+        cell.actionButton.action = #selector(actionButtonClicked(_:))
         return cell
     }
 
     private func contextMenu() -> NSMenu {
         let menu = NSMenu()
+        menu.delegate = self
         menu.addItem(withTitle: "Connect", action: #selector(connect(_:)), keyEquivalent: "")
+        menu.addItem(withTitle: "Show Window", action: #selector(showSessionWindow(_:)), keyEquivalent: "")
+        menu.addItem(withTitle: "Disconnect", action: #selector(disconnect(_:)), keyEquivalent: "")
         menu.addItem(.separator())
         menu.addItem(withTitle: "Edit…", action: #selector(editConnection(_:)), keyEquivalent: "")
         menu.addItem(withTitle: "Duplicate", action: #selector(duplicateConnection(_:)), keyEquivalent: "")
@@ -201,6 +243,18 @@ final class ConnectionsViewController: NSViewController, NSTableViewDataSource, 
         return menu
     }
 
+    /// Shows only the session actions that apply to at least one target row.
+    func menuNeedsUpdate(_ menu: NSMenu) {
+        for item in menu.items {
+            switch item.action {
+            case #selector(connect(_:)), #selector(showSessionWindow(_:)), #selector(disconnect(_:)):
+                item.isHidden = !validateMenuItem(item)
+            default:
+                break
+            }
+        }
+    }
+
     /// Context menu actions apply to the clicked row, or to the whole selection when the clicked
     /// row is part of it. Every other sender acts on the selection.
     private func targetRows(for sender: Any?) -> IndexSet {
@@ -209,6 +263,18 @@ final class ConnectionsViewController: NSViewController, NSTableViewDataSource, 
         let clicked = tableView.clickedRow
         guard clicked >= 0 else { return [] }
         return selection.contains(clicked) ? selection : [clicked]
+    }
+
+    private func isContextMenuItem(_ sender: Any?) -> Bool {
+        (sender as? NSMenuItem)?.menu === tableView.menu
+    }
+
+    private func hasSessionWindow(_ connection: Connection) -> Bool {
+        sessionWindows.states[connection.id] != nil
+    }
+
+    private func hasLiveSession(_ connection: Connection) -> Bool {
+        sessionWindows.states[connection.id]?.isLive ?? false
     }
 
     private func singleTarget(for sender: Any?) -> Connection? {
@@ -229,6 +295,17 @@ final class ConnectionsViewController: NSViewController, NSTableViewDataSource, 
             }
         }
         reloadRows()
+    }
+
+    private func observeSessions() {
+        withObservationTracking {
+            _ = sessionWindows.states
+        } onChange: { [weak self] in
+            Task { @MainActor [weak self] in
+                self?.reconfigureRows()
+                self?.observeSessions()
+            }
+        }
     }
 
     private func reloadRows() {
