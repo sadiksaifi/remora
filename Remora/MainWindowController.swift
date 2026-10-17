@@ -261,7 +261,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
         return sessionTabs.selectedSession
     }
 
-    /// The tab's keyboard toggle asks for the state the click switched it to.
+    /// From the tab's accessibility action and its menu. Only the shown tab's desktop can take the keyboard.
     private func setKeyboardCapture(_ id: UUID, captured: Bool) {
         guard let session = sessionTabs.session(for: id) else { return }
         if captured { session.focusDesktop() } else { session.releaseKeyboardCapture() }
@@ -290,7 +290,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
             return canChangeTabs
         case #selector(toggleTabKeyboardCapture(_:)):
             menuItem.state = session?.hasKeyboard == true ? .on : .off
-            return session?.isConnected ?? false
+            return session?.isConnected == true && session === sessionTabs.selectedSession
         case #selector(disconnectSession(_:)):
             return session?.canDisconnect ?? false
         case #selector(reconnectSession(_:)):
@@ -336,8 +336,8 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
         menu.popUp(positioning: nil, at: NSPoint(x: button.midX - menu.size.width / 2, y: button.maxY + 6), in: tabStrip)
     }
 
-    /// The context menu has the tab items. The actions button's menu puts Capture Keyboard and the
-    /// capture items first. Capture Keyboard stands in for the keyboard button when the tab is too narrow for it.
+    /// The context menu has the tab items. The menu button's menu puts Capture Keyboard and the
+    /// capture items first.
     private func tabMenu(for id: UUID, includingActions: Bool) -> NSMenu {
         let menu = NSMenu()
         if includingActions {
