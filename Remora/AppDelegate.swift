@@ -5,6 +5,9 @@ import RemoraCore
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var connectionsWindowController: ConnectionsWindowController?
     private let sessionWindows = SessionWindows()
+    #if DEBUG
+    private var rendererDemo: RendererDemo?
+    #endif
 
     static func main() {
         let application = NSApplication.shared
@@ -25,10 +28,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 sessionWindows: sessionWindows
             )
             showConnectionsWindow()
+            #if DEBUG
+            if UserDefaults.standard.bool(forKey: "RemoraRendererDemo") {
+                rendererDemo = RendererDemo(renderer: try FrameRenderer())
+                rendererDemo?.showWindow(nil)
+            }
+            #endif
         } catch {
             NSApplication.shared.presentError(error)
             NSApplication.shared.terminate(nil)
         }
+    }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        #if DEBUG
+        rendererDemo?.stop()
+        #endif
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
