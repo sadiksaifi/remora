@@ -60,6 +60,7 @@ final class RemoteDesktopInput: NSObject {
 
     func becameFirstResponder() {
         guard input != nil, view?.window?.isKeyWindow == true, NSApp.isActive else { return }
+        view?.onFocus?()
         let caps = NSEvent.modifierFlags.contains(.capsLock)
         keyboard.reset(capsLockOn: caps)
         input?.synchronize(locks: caps ? [.capsLock] : [])

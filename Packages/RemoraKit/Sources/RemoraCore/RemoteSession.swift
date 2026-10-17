@@ -159,6 +159,7 @@ public enum SessionEvent: Sendable {
     case stateChanged(SessionState)
     case desktopSizeChanged(DesktopSize)
     case cursorChanged(RemoteCursor)
+    case remoteClipboardText(String)
     case credentialsChallenge(CredentialsChallenge)
     case trustChallenge(TrustChallenge)
 }
@@ -174,6 +175,7 @@ public protocol RemoteSession: AnyObject, Sendable {
     func sendWheel(_ wheel: WheelInput)
     func synchronize(locks: LockKeys)
     func releaseAll()
+    func setLocalClipboard(text: String)
 }
 
 public struct DirtyRectangle: Sendable, Equatable {

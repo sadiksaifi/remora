@@ -13,6 +13,7 @@ final class SessionWindowController: NSWindowController, NSWindowDelegate {
     private let credentialStore: CredentialStore
     private let onClose: (SessionWindowController) -> Void
     private var session: (any RemoteSession)?
+    private var clipboardSync: ClipboardSync?
     private var eventTask: Task<Void, Never>?
     private var sheet: NSWindow?
     private var cancelChallenge: (() -> Void)?
@@ -49,6 +50,7 @@ final class SessionWindowController: NSWindowController, NSWindowDelegate {
     }
 
     func disconnect() {
+        clipboardSync = nil
         session?.disconnect()
         session = nil
         eventTask?.cancel()
@@ -101,6 +103,8 @@ final class SessionWindowController: NSWindowController, NSWindowDelegate {
             let desktopView = RemoteDesktopView(renderer: renderer)
             desktopView.input = session
             self.session = session
+            clipboardSync = ClipboardSync(session: session)
+            desktopView.onFocus = { [weak self] in self?.clipboardSync?.focusGained() }
             let events = session.events
             eventTask = Task { @MainActor [weak self] in
                 for await event in events {
@@ -124,14 +128,18 @@ final class SessionWindowController: NSWindowController, NSWindowDelegate {
             case .connecting, .awaitingCredentials, .awaitingTrust:
                 break
             case .connected:
+                clipboardSync?.sessionDidConnect()
                 dismissChallenge()
                 window.contentView = desktopView
                 window.makeFirstResponder(desktopView)
             case .disconnected(let reason):
+                clipboardSync = nil
                 dismissChallenge()
                 session = nil
                 showDisconnected(reason?.description ?? "The session ended.")
             }
+        case .remoteClipboardText(let text):
+            clipboardSync?.receiveRemoteText(text)
         case .desktopSizeChanged(let size):
             sessionLog.info("Desktop size: \(size.width)x\(size.height)")
             resizeWindow(to: size)
