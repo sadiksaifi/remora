@@ -14,6 +14,7 @@ final class SessionViewController: NSViewController {
     private let credentialStore: CredentialStore
     private let onStateChange: (SessionState) -> Void
     private let onAttentionChange: (Bool) -> Void
+    private let onKeyboardCaptureChange: (Bool) -> Void
     private let onClose: () -> Void
     private var session: (any RemoteSession)?
     private var clipboardSync: ClipboardSync?
@@ -42,12 +43,14 @@ final class SessionViewController: NSViewController {
         connection: Connection, credentialStore: CredentialStore,
         onStateChange: @escaping (SessionState) -> Void,
         onAttentionChange: @escaping (Bool) -> Void,
+        onKeyboardCaptureChange: @escaping (Bool) -> Void,
         onClose: @escaping () -> Void
     ) {
         self.connection = connection
         self.credentialStore = credentialStore
         self.onStateChange = onStateChange
         self.onAttentionChange = onAttentionChange
+        self.onKeyboardCaptureChange = onKeyboardCaptureChange
         self.onClose = onClose
         display = SessionDisplay(view: container)
         super.init(nibName: nil, bundle: nil)
@@ -56,7 +59,7 @@ final class SessionViewController: NSViewController {
     }
 
     required init?(coder: NSCoder) {
-        fatalError("Use init(connection:credentialStore:onStateChange:onAttentionChange:onClose:)")
+        fatalError("Use init(connection:credentialStore:onStateChange:onAttentionChange:onKeyboardCaptureChange:onClose:)")
     }
 
     isolated deinit {
@@ -207,6 +210,7 @@ final class SessionViewController: NSViewController {
             self.session = session
             clipboardSync = ClipboardSync(session: session)
             desktopView.onFocus = { [weak self] in self?.clipboardSync?.focusGained() }
+            desktopView.onCaptureChange = { [weak self] captured in self?.onKeyboardCaptureChange(captured) }
             display.attach(session)
             let events = session.events
             eventTask = Task { @MainActor [weak self] in

@@ -13,6 +13,8 @@ final class SessionTabs {
         var state: SessionState
         /// A credentials or certificate request waits until the tab shows.
         var needsAttention = false
+        /// The tab's desktop has the keyboard of the active key window.
+        var isKeyboardCaptured = false
     }
 
     private(set) var tabs: [Tab] = []
@@ -55,6 +57,7 @@ final class SessionTabs {
             connection: connection, credentialStore: credentialStore,
             onStateChange: { [weak self] state in self?.update(id) { $0.state = state } },
             onAttentionChange: { [weak self] attention in self?.update(id) { $0.needsAttention = attention } },
+            onKeyboardCaptureChange: { [weak self] captured in self?.update(id) { $0.isKeyboardCaptured = captured } },
             onClose: { [weak self] in self?.close(id) }
         )
         sessions[id] = session
