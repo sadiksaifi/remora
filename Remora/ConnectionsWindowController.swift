@@ -29,10 +29,8 @@ final class ConnectionsWindowController: NSWindowController, NSWindowDelegate, N
         window.tabbingMode = .disallowed
         window.contentViewController = connectionsViewController
         window.setContentSize(NSSize(width: 560, height: 440))
-        window.center()
         super.init(window: window)
         shouldCascadeWindows = false
-        window.setFrameAutosaveName("Connections")
         window.delegate = self
 
         searchToolbarItem.searchField.placeholderString = "Search"
@@ -46,6 +44,10 @@ final class ConnectionsWindowController: NSWindowController, NSWindowDelegate, N
         toolbar.allowsDisplayModeCustomization = false
         window.toolbar = toolbar
         window.toolbarStyle = .unified
+        // Place the window only once the toolbar has its height. A frame restored earlier grows
+        // when the toolbar attaches, and Zoom then treats the pre-toolbar frame as the user's size.
+        window.center()
+        window.setFrameAutosaveName("Connections")
         window.initialFirstResponder = connectionsViewController.initialFirstResponder
     }
 
