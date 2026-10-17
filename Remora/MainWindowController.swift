@@ -12,8 +12,6 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
     private static let homeItem = NSToolbarItem.Identifier("home")
     private static let tabsItem = NSToolbarItem.Identifier("tabs")
     private static let newConnectionItem = NSToolbarItem.Identifier("newConnection")
-    /// Also the toggle's accessibility identifier, so a test can read the capture state.
-    private static let keyboardCaptureItem = NSToolbarItem.Identifier("keyboardCapture")
     private static let searchItem = NSToolbarItem.Identifier("search")
     /// Narrower than the search field's minimum, so the toolbar shows the collapsed search button.
     private static let collapsedSearchWidth: CGFloat = 30
@@ -27,8 +25,6 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
     private var currentPage: NSViewController
     private let homeToolbarItem = NSToolbarItem(itemIdentifier: MainWindowController.homeItem)
     private let tabsToolbarItem = NSToolbarItem(itemIdentifier: MainWindowController.tabsItem)
-    private let keyboardCaptureToolbarItem = NSToolbarItem(itemIdentifier: MainWindowController.keyboardCaptureItem)
-    private let keyboardCaptureButton = NSButton()
     private let tabStrip: NSHostingView<SessionTabStrip>
     private let tabStripLayout = SessionTabStripLayout()
     private let tabStripWidth: NSLayoutConstraint
@@ -188,10 +184,6 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
         let tabs = sessionTabs.tabs
         homeToolbarItem.isHidden = tabs.isEmpty
         tabsToolbarItem.isHidden = tabs.isEmpty
-        // Shown with the tabs, not only on a session tab, so the tab strip doesn't shift between pages.
-        keyboardCaptureToolbarItem.isHidden = tabs.isEmpty
-        let shownTab = tabs.first { $0.id == sessionTabs.selection }
-        updateKeyboardCapture(captured: shownTab?.isKeyboardCaptured == true, available: shownTab?.state == .connected)
         window.titleVisibility = tabs.isEmpty ? .visible : .hidden
         window.title = tabs.first { $0.id == sessionTabs.selection }?.title ?? "Connections"
         tabStripWidth.constant = SessionTabStrip.idealWidth(forTabCount: tabs.count)
@@ -269,31 +261,15 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
         return sessionTabs.selectedSession
     }
 
-    /// The button has already switched to the state the click asks for.
-    @objc private func toggleKeyboardCapture(_ sender: NSButton) {
-        guard let session = sessionTabs.selectedSession else { return }
-        if sender.state == .on { session.focusDesktop() } else { session.releaseKeyboardCapture() }
-        updateKeyboardCapture(captured: session.hasKeyboard, available: session.isConnected)
+    /// The tab's keyboard toggle asks for the state the click switched it to.
+    private func setKeyboardCapture(_ id: UUID, captured: Bool) {
+        guard let session = sessionTabs.session(for: id) else { return }
+        if captured { session.focusDesktop() } else { session.releaseKeyboardCapture() }
     }
 
-    /// Shows whether the shown tab's desktop has the keyboard. The toggle is off and disabled without a
-    /// connected session tab.
-    private func updateKeyboardCapture(captured: Bool, available: Bool) {
-        let button = keyboardCaptureButton
-        button.isEnabled = available
-        button.state = captured ? .on : .off
-        button.image = NSImage(systemSymbolName: captured ? "keyboard.fill" : "keyboard", accessibilityDescription: nil)
-        button.contentTintColor = captured ? .controlAccentColor : nil
-        let description = if captured {
-            "Keyboard captured. Click or press Control-Option-Command-Escape to release it."
-        } else if available {
-            "Keyboard not captured. Click to capture it. Control-Option-Command-Escape releases it."
-        } else {
-            "Keyboard not captured."
-        }
-        // The toolbar's accessibility element for the item reads its label as the description
-        // and its tooltip as the help, so VoiceOver hears "Keyboard Capture", the check state, then this text.
-        keyboardCaptureToolbarItem.toolTip = description
+    @objc private func toggleTabKeyboardCapture(_ sender: NSMenuItem) {
+        guard let id = sender.representedObject as? UUID, let session = sessionTabs.session(for: id) else { return }
+        setKeyboardCapture(id, captured: !session.hasKeyboard)
     }
 
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
@@ -312,6 +288,9 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
             return session != nil && canChangeTabs
         case #selector(closeClickedTab(_:)):
             return canChangeTabs
+        case #selector(toggleTabKeyboardCapture(_:)):
+            menuItem.state = session?.hasKeyboard == true ? .on : .off
+            return session?.isConnected ?? false
         case #selector(disconnectSession(_:)):
             return session?.canDisconnect ?? false
         case #selector(reconnectSession(_:)):
@@ -346,21 +325,26 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
         }
         let point = tabStrip.convert(event.locationInWindow, from: nil)
         guard tabStrip.bounds.contains(point), let id = tabStripLayout.tab(at: point) else { return false }
-        NSMenu.popUpContextMenu(tabMenu(for: id, withCapture: false), with: event, for: tabStrip)
+        NSMenu.popUpContextMenu(tabMenu(for: id, includingActions: false), with: event, for: tabStrip)
         return true
     }
 
     /// Hangs the tab's menu under its actions button, centered like Safari's page menu. AppKit has no
     /// public menu with an arrow, so it is a plain pop-up menu. `button` is in the strip's flipped coordinates.
     private func showTabActions(for id: UUID, below button: CGRect) {
-        let menu = tabMenu(for: id, withCapture: true)
+        let menu = tabMenu(for: id, includingActions: true)
         menu.popUp(positioning: nil, at: NSPoint(x: button.midX - menu.size.width / 2, y: button.maxY + 6), in: tabStrip)
     }
 
-    /// The context menu has the tab items. The actions button's menu puts the capture items first.
-    private func tabMenu(for id: UUID, withCapture: Bool) -> NSMenu {
+    /// The context menu has the tab items. The actions button's menu puts Capture Keyboard and the
+    /// capture items first. Capture Keyboard stands in for the keyboard button when the tab is too narrow for it.
+    private func tabMenu(for id: UUID, includingActions: Bool) -> NSMenu {
         let menu = NSMenu()
-        if withCapture {
+        if includingActions {
+            let keyboard = menu.addItem(withTitle: "Capture Keyboard", action: #selector(toggleTabKeyboardCapture(_:)), keyEquivalent: "")
+            keyboard.target = self
+            keyboard.representedObject = id
+            menu.addItem(.separator())
             for item in Self.makeCaptureItems() {
                 item.target = self
                 item.representedObject = id
@@ -533,7 +517,8 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
                 guard let session = self?.sessionTabs.session(for: id) else { return }
                 Task { await session.stopRecording() }
             },
-            onShowActions: { [weak self] id, button in self?.showTabActions(for: id, below: button) }
+            onShowActions: { [weak self] id, button in self?.showTabActions(for: id, below: button) },
+            onSetKeyboardCapture: { [weak self] id, captured in self?.setKeyboardCapture(id, captured: captured) }
         )
         tabStrip.sizingOptions = []
         tabStrip.safeAreaRegions = []
@@ -547,17 +532,6 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
         tabsToolbarItem.view = tabStrip
         tabsToolbarItem.label = "Tabs"
         tabsToolbarItem.visibilityPriority = .high
-
-        // A toggle, so accessibility reports a check box whose value is the capture state.
-        keyboardCaptureButton.setButtonType(.pushOnPushOff)
-        keyboardCaptureButton.bezelStyle = .toolbar
-        keyboardCaptureButton.imagePosition = .imageOnly
-        keyboardCaptureButton.refusesFirstResponder = true
-        keyboardCaptureButton.target = self
-        keyboardCaptureButton.action = #selector(toggleKeyboardCapture(_:))
-        keyboardCaptureButton.setAccessibilityIdentifier(Self.keyboardCaptureItem.rawValue)
-        keyboardCaptureToolbarItem.view = keyboardCaptureButton
-        keyboardCaptureToolbarItem.label = "Keyboard Capture"
 
         let field = searchToolbarItem.searchField
         field.placeholderString = "Search"
@@ -573,7 +547,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
     func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
         [
             Self.homeItem, .flexibleSpace, Self.tabsItem, .flexibleSpace,
-            Self.keyboardCaptureItem, Self.newConnectionItem, Self.searchItem,
+            Self.newConnectionItem, Self.searchItem,
         ]
     }
 
@@ -591,8 +565,6 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
             return homeToolbarItem
         case Self.tabsItem:
             return tabsToolbarItem
-        case Self.keyboardCaptureItem:
-            return keyboardCaptureToolbarItem
         case Self.newConnectionItem:
             let item = NSToolbarItem(itemIdentifier: itemIdentifier)
             item.image = NSImage(systemSymbolName: "plus", accessibilityDescription: "New Connection")

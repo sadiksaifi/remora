@@ -4,10 +4,12 @@ import SwiftUI
 /// The tabs inside the toolbar's glass capsule. The toolbar draws the capsule around this view and
 /// centers it; the window controller limits its width to `idealWidth(forTabCount:)`.
 /// The shown tab sits on a raised pill. Tabs share the width equally and scroll only when
-/// they would be narrower than `minimumTabWidth`.
+/// they would be narrower than `minimumTabWidth`. The shown tab keeps at least `selectedMinimumTabWidth`,
+/// enough for its title and controls.
 struct SessionTabStrip: View {
     static let idealTabWidth: CGFloat = 220
     static let minimumTabWidth: CGFloat = 76
+    static let selectedMinimumTabWidth: CGFloat = 132
     static let height: CGFloat = 30
     private static let inset: CGFloat = 3
     fileprivate nonisolated static let coordinateSpace = "SessionTabStrip"
@@ -23,31 +25,35 @@ struct SessionTabStrip: View {
     var onStopRecording: (UUID) -> Void = { _ in }
     /// Passes the actions button's frame in the hosting view's flipped coordinates.
     var onShowActions: (UUID, CGRect) -> Void = { _, _ in }
+    var onSetKeyboardCapture: @MainActor @Sendable (UUID, Bool) -> Void = { _, _ in }
     @State private var hovered: UUID?
 
     var body: some View {
         GeometryReader { proxy in
-            let count = CGFloat(max(1, tabs.tabs.count))
-            let width = max(Self.minimumTabWidth, proxy.size.width / count)
+            let widths = tabWidths(in: proxy.size.width)
             ScrollViewReader { scroller in
                 ScrollView(.horizontal) {
                     HStack(spacing: 0) {
                         ForEach(Array(tabs.tabs.enumerated()), id: \.element.id) { index, tab in
+                            let isSelected = tab.id == tabs.selection
                             SessionTabView(
                                 tab: tab,
                                 capture: tabs.session(for: tab.id)?.capture,
-                                isSelected: tab.id == tabs.selection,
+                                isSelected: isSelected,
+                                // Squeezed below its minimum, the shown tab drops the keyboard button for its menu item.
+                                showsKeyboard: isSelected && widths.selected >= Self.selectedMinimumTabWidth,
                                 isHovered: tab.id == hovered,
                                 showsDivider: index > 0 && !isEmphasized(index) && !isEmphasized(index - 1),
                                 onSelect: { onSelect(tab.id) },
                                 onClose: { onClose(tab.id) },
                                 onStopRecording: { onStopRecording(tab.id) },
                                 onShowActions: { onShowActions(tab.id, $0) },
+                                onSetKeyboardCapture: { [onSetKeyboardCapture, id = tab.id] in onSetKeyboardCapture(id, $0) },
                                 onHover: { inside in
                                     if inside { hovered = tab.id } else if hovered == tab.id { hovered = nil }
                                 }
                             )
-                            .frame(width: width, height: proxy.size.height)
+                            .frame(width: isSelected ? widths.selected : widths.other, height: proxy.size.height)
                             .id(tab.id)
                             .onGeometryChange(for: CGRect.self) { $0.frame(in: .named(Self.coordinateSpace)) } action: {
                                 layout.frames[tab.id] = $0
@@ -57,7 +63,7 @@ struct SessionTabStrip: View {
                     }
                 }
                 .scrollIndicators(.never)
-                .scrollDisabled(width * count <= proxy.size.width + 0.5)
+                .scrollDisabled(widths.total <= proxy.size.width + 0.5)
                 .onChange(of: tabs.selection) { _, selection in
                     guard let selection else { return }
                     withAnimation { scroller.scrollTo(selection) }
@@ -70,6 +76,18 @@ struct SessionTabStrip: View {
         .accessibilityLabel("Tabs")
     }
 
+    /// Equal widths, except that the shown tab takes up to `selectedMinimumTabWidth` from the others.
+    private func tabWidths(in available: CGFloat) -> (selected: CGFloat, other: CGFloat, total: CGFloat) {
+        let count = tabs.tabs.count
+        let equal = max(Self.minimumTabWidth, available / CGFloat(max(1, count)))
+        guard tabs.tabs.contains(where: { $0.id == tabs.selection }), equal < Self.selectedMinimumTabWidth else {
+            return (equal, equal, equal * CGFloat(count))
+        }
+        let selected = min(Self.selectedMinimumTabWidth, available)
+        let other = count > 1 ? max(Self.minimumTabWidth, (available - selected) / CGFloat(count - 1)) : 0
+        return (selected, other, selected + other * CGFloat(count - 1))
+    }
+
     /// The shown and hovered tabs hide the dividers on both sides.
     private func isEmphasized(_ index: Int) -> Bool {
         let id = tabs.tabs[index].id
@@ -78,19 +96,22 @@ struct SessionTabStrip: View {
 }
 
 /// Like Safari's compact tabs: the close button shows on the left while the pointer is over the tab,
-/// and the shown tab has an actions button on the right. Both sit in the title's padding, so the title
-/// stays centered.
+/// and the shown tab has keyboard capture and actions buttons on the right. The controls sit in the
+/// title's padding, which is the same on both sides, so the title stays centered.
 private struct SessionTabView: View {
     let tab: SessionTabs.Tab
     /// Read directly, so a hidden tab shows its recording too.
     let capture: SessionCapture?
     let isSelected: Bool
+    let showsKeyboard: Bool
     let isHovered: Bool
     let showsDivider: Bool
     let onSelect: () -> Void
     let onClose: () -> Void
     let onStopRecording: () -> Void
     let onShowActions: (CGRect) -> Void
+    /// Sendable for the toggle's binding.
+    let onSetKeyboardCapture: @MainActor @Sendable (Bool) -> Void
     let onHover: (Bool) -> Void
     /// Hovering the button reevaluates the body, which refreshes the elapsed time in its help.
     @State private var recordHovered = false
@@ -111,7 +132,8 @@ private struct SessionTabView: View {
         }
         .font(.system(size: NSFont.systemFontSize))
         .foregroundStyle(isSelected ? .primary : .secondary)
-        .padding(.horizontal, 24)
+        // The keyboard and actions buttons need 46 points on the right.
+        .padding(.horizontal, showsKeyboard ? 46 : 24)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background {
             // A plain raised fill: glass on the toolbar's glass capsule stacks two bright rims.
@@ -151,6 +173,7 @@ private struct SessionTabView: View {
         .accessibilityLabel(tab.title)
         .accessibilityValue(accessibilityValue)
         .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
+        .accessibilitySortPriority(1)
         .accessibilityAction(.default, onSelect)
         .accessibilityAction(named: "Close Tab", onClose)
         .accessibilityActions {
@@ -158,26 +181,54 @@ private struct SessionTabView: View {
                 Button("Stop Recording", action: onStopRecording)
             }
         }
-        // After the tab's element, so VoiceOver reaches the button on its own.
+        // Outside the tab's element, so VoiceOver reaches the buttons on their own, after the tab.
         .overlay(alignment: .trailing) {
             if isSelected {
-                Button { onShowActions(actionsFrame) } label: {
-                    Image(systemName: "line.3.horizontal")
-                        .font(.system(size: 11, weight: .medium))
-                        .frame(width: 16, height: 16)
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .foregroundStyle(.secondary)
-                .help("Tab Actions")
-                .accessibilityLabel("Tab Actions")
-                .onGeometryChange(for: CGRect.self) { $0.frame(in: .named(SessionTabStrip.coordinateSpace)) } action: {
-                    actionsFrame = $0
+                HStack(spacing: 2) {
+                    if showsKeyboard { keyboardToggle }
+                    Button { onShowActions(actionsFrame) } label: {
+                        Image(systemName: "line.3.horizontal")
+                            .font(.system(size: 11, weight: .medium))
+                            .frame(width: 16, height: 16)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.secondary)
+                    .help("Tab Actions")
+                    .accessibilityLabel("Tab Actions")
+                    .accessibilityIdentifier("tabActions")
+                    .onGeometryChange(for: CGRect.self) { $0.frame(in: .named(SessionTabStrip.coordinateSpace)) } action: {
+                        actionsFrame = $0
+                    }
                 }
                 .padding(.trailing, 6)
             }
         }
         .onHover(perform: onHover)
+    }
+
+    /// A toggle, so accessibility reports a check box whose value is the capture state. The identifier
+    /// lets a test read that state.
+    private var keyboardToggle: some View {
+        let captured = tab.isKeyboardCaptured
+        let connected = tab.state == .connected
+        return Toggle(isOn: Binding(get: { captured }, set: onSetKeyboardCapture)) {
+            Image(systemName: captured ? "keyboard.fill" : "keyboard")
+                .font(.system(size: 11))
+                .frame(width: 18, height: 16)
+                .contentShape(Rectangle())
+        }
+        .toggleStyle(.button)
+        .buttonStyle(.plain)
+        .foregroundStyle(captured ? Color.accentColor : Color.secondary)
+        .disabled(!connected)
+        .help(captured
+            ? "Keyboard captured. Click or press Control-Option-Command-Escape to release it."
+            : connected
+            ? "Keyboard not captured. Click to capture it. Control-Option-Command-Escape releases it."
+            : "Keyboard not captured.")
+        .accessibilityLabel("Keyboard Capture")
+        .accessibilityIdentifier("keyboardCapture")
     }
 
     /// Replaces the status dot: recording needs a connected session, so the dot would always be green.
