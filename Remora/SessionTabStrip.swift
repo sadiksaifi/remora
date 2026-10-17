@@ -61,8 +61,6 @@ struct SessionTabStrip: View {
                     }
                 }
                 .scrollIndicators(.never)
-                // The keyboard capture ring draws outside the shown tab's pill.
-                .scrollClipDisabled()
                 .scrollDisabled(widths.total <= proxy.size.width + 0.5)
                 .onChange(of: tabs.selection) { _, selection in
                     guard let selection else { return }
@@ -97,7 +95,6 @@ struct SessionTabStrip: View {
 
 /// Like Safari's compact tabs: the shown tab and the tab under the pointer show a close button on the
 /// left and a menu button on the right. The controls sit in the title's padding, so the title stays centered.
-/// An accent ring around the shown tab's pill means its desktop has the keyboard.
 private struct SessionTabView: View {
     let tab: SessionTabs.Tab
     /// Read directly, so a hidden tab shows its recording too.
@@ -138,13 +135,6 @@ private struct SessionTabView: View {
                 Capsule()
                     .fill(Color(nsColor: .controlBackgroundColor))
                     .shadow(color: .black.opacity(0.15), radius: 1.5, y: 0.5)
-                    .overlay {
-                        if tab.isKeyboardCaptured {
-                            Capsule()
-                                .inset(by: -1.25)
-                                .stroke(Color(nsColor: .controlAccentColor), lineWidth: 2.5)
-                        }
-                    }
             } else if isHovered {
                 Capsule().fill(.quaternary)
             }
@@ -246,14 +236,12 @@ private struct SessionTabView: View {
     }
 
     private var accessibilityValue: String {
-        var parts = [tab.needsAttention ? "Needs attention" : tab.state.statusTitle]
+        let status = tab.needsAttention ? "Needs attention" : tab.state.statusTitle
         switch recording {
-        case .recording: parts.append("recording")
-        case .finishing: parts.append("finishing recording")
-        case nil: break
+        case .recording: return "\(status), recording"
+        case .finishing: return "\(status), finishing recording"
+        case nil: return status
         }
-        if isSelected, tab.isKeyboardCaptured { parts.append("keyboard captured") }
-        return parts.joined(separator: ", ")
     }
 
     /// The shown tab shows its session status. A hidden tab shows an orange dot only while a request waits.
