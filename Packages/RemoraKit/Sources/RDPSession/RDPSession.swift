@@ -84,6 +84,16 @@ public final class RDPSession: RemoteSession, @unchecked Sendable {
         enqueue { rm_rdp_release_all($0) }
     }
 
+    public func setLocalClipboard(text: String) {
+        state.lock.withLock {
+            guard !state.cancelled, !state.ended else { return }
+            state.localClipboard = text
+            if state.connected, let handle = state.handle {
+                text.withCString { rm_rdp_set_local_clipboard(handle, $0) }
+            }
+        }
+    }
+
     private func enqueue(_ command: (OpaquePointer) -> Void) {
         state.lock.withLock {
             guard state.connected, !state.cancelled, let handle = state.handle else { return }
@@ -146,6 +156,9 @@ public final class RDPSession: RemoteSession, @unchecked Sendable {
                 owner.state.connected = true
                 if let handle = owner.state.handle {
                     rm_rdp_synchronize(handle, owner.state.locks.rawValue)
+                    if let text = owner.state.localClipboard {
+                        text.withCString { rm_rdp_set_local_clipboard(handle, $0) }
+                    }
                 }
             }
             owner.emit(.stateChanged(.connected))
@@ -180,6 +193,9 @@ public final class RDPSession: RemoteSession, @unchecked Sendable {
             default: cursor = .systemDefault
             }
             session(user).emit(.cursorChanged(cursor))
+        }
+        callbacks.remote_clipboard_text = { user, text in
+            session(user).emit(.remoteClipboardText(string(text)))
         }
         callbacks.credentials = { user, username, domain, rejected, newUsername, newDomain, newPassword in
             let owner = session(user)
@@ -263,6 +279,7 @@ public final class RDPSession: RemoteSession, @unchecked Sendable {
 private final class StateBox: @unchecked Sendable {
     let lock = NSLock()
     // Every access, including abort and removing the handle before free, holds lock.
+    var localClipboard: String?
     var connected = false
     var locks: LockKeys = []
     var started = false
