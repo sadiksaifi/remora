@@ -32,6 +32,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
     private let searchWidth: NSLayoutConstraint
     /// Window > a separator and tab 1 through 9, hidden past the last tab.
     private(set) var tabMenuItems: [NSMenuItem] = []
+    private var eventMonitor: Any?
 
     init(connectionStore: ConnectionStore, credentialStore: CredentialStore, sessionTabs: SessionTabs) {
         self.connectionStore = connectionStore
@@ -93,6 +94,11 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
             return item
         }
         sessionTabs.onSelectionChange = { [weak self] _, selection in self?.showPage(selection) }
+        eventMonitor = NSEvent.addLocalMonitorForEvents(matching: [.rightMouseDown, .leftMouseDown]) {
+            [weak self] event in
+            let consumed = MainActor.assumeIsolated { self?.consume(event) ?? false }
+            return consumed ? nil : event
+        }
         observeTabs()
         updateChrome()
     }
@@ -101,19 +107,20 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
         fatalError("Use init(connectionStore:credentialStore:sessionTabs:)")
     }
 
-    /// Handles the events that the toolbar and the search suggestions would otherwise take.
-    /// `dispatch` runs AppKit's handling, including its event monitors. Skipping it consumes the event.
-    func route(_ event: NSEvent, dispatch: () -> Void) {
+    isolated deinit {
+        if let eventMonitor { NSEvent.removeMonitor(eventMonitor) }
+    }
+
+    /// Handles the secondary clicks that the toolbar would otherwise take.
+    /// Returns true for an event it consumed.
+    private func consume(_ event: NSEvent) -> Bool {
         switch event.type {
-        case .rightMouseDown, .leftMouseDown where event.modifierFlags.contains(.control):
-            if !showTabMenu(for: event) { dispatch() }
-        case .keyDown where isSessionSearchEscape(event):
-            // AppKit runs first so the suggestions list can close and restore its text,
-            // then the search clears and closes in the same keystroke.
-            dispatch()
-            finishSessionSearch()
+        case .rightMouseDown:
+            showTabMenu(for: event)
+        case .leftMouseDown where event.modifierFlags.contains(.control):
+            showTabMenu(for: event)
         default:
-            dispatch()
+            false
         }
     }
 
@@ -333,15 +340,13 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
         }
     }
 
-    /// On a session tab, Escape clears and closes the search in one step. While suggestions show, the
-    /// search field gives Escape to them before its delegate, and they close and put the typed text back.
-    private func isSessionSearchEscape(_ event: NSEvent) -> Bool {
-        let field = searchToolbarItem.searchField
-        return event.keyCode == 0x35
-            && event.modifierFlags.intersection([.shift, .control, .option, .command]).isEmpty
-            && currentPage !== connectionsViewController
-            && field.currentEditor() != nil
-            && (event.window === window || event.window === field.window)
+    /// On a session tab, Escape clears and closes the search and gives the keyboard back to the desktop.
+    /// While suggestions show, the field gives the first Escape to them, and they only close.
+    func control(_ control: NSControl, textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
+        guard commandSelector == #selector(NSResponder.cancelOperation(_:)),
+              currentPage !== connectionsViewController else { return false }
+        finishSessionSearch()
+        return true
     }
 
     /// Saved connections matching the search, offered while a session tab shows.

@@ -12,7 +12,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     #endif
 
     static func main() {
-        let application = RemoraApplication.shared
+        let application = NSApplication.shared
         let delegate = AppDelegate()
         application.delegate = delegate
         application.setActivationPolicy(.regular)
@@ -30,16 +30,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 return
             }
             #endif
-            let mainWindowController = MainWindowController(
+            mainWindowController = MainWindowController(
                 connectionStore: try ConnectionStore(),
                 credentialStore: CredentialStore(),
                 sessionTabs: sessionTabs
             )
-            self.mainWindowController = mainWindowController
-            (NSApp as? RemoraApplication)?.routeEvent = { [weak mainWindowController] event, dispatch in
-                guard let mainWindowController else { return dispatch() }
-                mainWindowController.route(event, dispatch: dispatch)
-            }
             configureMenu()
             showMainWindow()
             #if DEBUG
