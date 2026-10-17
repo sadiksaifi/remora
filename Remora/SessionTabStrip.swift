@@ -20,6 +20,7 @@ struct SessionTabStrip: View {
     let layout: SessionTabStripLayout
     var onSelect: (UUID) -> Void = { _ in }
     var onClose: (UUID) -> Void = { _ in }
+    var onStopRecording: (UUID) -> Void = { _ in }
     @State private var hovered: UUID?
 
     var body: some View {
@@ -32,11 +33,13 @@ struct SessionTabStrip: View {
                         ForEach(Array(tabs.tabs.enumerated()), id: \.element.id) { index, tab in
                             SessionTabView(
                                 tab: tab,
+                                capture: tabs.session(for: tab.id)?.capture,
                                 isSelected: tab.id == tabs.selection,
                                 isHovered: tab.id == hovered,
                                 showsDivider: index > 0 && !isEmphasized(index) && !isEmphasized(index - 1),
                                 onSelect: { onSelect(tab.id) },
                                 onClose: { onClose(tab.id) },
+                                onStopRecording: { onStopRecording(tab.id) },
                                 onHover: { inside in
                                     if inside { hovered = tab.id } else if hovered == tab.id { hovered = nil }
                                 }
@@ -73,12 +76,17 @@ struct SessionTabStrip: View {
 
 private struct SessionTabView: View {
     let tab: SessionTabs.Tab
+    /// Read directly, so a hidden tab shows its recording too.
+    let capture: SessionCapture?
     let isSelected: Bool
     let isHovered: Bool
     let showsDivider: Bool
     let onSelect: () -> Void
     let onClose: () -> Void
+    let onStopRecording: () -> Void
     let onHover: (Bool) -> Void
+    /// Hovering the button reevaluates the body, which refreshes the elapsed time in its help.
+    @State private var recordHovered = false
 
     var body: some View {
         HStack(spacing: 6) {
@@ -90,6 +98,20 @@ private struct SessionTabView: View {
             Text(tab.title)
                 .lineLimit(1)
                 .truncationMode(.tail)
+            if let recording {
+                Button(action: onStopRecording) {
+                    Image(systemName: "record.circle")
+                        .font(.system(size: 12))
+                        .foregroundStyle(.red)
+                        .contentShape(Circle())
+                }
+                .buttonStyle(.plain)
+                .disabled(recording == .finishing)
+                .opacity(recording == .finishing ? 0.4 : 1)
+                .help(recordingHelp)
+                .onHover { recordHovered = $0 }
+                .layoutPriority(1)
+            }
         }
         .font(.system(size: NSFont.systemFontSize))
         .foregroundStyle(isSelected ? .primary : .secondary)
@@ -132,10 +154,40 @@ private struct SessionTabView: View {
         .help(tab.title)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(tab.title)
-        .accessibilityValue(tab.needsAttention ? "Needs attention" : tab.state.statusTitle)
+        .accessibilityValue(accessibilityValue)
         .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
         .accessibilityAction(.default, onSelect)
         .accessibilityAction(named: "Close Tab", onClose)
+        .accessibilityActions {
+            if recording == .recording {
+                Button("Stop Recording", action: onStopRecording)
+            }
+        }
+    }
+
+    private enum Recording { case recording, finishing }
+
+    private var recording: Recording? {
+        switch capture?.recordingState {
+        case .recording: .recording
+        case .finishing: .finishing
+        default: nil
+        }
+    }
+
+    private var recordingHelp: String {
+        _ = recordHovered
+        guard let elapsed = capture?.recordingState.elapsed() else { return "Finishing Recording" }
+        return "Recording for \(Duration.seconds(elapsed).formatted(.time(pattern: .minuteSecond))). Click to stop."
+    }
+
+    private var accessibilityValue: String {
+        let status = tab.needsAttention ? "Needs attention" : tab.state.statusTitle
+        switch recording {
+        case .recording: return "\(status), recording"
+        case .finishing: return "\(status), finishing recording"
+        case nil: return status
+        }
     }
 
     /// The shown tab shows its session status. A hidden tab shows an orange dot only while a request waits.

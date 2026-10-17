@@ -488,7 +488,11 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
             tabs: sessionTabs,
             layout: tabStripLayout,
             onSelect: { [weak self] id in self?.select(id) },
-            onClose: { [weak self] id in self?.close(id) }
+            onClose: { [weak self] id in self?.close(id) },
+            onStopRecording: { [weak self] id in
+                guard let session = self?.sessionTabs.session(for: id) else { return }
+                Task { await session.stopRecording() }
+            }
         )
         tabStrip.sizingOptions = []
         tabStrip.safeAreaRegions = []
