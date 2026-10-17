@@ -245,6 +245,9 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
     @objc func reconnectSession(_ sender: Any?) { sessionTabs.selectedSession?.reconnect() }
     @objc func sendCtrlAltDelete(_ sender: Any?) { sessionTabs.selectedSession?.sendCtrlAltDelete() }
     @objc func releaseKeyboardCapture(_ sender: Any?) { sessionTabs.selectedSession?.releaseKeyboardCapture() }
+    @objc func takeScreenshot(_ sender: Any?) { sessionTabs.selectedSession?.captureScreenshot(copyToClipboard: false) }
+    @objc func copyScreenshot(_ sender: Any?) { sessionTabs.selectedSession?.captureScreenshot(copyToClipboard: true) }
+    @objc func toggleRecording(_ sender: Any?) { sessionTabs.selectedSession?.toggleRecording() }
 
     /// The button has already switched to the state the click asks for.
     @objc private func toggleKeyboardCapture(_ sender: NSButton) {
@@ -297,6 +300,20 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
             return session?.isConnected ?? false
         case #selector(releaseKeyboardCapture(_:)):
             return session?.hasKeyboard ?? false
+        case #selector(takeScreenshot(_:)), #selector(copyScreenshot(_:)):
+            return session?.isConnected ?? false
+        case #selector(toggleRecording(_:)):
+            switch session?.capture.recordingState {
+            case .recording:
+                menuItem.title = "Stop Recording"
+                return true
+            case .finishing:
+                menuItem.title = "Finishing Recording\u{2026}"
+                return false
+            default:
+                menuItem.title = "Start Recording"
+                return session?.isConnected ?? false
+            }
         default:
             return true
         }
@@ -427,6 +444,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
         let alert = NSAlert()
         alert.messageText = live == 1 ? "Disconnect 1 Session?" : "Disconnect \(live) Sessions?"
         alert.informativeText = "Closing the window ends every session in it."
+        if sessionTabs.isRecording { alert.informativeText += " Recordings in progress are saved." }
         alert.addButton(withTitle: "Disconnect")
         alert.addButton(withTitle: "Cancel")
         alert.beginSheetModal(for: sender) { [weak self, weak sender] response in

@@ -134,6 +134,16 @@ final class SessionTabs {
         for session in sessions.values { session.disconnect() }
     }
 
+    /// True while any open tab records or finishes a recording.
+    var isRecording: Bool {
+        sessions.values.contains {
+            switch $0.capture.recordingState {
+            case .recording, .finishing: true
+            case .idle, .failed: false
+            }
+        }
+    }
+
     var unfinishedCaptureURLs: [URL] {
         (sessions.values.map(\.capture) + Array(closingCaptures.values)).compactMap(\.recordingURL)
     }

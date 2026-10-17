@@ -118,6 +118,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             Control-Option-Command-1 through 9 show tab 1 through 9.
             Control-Option-Command-H shows the connections list.
             Control-Option-Command-W closes the tab and disconnects it.
+            Control-Option-Command-S saves a screenshot of the remote desktop. Add Shift to copy it instead.
+            Control-Option-Command-R starts or stops recording the remote desktop.
             Control-Option-Command-Escape releases the keyboard. Click the remote desktop to capture it again.
             Control-Command-F enters or exits full screen. Command-Q quits Remora.
             """
@@ -194,6 +196,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         sessionMenu.addItem(withTitle: "Reconnect", action: #selector(MainWindowController.reconnectSession(_:)), keyEquivalent: "r")
         sessionMenu.addItem(.separator())
         sessionMenu.addItem(withTitle: "Send Ctrl-Alt-Delete", action: #selector(MainWindowController.sendCtrlAltDelete(_:)), keyEquivalent: "")
+        sessionMenu.addItem(.separator())
+        sessionMenu.addItem(withTitle: "Take Screenshot", action: #selector(MainWindowController.takeScreenshot(_:)), keyEquivalent: "s")
+            .keyEquivalentModifierMask = localChord
+        // A visible item, because an alternate would only show while holding all four modifiers.
+        sessionMenu.addItem(withTitle: "Copy Screenshot", action: #selector(MainWindowController.copyScreenshot(_:)), keyEquivalent: "s")
+            .keyEquivalentModifierMask = localChord.union(.shift)
+        // Validation retitles this item while a recording runs or finishes.
+        sessionMenu.addItem(withTitle: "Start Recording", action: #selector(MainWindowController.toggleRecording(_:)), keyEquivalent: "r")
+            .keyEquivalentModifierMask = localChord
         sessionMenu.addItem(.separator())
         sessionMenu.addItem(
             withTitle: "Release Keyboard Capture",
