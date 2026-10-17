@@ -48,7 +48,8 @@ typedef enum { RMRDP_CURSOR_IMAGE, RMRDP_CURSOR_HIDDEN, RMRDP_CURSOR_DEFAULT } R
 typedef struct {
     void (*connected)(void *user);
     void (*disconnected)(void *user, RMRDPDisconnectReason reason, const char *message);
-    void (*desktop_size)(void *user, uint32_t width, uint32_t height);
+    void (*desktop_size)(void *user, uint32_t width, uint32_t height, bool requested);
+    void (*dynamic_resize)(void *user, bool available);
     /* BGRA32 bytes, alpha ignored. Copy pixels before returning. */
     void (*frame)(void *user, const uint8_t *pixels, uint32_t width, uint32_t height,
                   uint32_t stride, const RMRDPRectangle *rectangles, size_t count);
@@ -74,6 +75,7 @@ void rm_rdp_run(RMRDPSession *session);
 void rm_rdp_abort(RMRDPSession *session);
 void rm_rdp_free(RMRDPSession *session);
 /* Thread-safe enqueue only. The caller excludes free until the call returns. */
+void rm_rdp_request_resize(RMRDPSession *session, uint32_t width, uint32_t height, double scale);
 void rm_rdp_key(RMRDPSession *session, uint16_t key, bool down);
 void rm_rdp_pointer(RMRDPSession *session, uint16_t x, uint16_t y, uint8_t buttons);
 void rm_rdp_wheel(RMRDPSession *session, int32_t vertical, int32_t horizontal);

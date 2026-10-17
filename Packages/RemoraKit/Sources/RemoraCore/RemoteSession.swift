@@ -157,7 +157,9 @@ public struct TrustChallenge: Sendable {
 
 public enum SessionEvent: Sendable {
     case stateChanged(SessionState)
-    case desktopSizeChanged(DesktopSize)
+    /// requested is true for a response to this client's resize request.
+    case desktopSizeChanged(DesktopSize, requested: Bool = false)
+    case dynamicResizeChanged(Bool)
     case cursorChanged(RemoteCursor)
     case credentialsChallenge(CredentialsChallenge)
     case trustChallenge(TrustChallenge)
@@ -167,6 +169,11 @@ public enum SessionEvent: Sendable {
 /// Events finish after the terminal disconnected event. Consume the stream once.
 public protocol RemoteSession: AnyObject, Sendable {
     var events: AsyncStream<SessionEvent> { get }
+    /// True after the server negotiates dynamic resizing, until that capability is lost.
+    var supportsDynamicResize: Bool { get }
+    /// Requests backing pixels and pixels per point. Ignored until resizing is supported.
+    /// Only desktopSizeChanged confirms the resulting size.
+    func requestResize(_ size: DesktopSize, scale: Double)
     func connect()
     func disconnect()
     func sendKey(_ key: KeyInput)

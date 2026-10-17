@@ -1,5 +1,6 @@
 #include "CFreeRDPBridge.h"
 #include "input.h"
+#include "display.h"
 
 #define WITH_OPAQUE_SETTINGS
 /* WinPR's own public sspi.h declares fields with deprecated WinPR types. */
@@ -30,12 +31,19 @@
 #include <time.h>
 #include <unistd.h>
 
+/* Darwin modules and WinPR both export these macros. Choose C boolean values. */
+#undef TRUE
+#undef FALSE
+#define TRUE true
+#define FALSE false
+
 struct RMRDPSession {
     rdpClientContext client; /* Must remain first: client-common requires this prefix. */
     RMRDPCallbacks callbacks;
     void *user;
     atomic_bool aborted;
     RMInput *input;
+    RMDisplay *display;
     bool credentials_cancelled;
     bool certificate_rejected;
     unsigned credential_requests;
@@ -44,6 +52,7 @@ struct RMRDPSession {
 };
 
 RMInput *rm_rdp_input(RMRDPSession *s) { return s->input; }
+RMDisplay *rm_rdp_display(RMRDPSession *s) { return s->display; }
 
 static rdpContext *context_of(RMRDPSession *s) { return &s->client.context; }
 static RMRDPSession *session_of(rdpContext *context) { return (RMRDPSession *)context; }
@@ -277,8 +286,9 @@ static BOOL end_paint(rdpContext *context) {
 
 static void report_size(RMRDPSession *s) {
     rdpGdi *gdi = context_of(s)->gdi;
+    const bool requested = rm_display_resized(s->display, gdi->width, gdi->height);
     if (s->callbacks.desktop_size)
-        s->callbacks.desktop_size(s->user, gdi->width, gdi->height);
+        s->callbacks.desktop_size(s->user, gdi->width, gdi->height, requested);
 }
 
 static BOOL desktop_resize(rdpContext *context) {
@@ -351,7 +361,8 @@ RMRDPSession *rm_rdp_create(const RMRDPConfiguration *config, const RMRDPCallbac
     s->user = user;
     atomic_init(&s->aborted, false);
     s->input = rm_input_new(context, callbacks, user, config->iso_keyboard);
-    if (!s->input) {
+    s->display = rm_display_new(context, callbacks, user);
+    if (!s->input || !s->display) {
         rm_rdp_free(s);
         return NULL;
     }
@@ -453,10 +464,12 @@ void rm_rdp_run(RMRDPSession *s) {
         if (s->callbacks.connected)
             s->callbacks.connected(s->user);
         while (!atomic_load(&s->aborted) && !freerdp_shall_disconnect_context(context)) {
+            const DWORD resize_timeout = rm_display_process(s->display);
             HANDLE handles[MAXIMUM_WAIT_OBJECTS] = { 0 };
-            const DWORD count = freerdp_get_event_handles(context, handles, MAXIMUM_WAIT_OBJECTS - 1);
+            const DWORD count = freerdp_get_event_handles(context, handles, MAXIMUM_WAIT_OBJECTS - 2);
             handles[count] = rm_input_event(s->input);
-            if (!count || WaitForMultipleObjects(count + 1, handles, FALSE, INFINITE) == WAIT_FAILED ||
+            handles[count + 1] = rm_display_event(s->display);
+            if (!count || WaitForMultipleObjects(count + 2, handles, FALSE, resize_timeout) == WAIT_FAILED ||
                 !freerdp_check_event_handles(context) || !rm_input_drain(s->input)) {
                 loop_failed = true;
                 break;
@@ -504,7 +517,9 @@ void rm_rdp_abort(RMRDPSession *s) {
 void rm_rdp_free(RMRDPSession *s) {
     if (s) {
         RMInput *input = s->input;
+        RMDisplay *display = s->display;
         freerdp_client_context_free(context_of(s));
         rm_input_free(input);
+        rm_display_free(display);
     }
 }
