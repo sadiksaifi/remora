@@ -49,6 +49,13 @@ final class ConnectionsTableView: NSTableView {
         setHoveredRow(-1)
     }
 
+    /// A click in the list takes the keyboard from the toolbar's search field, which then
+    /// collapses when it is empty. A click on a cell's label would otherwise leave the keyboard there.
+    override func mouseDown(with event: NSEvent) {
+        window?.makeFirstResponder(self)
+        super.mouseDown(with: event)
+    }
+
     override func menu(for event: NSEvent) -> NSMenu? {
         row(at: convert(event.locationInWindow, from: nil)) >= 0 ? super.menu(for: event) : nil
     }
