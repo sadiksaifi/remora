@@ -3,7 +3,7 @@ import SwiftUI
 
 /// The tabs inside the toolbar's glass capsule. The toolbar draws the capsule around this view and
 /// centers it; the window controller limits its width to `idealWidth(forTabCount:)`.
-/// The shown tab sits on a raised glass pill. Tabs share the width equally and scroll only when
+/// The shown tab sits on a raised pill. Tabs share the width equally and scroll only when
 /// they would be narrower than `minimumTabWidth`.
 struct SessionTabStrip: View {
     static let idealTabWidth: CGFloat = 220
@@ -96,8 +96,11 @@ private struct SessionTabView: View {
         .padding(.horizontal, 24)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background {
+            // A plain raised fill: glass on the toolbar's glass capsule stacks two bright rims.
             if isSelected {
-                Color.clear.glassEffect(.regular, in: .capsule)
+                Capsule()
+                    .fill(Color(nsColor: .controlBackgroundColor))
+                    .shadow(color: .black.opacity(0.15), radius: 1.5, y: 0.5)
             } else if isHovered {
                 Capsule().fill(.quaternary)
             }
