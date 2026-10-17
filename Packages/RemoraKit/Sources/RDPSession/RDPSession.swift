@@ -59,6 +59,15 @@ public final class RDPSession: RemoteSession, @unchecked Sendable {
         }
     }
 
+    public var supportsDynamicResize: Bool {
+        state.lock.withLock { state.connected && state.supportsDynamicResize && !state.cancelled }
+    }
+
+    public func requestResize(_ size: DesktopSize, scale: Double) {
+        guard let width = UInt32(exactly: size.width), let height = UInt32(exactly: size.height) else { return }
+        enqueue { rm_rdp_request_resize($0, width, height, scale) }
+    }
+
     public func sendKey(_ key: KeyInput) {
         enqueue { rm_rdp_key($0, key.keyCode, key.isDown) }
     }
@@ -168,8 +177,13 @@ public final class RDPSession: RemoteSession, @unchecked Sendable {
             let mapped = disconnectReason(reason, message: string(message))
             owner.state.lock.withLock { owner.state.reason = mapped }
         }
-        callbacks.desktop_size = { user, width, height in
-            session(user).emit(.desktopSizeChanged(DesktopSize(width: Int(width), height: Int(height))))
+        callbacks.desktop_size = { user, width, height, requested in
+            session(user).emit(.desktopSizeChanged(DesktopSize(width: Int(width), height: Int(height)), requested: requested))
+        }
+        callbacks.dynamic_resize = { user, available in
+            let owner = session(user)
+            owner.state.lock.withLock { owner.state.supportsDynamicResize = available }
+            owner.emit(.dynamicResizeChanged(available))
         }
         callbacks.frame = { user, pixels, width, height, stride, rectangles, count in
             guard let pixels else { return }
@@ -281,6 +295,7 @@ private final class StateBox: @unchecked Sendable {
     // Every access, including abort and removing the handle before free, holds lock.
     var localClipboard: String?
     var connected = false
+    var supportsDynamicResize = false
     var locks: LockKeys = []
     var started = false
     var ended = false
