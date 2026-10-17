@@ -7,6 +7,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let sessionWindows = SessionWindows()
     #if DEBUG
     private var rendererDemo: RendererDemo?
+    private var shortcutCaptureDemo: ShortcutCaptureDemo?
     #endif
 
     static func main() {
@@ -22,6 +23,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         configureMenu()
         do {
+            #if DEBUG
+            if CommandLine.arguments.contains("--shortcut-capture-demo") {
+                shortcutCaptureDemo = ShortcutCaptureDemo(renderer: try FrameRenderer())
+                return
+            }
+            #endif
             connectionsWindowController = ConnectionsWindowController(
                 connectionStore: try ConnectionStore(),
                 credentialStore: CredentialStore(),

@@ -190,6 +190,21 @@ static BOOL send_wheel(RMInput *q, UINT16 flags, int64_t value) {
     return TRUE;
 }
 
+void rm_input_discard_pending(RMInput *q) {
+    pthread_mutex_lock(&q->lock);
+    Command *command = q->head;
+    q->head = q->tail = NULL;
+    q->queued_buttons = 0;
+    ResetEvent(q->wake);
+    pthread_mutex_unlock(&q->lock);
+    while (command) {
+        Command *next = command->next;
+        free(command);
+        command = next;
+    }
+    // Retain sent keys/buttons so COMMAND_RELEASE can release them after recovery.
+}
+
 BOOL rm_input_drain(RMInput *q) {
     pthread_mutex_lock(&q->lock);
     Command *command = q->head;
