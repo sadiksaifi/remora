@@ -197,14 +197,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         sessionMenu.addItem(.separator())
         sessionMenu.addItem(withTitle: "Send Ctrl-Alt-Delete", action: #selector(MainWindowController.sendCtrlAltDelete(_:)), keyEquivalent: "")
         sessionMenu.addItem(.separator())
-        sessionMenu.addItem(withTitle: "Take Screenshot", action: #selector(MainWindowController.takeScreenshot(_:)), keyEquivalent: "s")
-            .keyEquivalentModifierMask = localChord
-        // A visible item, because an alternate would only show while holding all four modifiers.
-        sessionMenu.addItem(withTitle: "Copy Screenshot", action: #selector(MainWindowController.copyScreenshot(_:)), keyEquivalent: "s")
-            .keyEquivalentModifierMask = localChord.union(.shift)
-        // Validation retitles this item while a recording runs or finishes.
-        sessionMenu.addItem(withTitle: "Start Recording", action: #selector(MainWindowController.toggleRecording(_:)), keyEquivalent: "r")
-            .keyEquivalentModifierMask = localChord
+        for item in MainWindowController.makeCaptureItems() { sessionMenu.addItem(item) }
         sessionMenu.addItem(.separator())
         sessionMenu.addItem(
             withTitle: "Release Keyboard Capture",

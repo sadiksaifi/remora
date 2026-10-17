@@ -10,7 +10,7 @@ struct SessionTabStrip: View {
     static let minimumTabWidth: CGFloat = 76
     static let height: CGFloat = 30
     private static let inset: CGFloat = 3
-    private nonisolated static let coordinateSpace = "SessionTabStrip"
+    fileprivate nonisolated static let coordinateSpace = "SessionTabStrip"
 
     static func idealWidth(forTabCount count: Int) -> CGFloat {
         CGFloat(max(1, count)) * idealTabWidth + 2 * inset
@@ -21,6 +21,8 @@ struct SessionTabStrip: View {
     var onSelect: (UUID) -> Void = { _ in }
     var onClose: (UUID) -> Void = { _ in }
     var onStopRecording: (UUID) -> Void = { _ in }
+    /// Passes the actions button's frame in the hosting view's flipped coordinates.
+    var onShowActions: (UUID, CGRect) -> Void = { _, _ in }
     @State private var hovered: UUID?
 
     var body: some View {
@@ -40,6 +42,7 @@ struct SessionTabStrip: View {
                                 onSelect: { onSelect(tab.id) },
                                 onClose: { onClose(tab.id) },
                                 onStopRecording: { onStopRecording(tab.id) },
+                                onShowActions: { onShowActions(tab.id, $0) },
                                 onHover: { inside in
                                     if inside { hovered = tab.id } else if hovered == tab.id { hovered = nil }
                                 }
@@ -74,6 +77,9 @@ struct SessionTabStrip: View {
     }
 }
 
+/// Like Safari's compact tabs: the close button shows on the left while the pointer is over the tab,
+/// and the shown tab has an actions button on the right. Both sit in the title's padding, so the title
+/// stays centered.
 private struct SessionTabView: View {
     let tab: SessionTabs.Tab
     /// Read directly, so a hidden tab shows its recording too.
@@ -84,13 +90,17 @@ private struct SessionTabView: View {
     let onSelect: () -> Void
     let onClose: () -> Void
     let onStopRecording: () -> Void
+    let onShowActions: (CGRect) -> Void
     let onHover: (Bool) -> Void
     /// Hovering the button reevaluates the body, which refreshes the elapsed time in its help.
     @State private var recordHovered = false
+    @State private var actionsFrame = CGRect.zero
 
     var body: some View {
         HStack(spacing: 6) {
-            if let dotColor {
+            if let recording {
+                recordButton(recording)
+            } else if let dotColor {
                 Circle()
                     .fill(Color(nsColor: dotColor))
                     .frame(width: 7, height: 7)
@@ -98,20 +108,6 @@ private struct SessionTabView: View {
             Text(tab.title)
                 .lineLimit(1)
                 .truncationMode(.tail)
-            if let recording {
-                Button(action: onStopRecording) {
-                    Image(systemName: "record.circle")
-                        .font(.system(size: 12))
-                        .foregroundStyle(.red)
-                        .contentShape(Circle())
-                }
-                .buttonStyle(.plain)
-                .disabled(recording == .finishing)
-                .opacity(recording == .finishing ? 0.4 : 1)
-                .help(recordingHelp)
-                .onHover { recordHovered = $0 }
-                .layoutPriority(1)
-            }
         }
         .font(.system(size: NSFont.systemFontSize))
         .foregroundStyle(isSelected ? .primary : .secondary)
@@ -127,18 +123,18 @@ private struct SessionTabView: View {
                 Capsule().fill(.quaternary)
             }
         }
-        .overlay(alignment: .trailing) {
-            if isSelected || isHovered {
+        .overlay(alignment: .leading) {
+            if isHovered {
                 Button(action: onClose) {
-                    Image(systemName: "xmark")
-                        .font(.system(size: 9, weight: .semibold))
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.system(size: 13))
                         .frame(width: 16, height: 16)
                         .contentShape(Circle())
                 }
                 .buttonStyle(.plain)
                 .foregroundStyle(.secondary)
                 .help("Close Tab")
-                .padding(.trailing, 7)
+                .padding(.leading, 6)
             }
         }
         .overlay(alignment: .leading) {
@@ -150,7 +146,6 @@ private struct SessionTabView: View {
         }
         .contentShape(Capsule())
         .onTapGesture(perform: onSelect)
-        .onHover(perform: onHover)
         .help(tab.title)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(tab.title)
@@ -163,6 +158,41 @@ private struct SessionTabView: View {
                 Button("Stop Recording", action: onStopRecording)
             }
         }
+        // After the tab's element, so VoiceOver reaches the button on its own.
+        .overlay(alignment: .trailing) {
+            if isSelected {
+                Button { onShowActions(actionsFrame) } label: {
+                    Image(systemName: "line.3.horizontal")
+                        .font(.system(size: 11, weight: .medium))
+                        .frame(width: 16, height: 16)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
+                .help("Tab Actions")
+                .accessibilityLabel("Tab Actions")
+                .onGeometryChange(for: CGRect.self) { $0.frame(in: .named(SessionTabStrip.coordinateSpace)) } action: {
+                    actionsFrame = $0
+                }
+                .padding(.trailing, 6)
+            }
+        }
+        .onHover(perform: onHover)
+    }
+
+    /// Replaces the status dot: recording needs a connected session, so the dot would always be green.
+    private func recordButton(_ recording: Recording) -> some View {
+        Button(action: onStopRecording) {
+            Image(systemName: "record.circle")
+                .font(.system(size: 12))
+                .foregroundStyle(.red)
+                .contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .disabled(recording == .finishing)
+        .opacity(recording == .finishing ? 0.4 : 1)
+        .help(recordingHelp)
+        .onHover { recordHovered = $0 }
     }
 
     private enum Recording { case recording, finishing }

@@ -245,9 +245,29 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
     @objc func reconnectSession(_ sender: Any?) { sessionTabs.selectedSession?.reconnect() }
     @objc func sendCtrlAltDelete(_ sender: Any?) { sessionTabs.selectedSession?.sendCtrlAltDelete() }
     @objc func releaseKeyboardCapture(_ sender: Any?) { sessionTabs.selectedSession?.releaseKeyboardCapture() }
-    @objc func takeScreenshot(_ sender: Any?) { sessionTabs.selectedSession?.captureScreenshot(copyToClipboard: false) }
-    @objc func copyScreenshot(_ sender: Any?) { sessionTabs.selectedSession?.captureScreenshot(copyToClipboard: true) }
-    @objc func toggleRecording(_ sender: Any?) { sessionTabs.selectedSession?.toggleRecording() }
+    @objc func takeScreenshot(_ sender: Any?) { targetSession(sender)?.captureScreenshot(copyToClipboard: false) }
+    @objc func copyScreenshot(_ sender: Any?) { targetSession(sender)?.captureScreenshot(copyToClipboard: true) }
+    @objc func toggleRecording(_ sender: Any?) { targetSession(sender)?.toggleRecording() }
+
+    /// Take Screenshot, Copy Screenshot, and Start Recording, for the Session menu and the tab actions menu.
+    /// Copy Screenshot is a visible item, because an alternate would only show while holding all four modifiers.
+    /// Validation retitles the recording item while a recording runs or finishes.
+    static func makeCaptureItems() -> [NSMenuItem] {
+        let chord: NSEvent.ModifierFlags = [.control, .option, .command]
+        let take = NSMenuItem(title: "Take Screenshot", action: #selector(takeScreenshot(_:)), keyEquivalent: "s")
+        take.keyEquivalentModifierMask = chord
+        let copy = NSMenuItem(title: "Copy Screenshot", action: #selector(copyScreenshot(_:)), keyEquivalent: "s")
+        copy.keyEquivalentModifierMask = chord.union(.shift)
+        let record = NSMenuItem(title: "Start Recording", action: #selector(toggleRecording(_:)), keyEquivalent: "r")
+        record.keyEquivalentModifierMask = chord
+        return [take, copy, record]
+    }
+
+    /// An item from a tab's own menu names its tab. Other items act on the shown tab.
+    private func targetSession(_ sender: Any?) -> SessionViewController? {
+        if let id = (sender as? NSMenuItem)?.representedObject as? UUID { return sessionTabs.session(for: id) }
+        return sessionTabs.selectedSession
+    }
 
     /// The button has already switched to the state the click asks for.
     @objc private func toggleKeyboardCapture(_ sender: NSButton) {
@@ -277,7 +297,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
     }
 
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
-        let session = sessionTabs.selectedSession
+        let session = targetSession(menuItem)
         switch menuItem.action {
         case #selector(showHome(_:)):
             return canChangeTabs
@@ -326,12 +346,32 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
         }
         let point = tabStrip.convert(event.locationInWindow, from: nil)
         guard tabStrip.bounds.contains(point), let id = tabStripLayout.tab(at: point) else { return false }
-        let menu = NSMenu()
-        let item = menu.addItem(withTitle: "Close Tab", action: #selector(closeClickedTab(_:)), keyEquivalent: "")
-        item.target = self
-        item.representedObject = id
-        NSMenu.popUpContextMenu(menu, with: event, for: tabStrip)
+        NSMenu.popUpContextMenu(tabMenu(for: id, withCapture: false), with: event, for: tabStrip)
         return true
+    }
+
+    /// Hangs the tab's menu under its actions button, centered like Safari's page menu. AppKit has no
+    /// public menu with an arrow, so it is a plain pop-up menu. `button` is in the strip's flipped coordinates.
+    private func showTabActions(for id: UUID, below button: CGRect) {
+        let menu = tabMenu(for: id, withCapture: true)
+        menu.popUp(positioning: nil, at: NSPoint(x: button.midX - menu.size.width / 2, y: button.maxY + 6), in: tabStrip)
+    }
+
+    /// The context menu has the tab items. The actions button's menu puts the capture items first.
+    private func tabMenu(for id: UUID, withCapture: Bool) -> NSMenu {
+        let menu = NSMenu()
+        if withCapture {
+            for item in Self.makeCaptureItems() {
+                item.target = self
+                item.representedObject = id
+                menu.addItem(item)
+            }
+            menu.addItem(.separator())
+        }
+        let close = menu.addItem(withTitle: "Close Tab", action: #selector(closeClickedTab(_:)), keyEquivalent: "")
+        close.target = self
+        close.representedObject = id
+        return menu
     }
 
     @objc private func closeClickedTab(_ sender: NSMenuItem) {
@@ -492,7 +532,8 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
             onStopRecording: { [weak self] id in
                 guard let session = self?.sessionTabs.session(for: id) else { return }
                 Task { await session.stopRecording() }
-            }
+            },
+            onShowActions: { [weak self] id, button in self?.showTabActions(for: id, below: button) }
         )
         tabStrip.sizingOptions = []
         tabStrip.safeAreaRegions = []
