@@ -23,6 +23,7 @@ final class SessionTabs {
     /// Called synchronously after the selection changes, so the window shows the page before a session starts.
     @ObservationIgnored var onSelectionChange: ((_ old: UUID?, _ new: UUID?) -> Void)?
     @ObservationIgnored private var sessions: [UUID: SessionViewController] = [:]
+    @ObservationIgnored private var closingCaptures: [UUID: SessionCapture] = [:]
     @ObservationIgnored private let credentialStore = CredentialStore()
 
     /// The session state of each open tab, keyed by connection ID. A connection without a tab has no entry.
@@ -106,7 +107,16 @@ final class SessionTabs {
             let neighbor = tabs.indices.contains(index + 1) ? tabs[index + 1].id : index > 0 ? tabs[index - 1].id : nil
             select(neighbor)
         }
-        sessions.removeValue(forKey: id)?.close()
+        if let session = sessions.removeValue(forKey: id) {
+            let capture = session.capture
+            let token = UUID()
+            closingCaptures[token] = capture
+            session.close()
+            Task { [self] in
+                await capture.stopRecording()
+                closingCaptures[token] = nil
+            }
+        }
         tabs.remove(at: index)
     }
 
@@ -122,6 +132,18 @@ final class SessionTabs {
 
     func disconnectAll() {
         for session in sessions.values { session.disconnect() }
+    }
+
+    var unfinishedCaptureURLs: [URL] {
+        (sessions.values.map(\.capture) + Array(closingCaptures.values)).compactMap(\.recordingURL)
+    }
+
+    /// Includes already closed tabs whose writers are still finishing.
+    func finishCaptures() async {
+        let captures = sessions.values.map(\.capture) + Array(closingCaptures.values)
+        await withTaskGroup(of: Void.self) { group in
+            for capture in captures { group.addTask { await capture.stopRecording() } }
+        }
     }
 
     private func update(_ id: UUID, _ change: (inout Tab) -> Void) {

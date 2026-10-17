@@ -1,11 +1,13 @@
 import AppKit
 import RemoraCore
+import os
 
 @main @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var mainWindowController: MainWindowController?
     private var settingsWindowController: SettingsWindowController?
     private let sessionTabs = SessionTabs()
+    private var terminationPending = false
     #if DEBUG
     private var rendererDemo: RendererDemo?
     private var shortcutCaptureDemo: ShortcutCaptureDemo?
@@ -51,8 +53,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        guard !terminationPending else { return .terminateLater }
+        terminationPending = true
         sessionTabs.disconnectAll()
-        return .terminateNow
+        Task { @MainActor in
+            await sessionTabs.finishCaptures()
+            if terminationPending {
+                terminationPending = false
+                sender.reply(toApplicationShouldTerminate: true)
+            }
+        }
+        // Writers have their own eight-second cancellation deadline. This is the app-level bound.
+        Task { @MainActor in
+            try? await Task.sleep(for: .seconds(10))
+            if terminationPending {
+                let log = Logger(subsystem: "dev.sadiksaifi.Remora", category: "Capture")
+                for url in sessionTabs.unfinishedCaptureURLs {
+                    log.error("Quit timed out finishing \(url.path, privacy: .public). The reserved file and a hidden .Remora-*.partial.mov may remain in its folder.")
+                }
+                terminationPending = false
+                sender.reply(toApplicationShouldTerminate: true)
+            }
+        }
+        return .terminateLater
     }
 
     func applicationWillTerminate(_ notification: Notification) {

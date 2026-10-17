@@ -38,6 +38,7 @@ final class SessionViewController: NSViewController {
     private var statusView: NSHostingView<SessionStatusView>?
     private var closed = false
     private let display: SessionDisplay
+    let capture = SessionCapture(media: AppleCaptureMedia(), destination: ScreenshotDestination())
 
     init(
         connection: Connection, credentialStore: CredentialStore,
@@ -54,6 +55,7 @@ final class SessionViewController: NSViewController {
         self.onClose = onClose
         display = SessionDisplay(view: container)
         super.init(nibName: nil, bundle: nil)
+        capture.onRecordingActivityChange = { [weak self] active in self?.display.setRecording(active) }
         container.onResize = { [weak self] in self?.display.requestResize() }
         container.onVisibilityChange = { [weak self] in self?.display.visibilityChanged() }
     }
@@ -98,6 +100,8 @@ final class SessionViewController: NSViewController {
     }
 
     func disconnect() {
+        finishCapture()
+        capture.frames.clear()
         state = .disconnected(nil)
         desktopView?.setSessionConnected(false)
         overlays = nil
@@ -139,7 +143,37 @@ final class SessionViewController: NSViewController {
     var isConnected: Bool { state == .connected }
     var hasKeyboard: Bool { state == .connected && view.window?.firstResponder === desktopView }
 
-    func disconnectSession() { session?.disconnect() }
+    func disconnectSession() {
+        finishCapture()
+        session?.disconnect()
+    }
+
+    private func finishCapture() {
+        let capture = capture
+        Task {
+            if case .failure(let failure) = await capture.stopRecording() {
+                sessionLog.error("Capture: \(failure.localizedDescription, privacy: .public)")
+            }
+        }
+    }
+
+    func takeScreenshot(copyToClipboard: Bool = false) async throws -> URL? {
+        if copyToClipboard {
+            let png = try await capture.screenshotPNG()
+            NSPasteboard.general.clearContents()
+            guard NSPasteboard.general.setData(png, forType: .png) else {
+                throw CaptureFailure.image("Could not write to the clipboard.")
+            }
+            return nil
+        }
+        return try await capture.saveScreenshot(connectionName: connection.name)
+    }
+
+    func startRecording() throws { try capture.startRecording(connectionName: connection.name) }
+
+    @discardableResult
+    func stopRecording() async -> Result<URL, CaptureFailure>? { await capture.stopRecording() }
+
     func sendCtrlAltDelete() { desktopView?.sendCtrlAltDelete() }
 
     func releaseKeyboardCapture() {
@@ -200,7 +234,7 @@ final class SessionViewController: NSViewController {
                 password: currentCredentials.password.isEmpty ? nil : currentCredentials.password,
                 desktopSize: desktopSize, scaleFactor: scaleFactor, allowsDynamicResize: allowsDynamicResize
             )
-            let session = RDPSession(configuration: configuration, frameSink: RendererFrameSink(renderer: renderer))
+            let session = RDPSession(configuration: configuration, frameSink: RendererFrameSink(renderer: renderer, capture: capture.frames.makeSource()))
             let desktopView = RemoteDesktopView(renderer: renderer)
             desktopView.input = session
             self.desktopView = desktopView
@@ -263,6 +297,8 @@ final class SessionViewController: NSViewController {
                 }
                 overlays?.reconnecting(attempt: attempt)
             case .disconnected(let reason):
+                finishCapture()
+                capture.frames.clear()
                 desktopView.setSessionConnected(false)
                 overlays = nil
                 clipboardSync = nil
@@ -493,8 +529,10 @@ private final class SessionContainerView: NSView {
 
 private struct RendererFrameSink: FrameSink {
     let renderer: FrameRenderer
+    let capture: any FrameSink
 
     func consume(_ frame: BorrowedFrame) {
+        capture.consume(frame)
         renderer.ingest(pixels: frame.pixels, width: frame.width, height: frame.height,
                         bytesPerRow: frame.stride, dirty: frame.dirtyRectangles.map {
             DirtyRect(x: $0.x, y: $0.y, width: $0.width, height: $0.height)
