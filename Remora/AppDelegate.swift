@@ -4,6 +4,7 @@ import RemoraCore
 @main @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var connectionsWindowController: ConnectionsWindowController?
+    private let sessionWindows = SessionWindows()
 
     static func main() {
         let application = NSApplication.shared
@@ -20,7 +21,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         do {
             connectionsWindowController = ConnectionsWindowController(
                 connectionStore: try ConnectionStore(),
-                credentialStore: CredentialStore()
+                credentialStore: CredentialStore(),
+                sessionWindows: sessionWindows
             )
             showConnectionsWindow()
         } catch {
@@ -53,8 +55,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func showHelp(_ sender: Any?) {
         let alert = NSAlert()
         alert.messageText = "Remora Help"
-        alert.informativeText = "Remora is a personal remote desktop client. Connection editing is coming soon."
+        alert.informativeText = "Remora is a personal remote desktop client."
         alert.runModal()
+    }
+
+    @objc private func showConnectionsWindow(_ sender: Any?) {
+        showConnectionsWindow()
     }
 
     private func showConnectionsWindow() {
@@ -84,6 +90,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         let fileMenu = addMenu("File", to: mainMenu)
         fileMenu.addItem(withTitle: "New Connection", action: #selector(newConnection(_:)), keyEquivalent: "n").target = self
+        fileMenu.addItem(withTitle: "Connect", action: #selector(ConnectionsViewController.connect(_:)), keyEquivalent: "o")
+        fileMenu.addItem(.separator())
         fileMenu.addItem(withTitle: "Close Window", action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w")
 
         let editMenu = addMenu("Edit", to: mainMenu)
@@ -94,8 +102,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         editMenu.addItem(withTitle: "Cut", action: #selector(NSText.cut(_:)), keyEquivalent: "x")
         editMenu.addItem(withTitle: "Copy", action: #selector(NSText.copy(_:)), keyEquivalent: "c")
         editMenu.addItem(withTitle: "Paste", action: #selector(NSText.paste(_:)), keyEquivalent: "v")
-        editMenu.addItem(withTitle: "Delete", action: #selector(ConnectionsViewController.delete(_:)), keyEquivalent: "")
+        let delete = editMenu.addItem(
+            withTitle: "Delete",
+            action: #selector(ConnectionsViewController.delete(_:)),
+            keyEquivalent: String(UnicodeScalar(NSBackspaceCharacter)!)
+        )
+        delete.keyEquivalentModifierMask = .command
         editMenu.addItem(withTitle: "Select All", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
+        editMenu.addItem(.separator())
+        editMenu.addItem(withTitle: "Find…", action: #selector(ConnectionsWindowController.startSearch(_:)), keyEquivalent: "f")
 
         let viewMenu = addMenu("View", to: mainMenu)
         let fullScreen = viewMenu.addItem(withTitle: "Enter Full Screen", action: #selector(NSWindow.toggleFullScreen(_:)), keyEquivalent: "f")
@@ -104,6 +119,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let windowMenu = addMenu("Window", to: mainMenu)
         windowMenu.addItem(withTitle: "Minimize", action: #selector(NSWindow.performMiniaturize(_:)), keyEquivalent: "m")
         windowMenu.addItem(withTitle: "Zoom", action: #selector(NSWindow.performZoom(_:)), keyEquivalent: "")
+        windowMenu.addItem(.separator())
+        windowMenu.addItem(withTitle: "Connections", action: #selector(showConnectionsWindow(_:)), keyEquivalent: "0").target = self
         windowMenu.addItem(.separator())
         windowMenu.addItem(withTitle: "Bring All to Front", action: #selector(NSApplication.arrangeInFront(_:)), keyEquivalent: "")
         NSApplication.shared.windowsMenu = windowMenu
