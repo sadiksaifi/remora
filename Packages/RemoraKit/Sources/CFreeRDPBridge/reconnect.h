@@ -3,7 +3,8 @@
 #include "input.h"
 #include <stdatomic.h>
 
-/* Runs on the session thread; FreeRDP retains the cookie, settings and channels. */
+/* Runs on the session thread; redirected sessions restart at the original host,
+ * while other sessions retain FreeRDP's auto-reconnect cookie. */
 BOOL rm_reconnect(freerdp *instance, RMInput *input, const RMRDPCallbacks *callbacks,
                   void *user, const atomic_bool *aborted);
 #endif

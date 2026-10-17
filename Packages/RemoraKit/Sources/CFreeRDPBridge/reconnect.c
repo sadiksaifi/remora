@@ -19,11 +19,33 @@ static BOOL network_failure(freerdp *instance, bool retrying) {
     }
 }
 
+static bool redirected(freerdp *instance) {
+    const rdpSettings *settings = instance->context->settings;
+    return freerdp_settings_get_uint32(settings, FreeRDP_RedirectionFlags) != 0 ||
+           freerdp_settings_get_bool(settings, FreeRDP_RdstlsSecurity);
+}
+
+static bool handover_authentication_failed(freerdp *instance) {
+    if (!redirected(instance))
+        return false;
+    switch (freerdp_get_last_error(instance->context)) {
+        case FREERDP_ERROR_AUTHENTICATION_FAILED:
+        case FREERDP_ERROR_CONNECT_LOGON_FAILURE:
+        case FREERDP_ERROR_CONNECT_WRONG_PASSWORD:
+        case FREERDP_ERROR_CONNECT_ACCESS_DENIED:
+        case FREERDP_ERROR_CONNECT_NO_OR_MISSING_CREDENTIALS:
+            return true;
+        default:
+            return false;
+    }
+}
+
 BOOL rm_reconnect(freerdp *instance, RMInput *input, const RMRDPCallbacks *callbacks,
                   void *user, const atomic_bool *aborted) {
     if (atomic_load(aborted) || !network_failure(instance, false) ||
         !freerdp_settings_get_bool(instance->context->settings, FreeRDP_AutoReconnectionEnabled))
         return FALSE;
+    bool fresh = redirected(instance);
     unsigned delay = 1;
     for (unsigned attempt = 1; attempt <= 20 && !atomic_load(aborted); attempt++) {
         if (callbacks->reconnecting)
@@ -37,14 +59,25 @@ BOOL rm_reconnect(freerdp *instance, RMInput *input, const RMRDPCallbacks *callb
         }
         if (atomic_load(aborted))
             return FALSE;
-        /* Unlike a fresh context, this keeps the auto-reconnect cookie and runs
-         * FreeRDP's channel disconnect/rebind logic. GNOME Remote Login sends
-         * LB_LOAD_BALANCE_INFO without a new target: FreeRDP keeps the original
-         * host plus the routing token/RDSTLS settings, rather than inventing a target. */
-        if (freerdp_reconnect(instance))
+        BOOL connected;
+        if (fresh) {
+            /* GNOME Remote Login's RDSTLS handover credentials are one-use.
+             * Restore FreeRDP's pre-connect backup: original host/port and
+             * persisted RDP credentials, without redirection state or cookies.
+             * Full disconnect/connect also tears down and reloads GDI/channels;
+             * the owning session, window and renderer remain alive. */
+            if (!freerdp_disconnect(instance) || !freerdp_context_reset(instance) ||
+                atomic_load(aborted))
+                return FALSE;
+            connected = freerdp_connect(instance);
+        } else {
+            connected = freerdp_reconnect(instance);
+        }
+        if (connected)
             return !atomic_load(aborted);
-        if (!network_failure(instance, true))
+        if (!network_failure(instance, true) && !handover_authentication_failed(instance))
             return FALSE;
+        fresh = fresh || redirected(instance);
         delay = delay >= 5 ? 10 : delay * 2;
     }
     return FALSE;
