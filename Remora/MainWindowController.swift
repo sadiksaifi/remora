@@ -268,8 +268,9 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
         } else {
             "Keyboard not captured."
         }
-        button.toolTip = description
-        button.setAccessibilityLabel(description)
+        // The toolbar's accessibility element for the item reads its label as the description
+        // and its tooltip as the help, so VoiceOver hears "Keyboard Capture", the check state, then this text.
+        keyboardCaptureToolbarItem.toolTip = description
     }
 
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
