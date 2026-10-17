@@ -236,7 +236,7 @@ static BOOL authenticate(freerdp *instance, char **username, char **password,
     (void)reason;
     RMRDPSession *s = session_of(instance->context);
     if (s->reconnecting)
-        return FALSE; /* A rejected credential ends recovery without prompting/retrying. */
+        return FALSE; /* Recovery uses persisted RDP credentials without prompting. */
     if (!request_credentials(s, username, password, domain,
                               *username && (*username)[0] && *password))
         return FALSE;
