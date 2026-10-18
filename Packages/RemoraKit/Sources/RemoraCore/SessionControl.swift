@@ -22,7 +22,7 @@ public struct SessionControl: Sendable {
     public private(set) var lastResume: Summary?
     public private(set) var resumeRevision = 0
     private var handover: State?
-    private var pauseFrame = 0
+    private var pauseFrame: Int?
 
     public init() {}
     public var isTransferring: Bool { handover != nil }
@@ -88,6 +88,7 @@ public struct SessionControl: Sendable {
     }
 
     public mutating func invalidateObservation() {
+        pauseFrame = nil
         if needsFrames { observationRequired = true }
     }
 }

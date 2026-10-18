@@ -78,3 +78,13 @@ import Testing
     #expect(!control.isTransferring)
     #expect(!control.needsFrames)
 }
+
+@Test func resumeTreatsAReplacedFrameCounterAsChanged() throws {
+    var control = SessionControl()
+    try control.attach()
+    control.beginHandover(stopping: false, frame: 1)
+    control.completeHandover()
+    control.invalidateObservation()
+    // A new session attempt can reach the same frame number with different pixels.
+    #expect(control.resume(frame: 1)?.screenChanged == true)
+}
