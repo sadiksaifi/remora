@@ -261,7 +261,10 @@ private struct InputPlan {
         case "type":
             try request.validateArguments(["text"])
             let text = try request.string("text", required: true)!
-            guard text.utf8.count <= 262_144 else { throw ControlFailure(.invalidArgument, "Text exceeds 256 KiB of UTF-8.") }
+            // Check before expanding the text into steps.
+            guard duration + Double(text.unicodeScalars.count) * 5 <= 60_000 else {
+                throw ControlFailure(.invalidArgument, "Input exceeds 60 seconds of intended duration.")
+            }
             guard capabilities.contains(.unicode) else { throw ControlFailure(.unsupported, "The server did not negotiate Unicode keyboard input.") }
             for scalar in text.unicodeScalars { event(.unicode(scalar)); delay(5) }
         case "key":

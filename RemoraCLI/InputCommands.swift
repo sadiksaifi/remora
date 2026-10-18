@@ -55,7 +55,7 @@ struct DragCommand: AsyncParsableCommand {
         var args: [String: ControlValue] = ["from": try inputPoint(from), "to": try inputPoint(to), "button": .string(button),
             "durationMs": .number(try CommandTimeout(duration).seconds * 1000)]
         if let modifiers { args["modifiers"] = .string(modifiers) }
-        try await options.execute(.init(command: "drag", session: target.target, arguments: basis.adding(to: args)))
+        try await options.execute(.init(command: "drag", session: target.target, arguments: basis.adding(to: args)), defaultTimeout: "60s")
     }
 }
 
@@ -89,7 +89,7 @@ struct TypeCommand: AsyncParsableCommand {
             }
             value = decoded
         }
-        try await options.execute(.init(command: "type", session: target.target, arguments: ["text": .string(value)]))
+        try await options.execute(.init(command: "type", session: target.target, arguments: ["text": .string(value)]), defaultTimeout: "60s")
     }
 }
 

@@ -111,17 +111,18 @@ void rm_input_free(RMInput *q) {
 
 HANDLE rm_input_event(RMInput *q) { return q->wake; }
 
-static bool enqueue(RMRDPSession *session, Command command) {
+/* Returns the agent sequence, or 0 when an agent command is refused or unallocated. */
+static uint64_t enqueue(RMRDPSession *session, Command command) {
     RMInput *q = rm_rdp_input(session);
     pthread_mutex_lock(&q->lock);
     if (command.type == COMMAND_AGENT) {
         if (command.request != q->request || (q->cancelled && command.agent.kind != RMRDP_AGENT_RELEASE)) {
             pthread_mutex_unlock(&q->lock);
-            return false;
+            return 0;
         }
         command.sequence = ++q->queued;
     }
-    bool allocated = true;
+    uint64_t result = command.sequence;
     if (command.type == COMMAND_POINTER) {
         command.movement = command.buttons == q->queued_buttons;
         q->queued_buttons = command.buttons;
@@ -142,13 +143,13 @@ static bool enqueue(RMRDPSession *session, Command command) {
             else q->head = copy;
             q->tail = copy;
         } else {
-            allocated = false;
+            result = 0;
             if (command.request) q->failed = true;
         }
     }
     SetEvent(q->wake);
     pthread_mutex_unlock(&q->lock);
-    return allocated;
+    return result;
 }
 
 void rm_rdp_key(RMRDPSession *s, uint16_t key, bool down) {
@@ -255,12 +256,7 @@ uint64_t rm_rdp_agent_begin(RMRDPSession *s) {
 }
 
 uint64_t rm_rdp_agent_send(RMRDPSession *s, uint64_t request, RMRDPAgentEvent event) {
-    if (!enqueue(s, (Command){ .type = COMMAND_AGENT, .request = request, .agent = event })) return 0;
-    RMInput *q = rm_rdp_input(s);
-    pthread_mutex_lock(&q->lock);
-    const uint64_t sequence = q->queued;
-    pthread_mutex_unlock(&q->lock);
-    return sequence;
+    return enqueue(s, (Command){ .type = COMMAND_AGENT, .request = request, .agent = event });
 }
 
 void rm_rdp_agent_cancel(RMRDPSession *s, uint64_t request) {
