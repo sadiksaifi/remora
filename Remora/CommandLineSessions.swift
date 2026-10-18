@@ -176,7 +176,12 @@ extension CommandLineController {
             let all = try request.flag("all")
             guard !all || request.session == nil else { throw ControlFailure(.invalidArgument, "Use --all without --session.") }
             let targets = all ? sessions.tabs.compactMap { sessions.session(for: $0.id) } : [try resolveSession(request.session)]
-            for session in targets { try await session.handoverAgentControl(stopping: true, by: "cli") }
+            var failure: Error?
+            for session in targets {
+                do { try await session.handoverAgentControl(stopping: true, by: "cli") }
+                catch { if failure == nil { failure = error } }
+            }
+            if let failure { throw failure }
             return .array(targets.map(sessionInfo))
         }
         let allowed: Set<String>
