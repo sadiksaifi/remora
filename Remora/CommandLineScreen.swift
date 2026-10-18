@@ -72,6 +72,10 @@ extension CommandLineController {
                     path = try await session.capture.saveScreenshot(png, connectionName: session.connection.name,
                         output: output.map { URL(fileURLWithPath: $0) }).path
                 }
+                guard session.inputGeometryRevision == geometryRevision else {
+                    throw ControlFailure(.imageExpired, "Control changed during capture. Take another screenshot.")
+                }
+                session.observedForAgent()
                 screenshotReceipts.append(receipt)
                 if screenshotReceipts.count > 32 { screenshotReceipts.removeFirst(screenshotReceipts.count - 32) }
                 var fields: [String: ControlValue] = [
