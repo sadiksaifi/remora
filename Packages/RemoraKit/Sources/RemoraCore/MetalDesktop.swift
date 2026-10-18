@@ -19,19 +19,23 @@ public final class MetalDesktop: CaptureSource, Sendable {
     deinit { state.withLock { $0.dropPending() } }
 
     public var size: DesktopSize? { state.withLock { $0.storage?.size } }
+    public var revision: Int { state.withLock { $0.revision } }
+
     public func needsSubmission(redraw: Bool) -> Bool {
         state.withLock { $0.pending != nil || (redraw && $0.storage?.hasSubmitted == true) }
     }
 
-    public func setFrameObserver(_ observer: (@Sendable (TimeInterval) -> Void)?) {
+    /// Callbacks only enqueue work. Never take a snapshot from inside a callback.
+    public func addFrameObserver(_ observer: @escaping @Sendable (TimeInterval) -> Void) -> UUID {
+        let id = UUID()
         state.withLock {
-            $0.observer = observer
-            if observer != nil, $0.storage != nil {
-                $0.arrival = ProcessInfo.processInfo.systemUptime
-                observer?($0.arrival)
-            }
+            $0.observers[id] = observer
+            if $0.storage != nil { observer($0.arrival) }
         }
+        return id
     }
+
+    public func removeFrameObserver(_ id: UUID) { _ = state.withLock { $0.observers.removeValue(forKey: id) } }
 
     /// Only the renderer's original dirty-rectangle copies. No capture work unless an observer is installed.
     @discardableResult
@@ -76,11 +80,9 @@ public final class MetalDesktop: CaptureSource, Sendable {
                 copied += rowBytes * rectangle.height
                 state.damage.insert(rectangle)
             }
-            // No clock read or notification unless recording has installed an observer.
-            if let observer = state.observer {
-                state.arrival = ProcessInfo.processInfo.systemUptime
-                observer(state.arrival)
-            }
+            state.revision += 1
+            state.arrival = ProcessInfo.processInfo.systemUptime
+            for observer in state.observers.values { observer(state.arrival) }
             return copied
         }
     }
@@ -89,6 +91,7 @@ public final class MetalDesktop: CaptureSource, Sendable {
         public let command: any MTLCommandBuffer
         public let size: DesktopSize
         public let arrival: TimeInterval
+        public let revision: Int
         public let rectangleCount: Int
     }
 
@@ -127,7 +130,7 @@ public final class MetalDesktop: CaptureSource, Sendable {
             // enqueue, rather than commit, establishes order without encoding under the ingest lock.
             command.enqueue()
             return (Submission(command: command, size: storage.size, arrival: state.arrival,
-                               rectangleCount: rectangles.count), storage.texture)
+                               revision: state.revision, rectangleCount: rectangles.count), storage.texture)
         }
         do { try encode(prepared.1, prepared.0.command) }
         catch { prepared.0.command.commit(); throw error }
@@ -155,7 +158,7 @@ public final class MetalDesktop: CaptureSource, Sendable {
             throw CaptureFailure.image(submission.command.error?.localizedDescription ?? "Desktop readback failed.")
         }
         return CaptureFrame(copying: BorrowedFrame(pixels: readback.contents(), width: submission.size.width,
-            height: submission.size.height, stride: stride, dirtyRectangles: []), arrival: submission.arrival)
+            height: submission.size.height, stride: stride, dirtyRectangles: []), arrival: submission.arrival, revision: submission.revision)
     }
 
     private struct State {
@@ -163,7 +166,8 @@ public final class MetalDesktop: CaptureSource, Sendable {
         var pending: Int?
         var nextSlot = 0
         var damage = FrameDamage()
-        var observer: (@Sendable (TimeInterval) -> Void)?
+        var observers: [UUID: @Sendable (TimeInterval) -> Void] = [:]
+        var revision = 0
         var arrival: TimeInterval = 0
 
         mutating func dropPending() {
