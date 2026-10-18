@@ -111,10 +111,7 @@ public struct CursorMotion: Sendable {
     public var bounds: CGRect
     /// Drawn size multiplier; 1 is Codex's size. Keeps the hotspot on the drawn tip.
     public var size: Double = 1
-    public var isVisible = false {
-        didSet { if isVisible && !oldValue { appearStarted = time } }
-    }
-    private var appearStarted = -Double.infinity
+    public var isVisible = false
     /// Set while the agent waits on the model. The cursor sways only while it is also idle.
     public var isThinking = false
     public private(set) var center: CGPoint
@@ -280,7 +277,8 @@ public struct CursorMotion: Sendable {
         func settled(_ spring: Spring, _ target: Double) -> Bool {
             abs(spring.value - target) < 0.0001 && abs(spring.velocity) < 0.001
         }
-        return !isMoving && swayStart == nil && settled(rotation, CursorTuning.restRotation)
+        return !isMoving && swayStart == nil
+            && abs(wrapAngle(rotation.value - CursorTuning.restRotation)) < 0.0001 && abs(rotation.velocity) < 0.001
             && settled(press, pressTarget) && settled(appear, isVisible ? 1 : 0)
             && settled(along, 1) && settled(across, 1) && settled(haloAtSpeed, 1)
     }
@@ -404,8 +402,7 @@ public struct CursorMotion: Sendable {
             scaleAcross: across,
             scaleAlong: along,
             opacity: visibility,
-            blurRadius: reduceMotion || !isVisible || time - appearStarted >= CursorStyle.appearBlurDuration
-                ? 0 : (1 - min(max(appear.value, 0), 1)) * CursorStyle.appearBlur,
+            blurRadius: reduceMotion ? 0 : (1 - visibility) * CursorStyle.appearBlur,
             haloCenter: drawnCenter + correction + (CursorTuning.haloOffset * (size * scale)).rotated(by: angle),
             haloScale: haloAtSpeed.value * press.value * (0.7 + 0.3 * appear.value),
             hotspot: drawnHotspot + correction)
@@ -489,7 +486,6 @@ public enum CursorStyle {
         (0, 0.027), (4, 0.027), (8, 0.0267), (12, 0.0135), (16, 0.0084),
         (20, 0.0052), (24, 0.0016), (28, 0.0065), (32, 0.0051), (36, 0)]
     public static let appearBlur = CursorTuning.appearMaxBlur
-    public static let appearBlurDuration = 0.3
 }
 
 /// A frozen renderer contract. Positions and blur are desktop pixels, with y growing downward.

@@ -127,6 +127,52 @@ func cursorScootTiltDependsOnlyOnSignedHorizontalVelocity(dx: Double) {
     #expect(cursor.isSettled)
 }
 
+@Test func cursorInterruptedMoveSettlesAcrossAFullHeadingTurn() {
+    var cursor = CursorMotion(hotspot: CGPoint(x: 756, y: 491), bounds: bounds)
+    cursor.isVisible = true
+    cursor.step(1)
+    cursor.move(to: CGPoint(x: 647, y: 100))
+    cursor.step(0.279)
+    let target = CGPoint(x: 1003, y: 746)
+    cursor.move(to: target)
+    #expect(!cursor.isSettled)
+    for _ in 0..<180 { cursor.step(1.0 / 60) }
+    #expect(!cursor.isMoving)
+    #expect(distance(cursor.pose.hotspot, target) < 0.5)
+    let error = cursor.pose.rotation - CursorTuning.restRotation
+    #expect(abs(atan2(sin(error), cos(error))) < 0.0001)
+    #expect(cursor.isSettled)
+}
+
+@Test(arguments: [false, true])
+func cursorVisibilityBlurFollowsOpacity(reduceMotion: Bool) {
+    var cursor = CursorMotion(hotspot: CGPoint(x: 400, y: 400), bounds: bounds)
+    cursor.reduceMotion = reduceMotion
+    for visible in [true, false] {
+        cursor.isVisible = visible
+        cursor.step(0.05)
+        #expect(cursor.pose.opacity > 0 && cursor.pose.opacity < 1)
+        let expectedBlur = reduceMotion ? 0 : (1 - cursor.pose.opacity) * 5
+        #expect(abs(cursor.pose.blurRadius - expectedBlur) < 0.000001)
+        for unit in [1.0, 2] {
+            let frame = AgentCursorFrame(pose: cursor.pose, unit: unit)
+            let sprite = SessionOverlayDrawing().agentCursor(frame)
+            #expect(abs(frame.pose.blurRadius / unit - expectedBlur) < 0.000001)
+            #expect(abs(sprite.blurRadius - expectedBlur * unit) < 0.000001)
+        }
+        for _ in 0..<120 {
+            cursor.step(1.0 / 120)
+            let expectedBlur = reduceMotion ? 0 : (1 - cursor.pose.opacity) * 5
+            #expect(abs(cursor.pose.blurRadius - expectedBlur) < 0.000001)
+        }
+        #expect(abs(cursor.pose.opacity - (visible ? 1 : 0)) < 0.0001)
+        #expect(cursor.isSettled)
+        if reduceMotion {
+            #expect(cursor.pose.scaleAcross == 1 && cursor.pose.scaleAlong == 1)
+        }
+    }
+}
+
 @Test func cursorReducedMotionCrossfadesWithoutStretchOrSway() {
     var cursor = CursorMotion(hotspot: moves[0].from, bounds: bounds)
     cursor.reduceMotion = true
