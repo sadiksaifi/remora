@@ -16,7 +16,7 @@ public struct AgentSkill: Sendable {
 
     public let folder: URL
 
-    public init(app: URL) { folder = app.resolvingSymlinksInPath().appending(path: "Contents/Resources/skills/remora") }
+    public init(app: URL) { folder = app.appending(path: "Contents/Resources/skills/remora") }
 
     /// The `remora` link inside a skills folder.
     public func link(in skills: URL) -> CommandLineTool {

@@ -150,6 +150,7 @@ private struct CopyableText: View {
 private struct CommandLinePane: View {
     @AppStorage(AppSettings.showAgentPointerKey) private var showAgentPointer = true
     @State private var state: CommandLineTool.State?
+    @State private var showsPathAdvice = false
     private let tool = CommandLineTool(target: Bundle.main.bundleURL.appending(path: "Contents/Helpers/remora"))
     private static let pointerTitle = "Show pointer while the command line controls a session"
 
@@ -158,8 +159,27 @@ private struct CommandLinePane: View {
             Section {
                 LabeledContent {
                     switch state {
-                    case .notInstalled: Button("Install") { perform(tool.install) }
-                    case .installed: Button("Uninstall") { perform(tool.uninstall) }
+                    case .notInstalled:
+                        Button("Install") {
+                            perform(tool.install)
+                            showsPathAdvice = state == .installed
+                        }
+                    case .installed:
+                        HStack {
+                            // Row-specific help opens from an info button, as in System Settings.
+                            Button("PATH Setup", systemImage: "info.circle") { showsPathAdvice.toggle() }
+                                .labelStyle(.iconOnly)
+                                .buttonStyle(.borderless)
+                                .help("PATH Setup")
+                                .popover(isPresented: $showsPathAdvice, arrowEdge: .bottom) {
+                                    VStack(alignment: .leading, spacing: 7) {
+                                        Text(CommandLineTool.pathAdvice)
+                                        CopyableText(text: CommandLineTool.pathCommand)
+                                    }
+                                    .padding()
+                                }
+                            Button("Uninstall") { perform(tool.uninstall) }
+                        }
                     case .broken: Button("Repair") { perform(tool.repair) }
                     case .conflict: Button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting([tool.link]) }
                     case nil: EmptyView()
@@ -176,12 +196,6 @@ private struct CommandLinePane: View {
                     }
                 }
                 .accessibilityIdentifier("commandLineTool")
-                if state == .installed {
-                    VStack(alignment: .leading, spacing: 7) {
-                        Text(CommandLineTool.pathAdvice)
-                        CopyableText(text: CommandLineTool.pathCommand)
-                    }
-                }
             }
             AgentSkillSection()
             Section {
@@ -210,7 +224,6 @@ private struct CommandLinePane: View {
 /// Links the bundled agent skill into the shared Agent Skills folder and Claude Code's skills folder.
 private struct AgentSkillSection: View {
     @State private var states: [AgentSkill.Folder: CommandLineTool.State] = [:]
-    @State private var otherAgentsExpanded = false
     private let skill = AgentSkill(app: Bundle.main.bundleURL)
 
     var body: some View {
@@ -225,7 +238,7 @@ private struct AgentSkillSection: View {
                     switch states[folder] {
                     case .notInstalled: Button("Install") { perform(link.install) }
                     case .installed, .broken: Button("Remove") { perform(link.uninstall) }
-                    case .conflict: Button("Install") {}.disabled(true)
+                    case .conflict: Button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting([link.link]) }
                     case nil: EmptyView()
                     }
                 } label: {
@@ -243,13 +256,12 @@ private struct AgentSkillSection: View {
                 }
                 .accessibilityIdentifier("agentSkill-\(folder.rawValue)")
             }
-            DisclosureGroup("Other agents", isExpanded: $otherAgentsExpanded) {
+            DisclosureGroup("Other agents") {
                 VStack(alignment: .leading, spacing: 7) {
                     Text("Link this folder into the agent's skills folder.")
                     CopyableText(text: skill.folder.path)
                 }
             }
-            .accessibilityAction { otherAgentsExpanded.toggle() }
         }
         .onAppear(perform: refresh)
         // The user may change a skills folder while Remora is in the background.

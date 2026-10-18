@@ -74,22 +74,3 @@ func foreignLinksAreNeverReplacedOrRemoved(destination: String) throws {
     try link.uninstall()
     #expect(link.state == .notInstalled)
 }
-
-@Test func skillLinksAreSharedAcrossAppBundleAliases() throws {
-    let manager = FileManager.default
-    let root = manager.temporaryDirectory.appending(path: UUID().uuidString)
-    defer { try? manager.removeItem(at: root) }
-    let app = root.appending(path: "Remora.app")
-    let skill = AgentSkill(app: app)
-    try manager.createDirectory(at: skill.folder, withIntermediateDirectories: true)
-    let alias = root.appending(path: "Remora alias.app")
-    try manager.createSymbolicLink(at: alias, withDestinationURL: app)
-    let skills = root.appending(path: "skills")
-    let cliLink = skill.link(in: skills)
-    try cliLink.install()
-
-    let settingsLink = AgentSkill(app: alias).link(in: skills)
-    #expect(settingsLink.state == .installed)
-    try settingsLink.uninstall()
-    #expect(cliLink.state == .notInstalled)
-}
