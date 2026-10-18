@@ -32,6 +32,36 @@ final class RemoteDesktopView: NSView {
     private var redrawNeeded = true
     private(set) var remoteSize = CGSize.zero
 
+    /// The tab this desktop belongs to, for its accessibility label and identifier.
+    var accessibilityTab = (id: UUID(), title: "") {
+        didSet {
+            setAccessibilityLabel("Remote desktop, \(accessibilityTab.title)")
+            setAccessibilityIdentifier("remoteDesktop-\(accessibilityTab.id.uuidString)")
+            updateScreenElement()
+        }
+    }
+    /// The session controller's summary of status, keyboard, and recording. A change notifies accessibility clients.
+    var accessibilityState = "" {
+        didSet {
+            guard accessibilityState != oldValue else { return }
+            setAccessibilityValue(accessibilityState)
+            NSAccessibility.post(element: self, notification: .valueChanged)
+        }
+    }
+    var isKeyboardCaptured = false
+    /// Accessibility asks to capture (true) or release (false) the keyboard through the session controller.
+    var onAccessibilityCapture: ((Bool) -> Void)?
+    /// The drawn remote screen. Its frame is the area without letterbox bars and its value is the remote
+    /// size in pixels as "WIDTHxHEIGHT", so an agent maps a point to remote pixels with standard attributes.
+    private lazy var screenElement: NSAccessibilityElement = {
+        let element = NSAccessibilityElement()
+        element.setAccessibilityParent(self)
+        element.setAccessibilityElement(true)
+        element.setAccessibilityRole(.image)
+        element.setAccessibilityLabel("Remote screen")
+        return element
+    }()
+
     init(renderer: FrameRenderer) {
         self.renderer = renderer
         super.init(frame: .zero)
@@ -45,6 +75,9 @@ final class RemoteDesktopView: NSView {
         metalLayer.displaySyncEnabled = true
         metalLayer.backgroundColor = NSColor.black.cgColor
         wantsLayer = true
+        setAccessibilityElement(true)
+        setAccessibilityRole(.group)
+        setAccessibilityRoleDescription("Remote desktop")
     }
 
     required init?(coder: NSCoder) { fatalError("Use init(renderer:)") }
@@ -163,6 +196,7 @@ final class RemoteDesktopView: NSView {
         CATransaction.commit()
         redrawNeeded = true
         window?.invalidateCursorRects(for: self)
+        updateScreenElement()
     }
 
     private func refresh() {
@@ -170,6 +204,8 @@ final class RemoteDesktopView: NSView {
             if remoteSize != size {
                 remoteSize = size
                 window?.invalidateCursorRects(for: self)
+                updateScreenElement()
+                NSAccessibility.post(element: screenElement, notification: .valueChanged)
             }
             redrawNeeded = false
         }
@@ -181,4 +217,51 @@ final class RemoteDesktopView: NSView {
         init(view: RemoteDesktopView) { self.view = view }
         @objc func refresh(_ link: CADisplayLink) { view?.refresh() }
     }
+}
+
+// MARK: Accessibility
+
+/// One element for the whole desktop. The remote computer's apps are pixels here, not accessibility
+/// elements. Pressing or focusing it captures the keyboard the way a click does, without sending a click.
+extension RemoteDesktopView {
+    override func isAccessibilityFocused() -> Bool { window?.firstResponder === self }
+    override func setAccessibilityFocused(_ focused: Bool) { onAccessibilityCapture?(focused) }
+
+    override func accessibilityPerformPress() -> Bool {
+        onAccessibilityCapture?(true)
+        return true
+    }
+
+    override func accessibilityCustomActions() -> [NSAccessibilityCustomAction]? {
+        let captured = isKeyboardCaptured
+        return [NSAccessibilityCustomAction(name: captured ? "Release Keyboard Capture" : "Capture Keyboard") { [weak self] in
+            self?.onAccessibilityCapture?(!captured)
+            return true
+        }]
+    }
+
+    override func accessibilityChildren() -> [Any]? { (super.accessibilityChildren() ?? []) + [screenElement] }
+
+    override func accessibilityHelp() -> String? {
+        var help = "The remote computer's apps are not accessibility elements. Press or focus this desktop to capture the keyboard; Control-Option-Command-Escape releases it. Command acts as the Windows or Super key, Control as Control, and Option as Alt."
+        let content = screenRect
+        guard content.width > 0 else { return help + " The remote screen has not drawn yet." }
+        let scale = content.width / remoteSize.width
+        help += " The remote screen is \(Int(remoteSize.width)) by \(Int(remoteSize.height)) pixels, drawn at x \(Self.number(content.minX)), y \(Self.number(content.minY)), \(Self.number(content.width)) by \(Self.number(content.height)) points in this view, at \(Self.number(scale)) points per pixel, from the top left. Remote x = (view x - \(Self.number(content.minX))) / \(Self.number(scale)), and remote y = (view y - \(Self.number(content.minY))) / \(Self.number(scale))."
+        return help
+    }
+
+    /// The drawn remote screen in this view's flipped points, without letterbox bars.
+    private var screenRect: CGRect {
+        DesktopGeometry(remoteSize: remoteSize, drawableSize: bounds.size).contentRect.offsetBy(dx: bounds.minX, dy: bounds.minY)
+    }
+
+    private func updateScreenElement() {
+        screenElement.setAccessibilityIdentifier("remoteScreen-\(accessibilityTab.id.uuidString)")
+        screenElement.setAccessibilityValue("\(Int(remoteSize.width))x\(Int(remoteSize.height))")
+        screenElement.setAccessibilityFrameInParentSpace(screenRect)
+    }
+
+    /// Locale-independent, so agents can parse it.
+    private static func number(_ value: CGFloat) -> String { String(format: "%g", Double(value)) }
 }

@@ -32,6 +32,7 @@ final class SessionViewController: NSViewController {
     private(set) var state: SessionState = .connecting {
         didSet {
             if state != oldValue { onStateChange(state) }
+            updateDesktopAccessibility()
         }
     }
     private let container = SessionContainerView()
@@ -59,6 +60,7 @@ final class SessionViewController: NSViewController {
         super.init(nibName: nil, bundle: nil)
         capture.onRecordingActivityChange = { [weak self] active in
             self?.display.setRecording(active)
+            self?.updateDesktopAccessibility()
             if !active { self?.reportRecordingResult() }
         }
         container.onResize = { [weak self] in self?.display.requestResize() }
@@ -94,6 +96,7 @@ final class SessionViewController: NSViewController {
     func update(_ connection: Connection) {
         self.connection = connection
         credentials = nil
+        desktopView?.accessibilityTab = (connection.id, connection.name)
     }
 
     /// Ends the session and removes the tab's views. The tab can't reconnect afterwards.
@@ -129,6 +132,7 @@ final class SessionViewController: NSViewController {
     func didShow() {
         presentPendingSheet()
         display.requestResize()
+        focusStatus()
     }
 
     /// Gives the keyboard back to a connected desktop, for example after the search field closes.
@@ -162,7 +166,9 @@ final class SessionViewController: NSViewController {
     private func reportRecordingResult() {
         let capture = capture
         Task { [weak self] in
-            guard case .failure(let failure) = await capture.stopRecording() else { return }
+            let result = await capture.stopRecording()
+            self?.updateDesktopAccessibility()
+            guard case .failure(let failure) = result else { return }
             sessionLog.error("Capture: \(failure.localizedDescription, privacy: .public)")
             self?.presentCaptureFailure(failure)
         }
@@ -294,7 +300,15 @@ final class SessionViewController: NSViewController {
             self.session = session
             clipboardSync = ClipboardSync(session: session)
             desktopView.onFocus = { [weak self] in self?.clipboardSync?.focusGained() }
-            desktopView.onCaptureChange = { [weak self] captured in self?.onKeyboardCaptureChange(captured) }
+            desktopView.accessibilityTab = (connection.id, connection.name)
+            desktopView.onCaptureChange = { [weak self, weak desktopView] captured in
+                desktopView?.isKeyboardCaptured = captured
+                self?.updateDesktopAccessibility()
+                self?.onKeyboardCaptureChange(captured)
+            }
+            desktopView.onAccessibilityCapture = { [weak self] capture in
+                if capture { self?.focusDesktop() } else { self?.releaseKeyboardCapture() }
+            }
             display.attach(session)
             let events = session.events
             eventTask = Task { @MainActor [weak self] in
@@ -321,6 +335,7 @@ final class SessionViewController: NSViewController {
         switch event {
         case .stateChanged(let state):
             sessionLog.info("State: \(String(describing: state), privacy: .public)")
+            let previous = self.state
             self.state = state
             switch state {
             case .connecting:
@@ -333,6 +348,7 @@ final class SessionViewController: NSViewController {
                 clipboardSync?.sessionDidConnect()
                 dismissChallenge()
                 setContent(desktopView)
+                if case .reconnecting = previous { announce("Reconnected to “\(connection.name)”") }
                 overlays?.connected()
                 // Leave the keyboard with the search field while the user types in it.
                 if let window = view.window, (window.firstResponder as? NSTextView)?.isFieldEditor != true {
@@ -345,6 +361,9 @@ final class SessionViewController: NSViewController {
                 if let window = view.window, window.firstResponder === desktopView {
                     window.makeFirstResponder(nil)
                 }
+                if case .reconnecting = previous {} else {
+                    announce("Reconnecting to “\(connection.name)”, attempt \(attempt) of \(SessionStatusView.reconnectAttemptLimit)")
+                }
                 overlays?.reconnecting(attempt: attempt)
             case .disconnected(let reason):
                 finishCapture()
@@ -356,6 +375,7 @@ final class SessionViewController: NSViewController {
                 session = nil
                 display.disconnect()
                 showStatus(.disconnected(reason))
+                announce(SessionStatusView.title(for: reason))
             }
         case .remoteClipboardText(let text):
             clipboardSync?.receiveRemoteText(text)
@@ -541,7 +561,39 @@ final class SessionViewController: NSViewController {
         view.sizingOptions = []
         setContent(view)
         statusView = view
+        focusStatus()
         return view
+    }
+
+    /// Moves the keyboard into a shown status view once the desktop leaves, so Tab reaches its buttons.
+    /// Leaves it with a search field or any other view that still has it.
+    private func focusStatus() {
+        guard let statusView, content === statusView, let window = view.window else { return }
+        if let responder = window.firstResponder as? NSView, responder.window === window { return }
+        window.makeFirstResponder(statusView)
+    }
+
+    private func announce(_ message: String) {
+        NSAccessibility.post(element: view, notification: .announcementRequested,
+                             userInfo: [.announcement: message, .priority: NSAccessibilityPriorityLevel.high.rawValue])
+    }
+
+    /// The desktop's accessibility value: session status, keyboard capture, and recording.
+    private func updateDesktopAccessibility() {
+        guard let desktopView else { return }
+        var parts = [String]()
+        if case .reconnecting(let attempt) = state {
+            parts.append("Reconnecting, attempt \(attempt) of \(SessionStatusView.reconnectAttemptLimit)")
+        } else {
+            parts.append(state.statusTitle)
+        }
+        parts.append(desktopView.isKeyboardCaptured ? "keyboard captured" : "keyboard released")
+        switch capture.recordingState {
+        case .recording: parts.append("recording")
+        case .finishing: parts.append("finishing recording")
+        case .idle, .failed: break
+        }
+        desktopView.accessibilityState = parts.joined(separator: ", ")
     }
 }
 

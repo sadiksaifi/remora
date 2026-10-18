@@ -55,13 +55,17 @@ struct SessionCredentialsView: View {
                     TextField("Username", text: $username)
                         .focused($focusedField, equals: .username)
                         .autocorrectionDisabled()
+                        .accessibilityIdentifier("credentialsUsername")
                     KeychainPasswordField(title: "Password", text: $password, prompt: "Required")
                         .focused($focusedField, equals: .password)
+                        .accessibilityIdentifier("credentialsPassword")
                     TextField("Domain", text: $domain, prompt: Text("Optional"))
                         .autocorrectionDisabled()
+                        .accessibilityIdentifier("credentialsDomain")
                 }
                 Section {
                     Toggle("Remember this password in my keychain", isOn: $remember)
+                        .accessibilityIdentifier("credentialsRemember")
                 }
             }
             .formStyle(.grouped)
@@ -72,10 +76,12 @@ struct SessionCredentialsView: View {
                 Spacer()
                 Button("Cancel", role: .cancel, action: onCancel)
                     .keyboardShortcut(.cancelAction)
+                    .accessibilityIdentifier("credentialsCancel")
                 Button("Connect") {
                     onConnect(SessionCredentials(username: username, domain: domain, password: password), remember)
                 }
                 .keyboardShortcut(.defaultAction)
+                .accessibilityIdentifier("credentialsConnect")
             }
             .controlSize(.large)
             .padding([.horizontal, .bottom], 20)

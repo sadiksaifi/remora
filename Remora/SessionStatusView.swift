@@ -87,13 +87,16 @@ struct SessionStatusView: View {
         case .connecting, .reconnecting:
             Button("Cancel", action: onCancel)
                 .keyboardShortcut(.cancelAction)
+                .accessibilityIdentifier("sessionCancel")
         case .awaitingCredentials, .awaitingTrust:
             EmptyView()
         case .disconnected:
             HStack(spacing: 12) {
                 Button("Close", action: onClose)
+                    .accessibilityIdentifier("sessionClose")
                 Button("Reconnect", action: onReconnect)
                     .keyboardShortcut(.defaultAction)
+                    .accessibilityIdentifier("sessionReconnect")
             }
         }
     }
@@ -129,7 +132,7 @@ struct SessionStatusView: View {
         }
     }
 
-    private static func title(for reason: DisconnectReason?) -> String {
+    static func title(for reason: DisconnectReason?) -> String {
         switch reason {
         case .authenticationFailed: "Authentication Failed"
         case .certificateRejected: "Certificate Not Trusted"
@@ -188,8 +191,10 @@ struct ShortcutPermissionBanner: View {
             .frame(maxWidth: 440, alignment: .leading)
             HStack(spacing: 8) {
                 Button("Not Now", action: onDismiss)
+                    .accessibilityIdentifier("shortcutPermissionNotNow")
                 Button("Open System Settings", action: onOpenSettings)
                     .buttonStyle(.borderedProminent)
+                    .accessibilityIdentifier("shortcutPermissionOpenSettings")
             }
             .fixedSize()
         }
@@ -208,5 +213,6 @@ struct CaptureConfirmation: View {
             .padding(.horizontal, 16)
             .padding(.vertical, 10)
             .glassEffect(.regular, in: .capsule)
+            .accessibilityIdentifier("captureConfirmation")
     }
 }
