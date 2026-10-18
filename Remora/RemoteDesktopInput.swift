@@ -61,10 +61,15 @@ final class RemoteDesktopInput: NSObject {
             }
             return handled ? nil : event
         }
+        center.addObserver(self, selector: #selector(settingsChanged(_:)), name: UserDefaults.didChangeNotification, object: nil)
         center.addObserver(self, selector: #selector(focusLost(_:)), name: NSWindow.didResignKeyNotification, object: window)
         center.addObserver(self, selector: #selector(focusLost(_:)), name: NSApplication.didResignActiveNotification, object: nil)
         center.addObserver(self, selector: #selector(focusGained(_:)), name: NSWindow.didBecomeKeyNotification, object: window)
         center.addObserver(self, selector: #selector(focusGained(_:)), name: NSApplication.didBecomeActiveNotification, object: nil)
+    }
+
+    @objc private func settingsChanged(_ notification: Notification) {
+        if hasFocus { shortcutCapture.start() } else { shortcutCapture.stop() }
     }
 
     @objc private func focusGained(_ notification: Notification) { focusIn() }

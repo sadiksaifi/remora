@@ -165,7 +165,7 @@ public enum SessionEvent: Sendable {
     case desktopSizeChanged(DesktopSize, requested: Bool = false)
     case dynamicResizeChanged(Bool)
     case cursorChanged(RemoteCursor)
-    case remoteClipboardText(String)
+    case clipboardChanged(revision: UInt64, status: RemoteClipboard.Status)
     case credentialsChallenge(CredentialsChallenge)
     case trustChallenge(TrustChallenge)
 }

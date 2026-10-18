@@ -24,6 +24,21 @@ final class SessionViewController: NSViewController {
     private(set) var startedBy = "Remora"
     private(set) var attemptResolution: ConnectionResolution?
     private var commandLine = false
+    /// Control ownership can change independently of who opened the tab.
+    var allowsMacClipboardSync = true
+    private(set) var remoteClipboard = RemoteClipboard()
+
+    private var canSyncMacClipboard: Bool {
+        allowsMacClipboardSync && state == .connected && NSApp.isActive &&
+            view.window?.isKeyWindow == true && view.window?.isVisible == true &&
+            view.window?.isMiniaturized == false && view.window?.firstResponder === desktopView
+    }
+
+    func offerClipboardText(_ text: String) throws {
+        guard state == .connected, let session else { throw ControlFailure(.notConnected, "The session is not connected.") }
+        guard !text.utf8.contains(0) else { throw ControlFailure(.invalidArgument, "Clipboard text cannot contain NUL bytes.") }
+        session.setLocalClipboard(text: text)
+    }
     private var renderer: FrameRenderer?
     private(set) var desktopSize: DesktopSize?
     var frameSize: DesktopSize? { renderer?.desktop.size }
@@ -40,6 +55,7 @@ final class SessionViewController: NSViewController {
 
     func configureCommandLine(_ active: Bool, resolution: ConnectionResolution?) {
         commandLine = active
+        allowsMacClipboardSync = !active
         startedBy = active ? "remora CLI" : "Remora"
         attemptResolution = active ? resolution ?? (connection.resolution == .fitToWindow ? .fixed(width: 1920, height: 1080) : connection.resolution) : nil
     }
@@ -370,7 +386,8 @@ final class SessionViewController: NSViewController {
                 desktop: desktopView, computerName: connection.name, address: connection.displayAddress
             ) { [weak session] in session?.disconnect() }
             self.session = session
-            clipboardSync = ClipboardSync(session: session)
+            remoteClipboard = RemoteClipboard()
+            clipboardSync = ClipboardSync(session: session, canSync: { [weak self] in self?.canSyncMacClipboard == true })
             desktopView.onFocus = { [weak self] in self?.clipboardSync?.focusGained() }
             desktopView.accessibilityTab = (connection.id, connection.name)
             desktopView.onCaptureChange = { [weak self, weak desktopView] captured in
@@ -451,8 +468,10 @@ final class SessionViewController: NSViewController {
                 showStatus(.disconnected(reason))
                 announce(SessionStatusView.title(for: reason))
             }
-        case .remoteClipboardText(let text):
-            clipboardSync?.receiveRemoteText(text)
+        case .clipboardChanged(let revision, let status):
+            if remoteClipboard.update(revision: revision, status: status), case .text(let text) = status {
+                clipboardSync?.receiveRemoteText(text)
+            }
         case .desktopSizeChanged(let size, _):
             desktopSize = size
             // The window never resizes for a session. The renderer aspect-fits any desktop size.

@@ -7,7 +7,7 @@ final class SystemShortcutCapture {
     static var isTrusted: Bool { AXIsProcessTrusted() }
 
     /// The Settings toggle. Capture is on unless the user turned it off.
-    static let enabledKey = "CaptureSystemShortcuts"
+    nonisolated static let enabledKey = "CaptureSystemShortcuts"
     static var isEnabled: Bool { UserDefaults.standard.object(forKey: enabledKey) as? Bool ?? true }
 
     /// Opens the Privacy & Security pane that grants Accessibility trust. macOS 27 names it

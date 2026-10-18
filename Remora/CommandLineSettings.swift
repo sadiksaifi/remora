@@ -1,0 +1,71 @@
+import AppKit
+import RemoraControl
+
+extension CommandLineController {
+    func handleSettings(_ request: ControlRequest) throws -> ControlValue {
+        switch request.command {
+        case "settings.get", "settings.set", "settings.reset":
+            try request.validateArguments(request.command == "settings.set" ? ["key", "value"] : ["key"])
+            let key = try request.string("key", required: request.command == "settings.set")
+            let keys = try key.map { [try AppSettings.Key($0)] } ?? AppSettings.Key.allCases
+            if request.command == "settings.set" {
+                try AppSettings.set(keys[0], value: request.string("value", required: true)!)
+            } else if request.command == "settings.reset" {
+                for key in keys { UserDefaults.standard.removeObject(forKey: key.defaultsKey) }
+            }
+            return .object(Dictionary(uniqueKeysWithValues: keys.map { ($0.rawValue, AppSettings.value($0)) }))
+        case "settings.permission":
+            try request.validateArguments(["open"])
+            let open = try request.flag("open")
+            if open { SystemShortcutCapture.openAccessibilitySettings() }
+            return .object(["accessibility": .string(SystemShortcutCapture.isTrusted ? "allowed" : "notAllowed"), "opened": .bool(open)])
+        case "settings.cli.get", "settings.cli.repair", "settings.cli.uninstall":
+            try request.validateArguments([])
+            let tool = CommandLineTool(helper: Bundle.main.bundleURL.appending(path: "Contents/Helpers/remora"))
+            do {
+                if request.command == "settings.cli.repair" { try tool.repair() }
+                if request.command == "settings.cli.uninstall" { try tool.uninstall() }
+            } catch let failure as CommandLineTool.Failure {
+                throw ControlFailure(.invalidArgument, failure.localizedDescription)
+            } catch { throw ControlFailure(.ioFailed, error.localizedDescription) }
+            return tool.status
+        default: throw ControlFailure(.unknownCommand, "Unknown settings command.")
+        }
+    }
+}
+
+extension AppSettings {
+    enum Key: String, CaseIterable {
+        case captureSystemShortcuts, showAgentPointer, saveLocation
+        init(_ name: String) throws {
+            guard let key = Self(rawValue: name) else {
+                throw ControlFailure(.invalidArgument, "Unknown setting '\(name)'.", hint: "Use captureSystemShortcuts, showAgentPointer or saveLocation.")
+            }
+            self = key
+        }
+        var defaultsKey: String {
+            switch self {
+            case .captureSystemShortcuts: SystemShortcutCapture.enabledKey
+            case .showAgentPointer: AppSettings.showAgentPointerKey
+            case .saveLocation: AppSettings.saveLocationKey
+            }
+        }
+    }
+
+    static func value(_ key: Key) -> ControlValue {
+        if key == .saveLocation { return .string(UserDefaults.standard.string(forKey: key.defaultsKey) ?? "") }
+        return .bool(UserDefaults.standard.object(forKey: key.defaultsKey) as? Bool ?? true)
+    }
+
+    static func set(_ key: Key, value: String) throws {
+        if key == .saveLocation {
+            guard value.isEmpty || (value.hasPrefix("/") && !value.utf8.contains(0)) else {
+                throw ControlFailure(.invalidArgument, "saveLocation must be an absolute folder path, or empty for the macOS screenshot location.")
+            }
+            UserDefaults.standard.set(value, forKey: key.defaultsKey)
+        } else {
+            guard value == "true" || value == "false" else { throw ControlFailure(.invalidArgument, "\(key.rawValue) must be true or false.") }
+            UserDefaults.standard.set(value == "true", forKey: key.defaultsKey)
+        }
+    }
+}

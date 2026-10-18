@@ -19,7 +19,7 @@ struct RMClipboard {
     void *user;
     char *local_text;
     bool changed, ready, request_pending, want_remote;
-    uint64_t generation, requested_generation;
+    uint64_t generation, requested_generation, revision;
 };
 
 static UINT send_formats(RMClipboard *c) {
@@ -64,7 +64,10 @@ static UINT monitor_ready(CliprdrClientContext *channel, const CLIPRDR_MONITOR_R
         c->ready = true;
         rc = send_formats(c);
     }
+    const uint64_t revision = ++c->revision;
     pthread_mutex_unlock(&c->lock);
+    if (c->callbacks.clipboard_changed)
+        c->callbacks.clipboard_changed(c->user, revision, rc == CHANNEL_RC_OK ? RMRDP_CLIPBOARD_UNKNOWN : RMRDP_CLIPBOARD_FAILED, NULL);
     return rc;
 }
 
@@ -86,12 +89,16 @@ static UINT server_format_list(CliprdrClientContext *channel, const CLIPRDR_FORM
         if (list->formats[i].formatId == CF_UNICODETEXT || list->formats[i].formatId == CF_TEXT)
             c->want_remote = true;
     }
+    const bool has_text = c->want_remote;
     /* Even an image/file-only list must be acknowledged. */
     const CLIPRDR_FORMAT_LIST_RESPONSE response = { .common.msgFlags = CB_RESPONSE_OK };
     UINT rc = channel->ClientFormatListResponse(channel, &response);
     if (rc == CHANNEL_RC_OK)
         rc = request_remote(c);
+    const uint64_t revision = ++c->revision;
     pthread_mutex_unlock(&c->lock);
+    if (c->callbacks.clipboard_changed)
+        c->callbacks.clipboard_changed(c->user, revision, rc != CHANNEL_RC_OK ? RMRDP_CLIPBOARD_FAILED : (has_text ? RMRDP_CLIPBOARD_PENDING : RMRDP_CLIPBOARD_UNAVAILABLE), NULL);
     return rc;
 }
 
@@ -134,24 +141,28 @@ static UINT server_data_response(CliprdrClientContext *channel,
     RMClipboard *c = channel->custom;
     char *text = NULL;
     pthread_mutex_lock(&c->lock);
+    bool current = c->request_pending && c->requested_generation == c->generation;
     if (c->request_pending) {
-        /* Responses carry no request ID. Keep at most one outstanding request,
-         * discard stale generations, then request the newest server offer. */
-        if (c->requested_generation == c->generation &&
-            (response->common.msgFlags & CB_RESPONSE_OK) &&
+        /* Responses carry no request ID. Discard stale generations before fetching the newest offer. */
+        if (current && (response->common.msgFlags & CB_RESPONSE_OK) &&
             response->requestedFormatData && response->common.dataLen >= 2 &&
-            response->common.dataLen % 2 == 0 &&
-            ClipboardSetData(c->conversion, CF_UNICODETEXT, response->requestedFormatData,
-                             response->common.dataLen)) {
-            UINT32 size = 0;
-            text = ClipboardGetData(c->conversion, c->utf8_format, &size);
+            response->common.dataLen % 2 == 0) {
+            const BYTE *data = response->requestedFormatData;
+            /* WinPR rejects an empty UTF-16 conversion, just as it does outgoing empty text. */
+            if (data[0] == 0 && data[1] == 0)
+                text = strdup("");
+            else if (ClipboardSetData(c->conversion, CF_UNICODETEXT, data, response->common.dataLen)) {
+                UINT32 size = 0;
+                text = ClipboardGetData(c->conversion, c->utf8_format, &size);
+            }
         }
         c->request_pending = false;
     }
     const UINT rc = request_remote(c);
+    const uint64_t revision = current ? ++c->revision : 0;
     pthread_mutex_unlock(&c->lock);
-    if (text && c->callbacks.remote_clipboard_text)
-        c->callbacks.remote_clipboard_text(c->user, text);
+    if (current && c->callbacks.clipboard_changed)
+        c->callbacks.clipboard_changed(c->user, revision, text ? RMRDP_CLIPBOARD_REMOTE_TEXT : RMRDP_CLIPBOARD_FAILED, text);
     free(text);
     return rc;
 }
@@ -211,9 +222,17 @@ BOOL rm_clipboard_drain(RMClipboard *c) {
     pthread_mutex_lock(&c->lock);
     ResetEvent(c->wake);
     UINT rc = CHANNEL_RC_OK;
-    if (c->channel && c->ready && c->changed)
+    char *text = NULL;
+    uint64_t revision = 0;
+    if (c->channel && c->ready && c->changed) {
         rc = send_formats(c);
+        text = c->local_text ? strdup(c->local_text) : NULL;
+        revision = ++c->revision;
+    }
     pthread_mutex_unlock(&c->lock);
+    if (revision && c->callbacks.clipboard_changed)
+        c->callbacks.clipboard_changed(c->user, revision, rc == CHANNEL_RC_OK && text ? RMRDP_CLIPBOARD_LOCAL_TEXT : RMRDP_CLIPBOARD_FAILED, text);
+    free(text);
     return rc == CHANNEL_RC_OK;
 }
 
@@ -243,5 +262,8 @@ void rm_clipboard_channel_disconnected(void *context, const ChannelDisconnectedE
     c->channel = NULL;
     c->ready = c->request_pending = c->want_remote = false;
     c->generation++;
+    const uint64_t revision = ++c->revision;
     pthread_mutex_unlock(&c->lock);
+    if (c->callbacks.clipboard_changed)
+        c->callbacks.clipboard_changed(c->user, revision, RMRDP_CLIPBOARD_NOT_READY, NULL);
 }

@@ -56,6 +56,12 @@ final class CommandLineController {
     private func handle(_ request: ControlRequest) async -> ControlReply {
         do {
             if Task.isCancelled { throw ControlFailure(.cancelled, "The command was interrupted.") }
+            if request.command.hasPrefix("settings.") {
+                return ControlReply(.success(try handleSettings(request)))
+            }
+            if request.command.hasPrefix("clipboard.") {
+                return ControlReply(.success(try await handleClipboard(request)))
+            }
             if request.command.hasPrefix("connection.") {
                 return ControlReply(.success(try handleConnection(request)))
             }
