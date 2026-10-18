@@ -190,6 +190,11 @@ final class SessionViewController: NSViewController {
         self.onRememberCredentials = onRememberCredentials
         display = SessionDisplay(view: container)
         super.init(nibName: nil, bundle: nil)
+        display.onScaleChange = { [weak self] scale in
+            guard let self, overlayScale != scale else { return }
+            overlayScale = scale
+            refreshOverlaySettings()
+        }
         NotificationCenter.default.addObserver(self, selector: #selector(refreshOverlaySettings),
             name: UserDefaults.didChangeNotification, object: nil)
         refreshOverlaySettings()

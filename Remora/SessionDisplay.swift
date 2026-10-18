@@ -15,6 +15,7 @@ final class SessionDisplay {
     private var recording = false
     private var commandLineDemand = 0
     var followsWindow = true
+    var onScaleChange: ((Double) -> Void)?
 
     @discardableResult
     func addCommandLineDemand() -> Bool {
@@ -79,15 +80,17 @@ final class SessionDisplay {
     func requestResize() {
         guard followsWindow, connected, !transitioning, let session, session.supportsDynamicResize,
               let view, let window = view.window, !window.inLiveResize else { return }
+        let scale = window.backingScaleFactor
         let pixels: NSSize
         if window.styleMask.contains(.fullScreen), let screen = window.screen {
-            pixels = NSSize(width: screen.frame.width * window.backingScaleFactor,
-                            height: screen.frame.height * window.backingScaleFactor)
+            pixels = NSSize(width: screen.frame.width * scale,
+                            height: screen.frame.height * scale)
         } else {
             pixels = view.convertToBacking(view.bounds).size
         }
         guard pixels.width > 0, pixels.height > 0 else { return }
+        onScaleChange?(scale)
         session.requestResize(DesktopSize(width: Int(pixels.width.rounded()), height: Int(pixels.height.rounded())),
-                              scale: window.backingScaleFactor)
+                              scale: scale)
     }
 }

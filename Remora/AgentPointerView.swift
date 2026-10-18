@@ -42,8 +42,14 @@ final class AgentPointerView: NSView {
     /// The capsule fades with the recording's fade, which starts 0.25 seconds before the pill expires.
     private func update() {
         needsDisplay = true
-        guard let desktop = superview as? RemoteDesktopView, desktop.remoteSize.width > 0 else { return }
         let snapshot = state.snapshot()
+        guard snapshot.keyText != nil else {
+            keyPress.rootView = KeyPressCapsule(pill: nil)
+            keyPress.alphaValue = 0
+            keyPressShown = false
+            return
+        }
+        guard let desktop = superview as? RemoteDesktopView, desktop.remoteSize.width > 0 else { return }
         let screen = desktop.screenRect
         let scale = screen.width / desktop.remoteSize.width
         guard scale > 0 else { return }
@@ -51,7 +57,7 @@ final class AgentPointerView: NSView {
             if keyPress.rootView.pill != pill { keyPress.rootView = KeyPressCapsule(pill: pill) }
             keyPress.frame = frame.offsetBy(dx: screen.minX, dy: screen.minY)
         }
-        let shown = snapshot.keyText != nil && snapshot.keyOpacity >= 1
+        let shown = snapshot.keyOpacity >= 1
         guard shown != keyPressShown else { return }
         keyPressShown = shown
         NSAnimationContext.runAnimationGroup { $0.duration = 0.25; keyPress.animator().alphaValue = shown ? 1 : 0 }
