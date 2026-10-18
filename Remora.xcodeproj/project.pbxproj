@@ -7,11 +7,44 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
-		B1C9787A91AEA39CBD37D6CA /* RDPSession in Frameworks */ = {isa = PBXBuildFile; productRef = CEE650B072CCF9E151EF611A /* RDPSession */; };
-		E9111E3861BEE04603B7723C /* RemoraCore in Frameworks */ = {isa = PBXBuildFile; productRef = F4412091013E9923095E958D /* RemoraCore */; };
+		2B90048E1C415F08629B0F65 /* remora in Embed Dependencies */ = {isa = PBXBuildFile; fileRef = 00A12A4D5662F66E68A846F4 /* remora */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
+		3DD3F2D30298024A67E8AA6A /* RemoraControl in Frameworks */ = {isa = PBXBuildFile; productRef = 60133FC969A2D683DBDC1397 /* RemoraControl */; };
+		B1C9787A91AEA39CBD37D6CA /* RemoraCore in Frameworks */ = {isa = PBXBuildFile; productRef = F4412091013E9923095E958D /* RemoraCore */; };
+		BC282B680631E3344190DDDB /* RemoraCommand.swift in Sources */ = {isa = PBXBuildFile; fileRef = B508BCE9DE4C6DC56D8AA602 /* RemoraCommand.swift */; };
+		BDE8D1D89FD473F62EB7E3C2 /* ApplicationClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 032183C95484016E7FA4168D /* ApplicationClient.swift */; };
+		BF3629BE785DAD332249FF76 /* RDPSession in Frameworks */ = {isa = PBXBuildFile; productRef = CEE650B072CCF9E151EF611A /* RDPSession */; };
+		DA3C773AD4CF29259B8F1BE8 /* ArgumentParser in Frameworks */ = {isa = PBXBuildFile; productRef = 3F0067FBBEC140EDB05ACBCB /* ArgumentParser */; };
+		E9111E3861BEE04603B7723C /* RemoraControl in Frameworks */ = {isa = PBXBuildFile; productRef = 6E81E453A5FACCD885723067 /* RemoraControl */; };
 /* End PBXBuildFile section */
 
+/* Begin PBXContainerItemProxy section */
+		66C586C381E1BB356462FB29 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 6D8343B1C5A45107ADFEEF5C /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 15A13AADD38162179533BB9D;
+			remoteInfo = RemoraCLI;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXCopyFilesBuildPhase section */
+		B2E885D83E3A0B847FDD9123 /* Embed Dependencies */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = Contents/Helpers;
+			dstSubfolderSpec = 1;
+			files = (
+				2B90048E1C415F08629B0F65 /* remora in Embed Dependencies */,
+			);
+			name = "Embed Dependencies";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
+
 /* Begin PBXFileReference section */
+		00A12A4D5662F66E68A846F4 /* remora */ = {isa = PBXFileReference; includeInIndex = 0; path = remora; sourceTree = BUILT_PRODUCTS_DIR; };
+		032183C95484016E7FA4168D /* ApplicationClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ApplicationClient.swift; sourceTree = "<group>"; };
+		B508BCE9DE4C6DC56D8AA602 /* RemoraCommand.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoraCommand.swift; sourceTree = "<group>"; };
 		E3C547F7F1E1AEA0842A1FA7 /* Remora.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Remora.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		F54EA48F30A2A5C79C170AE7 /* RemoraKit */ = {isa = PBXFileReference; lastKnownFileType = folder; name = RemoraKit; path = Packages/RemoraKit; sourceTree = SOURCE_ROOT; };
 /* End PBXFileReference section */
@@ -29,12 +62,22 @@
 /* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFrameworksBuildPhase section */
+		075E3488453FED46F5C30D23 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				3DD3F2D30298024A67E8AA6A /* RemoraControl in Frameworks */,
+				DA3C773AD4CF29259B8F1BE8 /* ArgumentParser in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		3C1DE59AC7E6A766092B8ECD /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				E9111E3861BEE04603B7723C /* RemoraCore in Frameworks */,
-				B1C9787A91AEA39CBD37D6CA /* RDPSession in Frameworks */,
+				E9111E3861BEE04603B7723C /* RemoraControl in Frameworks */,
+				B1C9787A91AEA39CBD37D6CA /* RemoraCore in Frameworks */,
+				BF3629BE785DAD332249FF76 /* RDPSession in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -46,6 +89,7 @@
 			children = (
 				F0BF86DBEFD17FE6CE62F9E8 /* Packages */,
 				C5CDBF053038F5C0A7637D02 /* Remora */,
+				56F0691862A0747BF0D09712 /* RemoraCLI */,
 				3054B0BFE371D7115CE79C8B /* Products */,
 			);
 			sourceTree = "<group>";
@@ -53,9 +97,19 @@
 		3054B0BFE371D7115CE79C8B /* Products */ = {
 			isa = PBXGroup;
 			children = (
+				00A12A4D5662F66E68A846F4 /* remora */,
 				E3C547F7F1E1AEA0842A1FA7 /* Remora.app */,
 			);
 			name = Products;
+			sourceTree = "<group>";
+		};
+		56F0691862A0747BF0D09712 /* RemoraCLI */ = {
+			isa = PBXGroup;
+			children = (
+				032183C95484016E7FA4168D /* ApplicationClient.swift */,
+				B508BCE9DE4C6DC56D8AA602 /* RemoraCommand.swift */,
+			);
+			path = RemoraCLI;
 			sourceTree = "<group>";
 		};
 		F0BF86DBEFD17FE6CE62F9E8 /* Packages */ = {
@@ -69,6 +123,26 @@
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
+		15A13AADD38162179533BB9D /* RemoraCLI */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 4EA18527395B43791288D0DF /* Build configuration list for PBXNativeTarget "RemoraCLI" */;
+			buildPhases = (
+				B75B843C6E69ED2831F0A5C3 /* Sources */,
+				075E3488453FED46F5C30D23 /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = RemoraCLI;
+			packageProductDependencies = (
+				60133FC969A2D683DBDC1397 /* RemoraControl */,
+				3F0067FBBEC140EDB05ACBCB /* ArgumentParser */,
+			);
+			productName = RemoraCLI;
+			productReference = 00A12A4D5662F66E68A846F4 /* remora */;
+			productType = "com.apple.product-type.tool";
+		};
 		AC73B08B2CB46BF7B51E6F4F /* Remora */ = {
 			isa = PBXNativeTarget;
 			buildConfigurationList = 65E95FB871A55FB4E20B4B9B /* Build configuration list for PBXNativeTarget "Remora" */;
@@ -76,16 +150,19 @@
 				CEF40A2354861C7AB72F12BE /* Sources */,
 				D70E8659A83FB2E523CE92C6 /* Resources */,
 				3C1DE59AC7E6A766092B8ECD /* Frameworks */,
+				B2E885D83E3A0B847FDD9123 /* Embed Dependencies */,
 			);
 			buildRules = (
 			);
 			dependencies = (
+				E87680A9D6ED548CC5A707EE /* PBXTargetDependency */,
 			);
 			fileSystemSynchronizedGroups = (
 				C5CDBF053038F5C0A7637D02 /* Remora */,
 			);
 			name = Remora;
 			packageProductDependencies = (
+				6E81E453A5FACCD885723067 /* RemoraControl */,
 				F4412091013E9923095E958D /* RemoraCore */,
 				CEE650B072CCF9E151EF611A /* RDPSession */,
 			);
@@ -102,6 +179,10 @@
 				BuildIndependentTargetsInParallel = YES;
 				LastUpgradeCheck = 2710;
 				TargetAttributes = {
+					15A13AADD38162179533BB9D = {
+						DevelopmentTeam = LZ3V3WUPWR;
+						ProvisioningStyle = Automatic;
+					};
 					AC73B08B2CB46BF7B51E6F4F = {
 						DevelopmentTeam = LZ3V3WUPWR;
 						ProvisioningStyle = Automatic;
@@ -118,6 +199,7 @@
 			mainGroup = 1780D6DAE8EB0FCECE8B3709;
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
+				0A5CA4E4BB60586632112DBA /* XCRemoteSwiftPackageReference "swift-argument-parser" */,
 				4369BF9C695AAE909EA22AC4 /* XCLocalSwiftPackageReference "Packages/RemoraKit" */,
 			);
 			preferredProjectObjectVersion = 77;
@@ -126,6 +208,7 @@
 			projectRoot = "";
 			targets = (
 				AC73B08B2CB46BF7B51E6F4F /* Remora */,
+				15A13AADD38162179533BB9D /* RemoraCLI */,
 			);
 		};
 /* End PBXProject section */
@@ -141,6 +224,15 @@
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
+		B75B843C6E69ED2831F0A5C3 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				BDE8D1D89FD473F62EB7E3C2 /* ApplicationClient.swift in Sources */,
+				BC282B680631E3344190DDDB /* RemoraCommand.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		CEF40A2354861C7AB72F12BE /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -150,7 +242,33 @@
 		};
 /* End PBXSourcesBuildPhase section */
 
+/* Begin PBXTargetDependency section */
+		E87680A9D6ED548CC5A707EE /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 15A13AADD38162179533BB9D /* RemoraCLI */;
+			targetProxy = 66C586C381E1BB356462FB29 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
 /* Begin XCBuildConfiguration section */
+		245B4A9A13B029CDB7F7B231 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				COMBINE_HIDPI_IMAGES = YES;
+				DEVELOPMENT_TEAM = LZ3V3WUPWR;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = dev.sadiksaifi.Remora.cli;
+				PRODUCT_MODULE_NAME = RemoraCLI;
+				PRODUCT_NAME = remora;
+				SDKROOT = macosx;
+				SKIP_INSTALL = YES;
+			};
+			name = Debug;
+		};
 		374AB9D825122EE4ACF46091 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -326,9 +444,36 @@
 			};
 			name = Release;
 		};
+		F255A1DCF3C0C352CF6B41C7 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				COMBINE_HIDPI_IMAGES = YES;
+				DEVELOPMENT_TEAM = LZ3V3WUPWR;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = dev.sadiksaifi.Remora.cli;
+				PRODUCT_MODULE_NAME = RemoraCLI;
+				PRODUCT_NAME = remora;
+				SDKROOT = macosx;
+				SKIP_INSTALL = YES;
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
+		4EA18527395B43791288D0DF /* Build configuration list for PBXNativeTarget "RemoraCLI" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				245B4A9A13B029CDB7F7B231 /* Debug */,
+				F255A1DCF3C0C352CF6B41C7 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
 		5848C8822761FAE6FC19C429 /* Build configuration list for PBXProject "Remora" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
@@ -356,7 +501,31 @@
 		};
 /* End XCLocalSwiftPackageReference section */
 
+/* Begin XCRemoteSwiftPackageReference section */
+		0A5CA4E4BB60586632112DBA /* XCRemoteSwiftPackageReference "swift-argument-parser" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/apple/swift-argument-parser";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 1.7.0;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
 /* Begin XCSwiftPackageProductDependency section */
+		3F0067FBBEC140EDB05ACBCB /* ArgumentParser */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 0A5CA4E4BB60586632112DBA /* XCRemoteSwiftPackageReference "swift-argument-parser" */;
+			productName = ArgumentParser;
+		};
+		60133FC969A2D683DBDC1397 /* RemoraControl */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = RemoraControl;
+		};
+		6E81E453A5FACCD885723067 /* RemoraControl */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = RemoraControl;
+		};
 		CEE650B072CCF9E151EF611A /* RDPSession */ = {
 			isa = XCSwiftPackageProductDependency;
 			productName = RDPSession;

@@ -8,6 +8,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var settingsWindowController: SettingsWindowController?
     private var statusMenu: StatusMenu?
     private let sessionTabs = SessionTabs()
+    private var commandLineController: CommandLineController?
     private var terminationPending = false
     /// The command line launches Remora this way: no window and no Dock icon, only the menu bar icon.
     private static let launchedInBackground = CommandLine.arguments.contains("--cli-background")
@@ -53,6 +54,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             NotificationCenter.default.addObserver(
                 self, selector: #selector(windowWillClose(_:)), name: NSWindow.willCloseNotification, object: nil
             )
+            if let mainWindowController {
+                let controller = CommandLineController(mainWindow: mainWindowController, sessions: sessionTabs,
+                    show: { [weak self] page in
+                        switch page {
+                        case "settings": self?.showSettings(nil)
+                        case "connections": self?.showConnections(nil)
+                        default: self?.showMainWindow()
+                        }
+                    }, quit: { NSApplication.shared.terminate(nil) })
+                commandLineController = controller
+                Task {
+                    do { try await controller.start() }
+                    catch {
+                        Logger(subsystem: "dev.sadiksaifi.Remora", category: "Control").error("Control listener failed: \(error.localizedDescription, privacy: .public)")
+                    }
+                }
+            }
             if !Self.launchedInBackground { showMainWindow() }
             #if DEBUG
             if UserDefaults.standard.bool(forKey: "RemoraRendererDemo") {
@@ -74,6 +92,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         sessionTabs.disconnectAll()
         Task { @MainActor in
             await sessionTabs.finishCaptures()
+            await commandLineController?.stop()
             if terminationPending {
                 terminationPending = false
                 sender.reply(toApplicationShouldTerminate: true)

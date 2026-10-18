@@ -7,6 +7,9 @@ options:
 packages:
   RemoraKit:
     path: Packages/RemoraKit
+  ArgumentParser:
+    url: https://github.com/apple/swift-argument-parser
+    from: 1.7.0
 settings:
   base:
     ARCHS: arm64
@@ -22,6 +25,14 @@ targets:
       - path: Remora
         type: syncedFolder
     dependencies:
+      - target: RemoraCLI
+        embed: true
+        codeSign: true
+        copy:
+          destination: wrapper
+          subpath: Contents/Helpers
+      - package: RemoraKit
+        product: RemoraControl
       - package: RemoraKit
         product: RemoraCore
       - package: RemoraKit
@@ -40,6 +51,25 @@ targets:
         INFOPLIST_KEY_NSPrincipalClass: NSApplication
         MARKETING_VERSION: "0.1.0"
         CURRENT_PROJECT_VERSION: 1
+  RemoraCLI:
+    productName: remora
+    type: tool
+    platform: macOS
+    sources:
+      - path: RemoraCLI
+    dependencies:
+      - package: RemoraKit
+        product: RemoraControl
+      - package: ArgumentParser
+        product: ArgumentParser
+    settings:
+      base:
+        PRODUCT_NAME: remora
+        PRODUCT_MODULE_NAME: RemoraCLI
+        PRODUCT_BUNDLE_IDENTIFIER: dev.sadiksaifi.Remora.cli
+        CODE_SIGN_STYLE: Automatic
+        DEVELOPMENT_TEAM: LZ3V3WUPWR
+        SKIP_INSTALL: YES
 schemes:
   Remora:
     build:
