@@ -41,7 +41,7 @@ final class SessionViewController: NSViewController {
     private var statusView: NSHostingView<SessionStatusView>?
     private var closed = false
     private let display: SessionDisplay
-    let capture = SessionCapture(media: AppleCaptureMedia(), destination: ScreenshotDestination())
+    let capture = SessionCapture(media: AppleCaptureMedia(), destination: ScreenshotDestination { AppSettings.saveFolder })
 
     init(
         connection: Connection, credentialStore: CredentialStore,

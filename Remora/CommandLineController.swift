@@ -42,7 +42,7 @@ final class CommandLineController {
             running: true, pid: ProcessInfo.processInfo.processIdentifier,
             hidden: NSApplication.shared.isHidden,
             windowVisible: mainWindow.window?.isVisible == true,
-            settingsVisible: NSApplication.shared.windows.contains { $0.title == "Settings" && $0.isVisible },
+            settingsVisible: NSApplication.shared.settingsWindow?.isVisible == true,
             sessions: sessions.tabs.count
         )))
     }

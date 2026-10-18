@@ -226,3 +226,11 @@ private func movieMediaDuration(_ data: Data, range: Range<Int>? = nil) -> Doubl
     }
     return nil
 }
+
+@Test func screenshotDestinationSavesToTheChosenFolder() throws {
+    let folder = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString, directoryHint: .isDirectory)
+    try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: folder) }
+    let url = try ScreenshotDestination(folder: { folder }).reserve(connectionName: "Lab PC", extension: "png")
+    #expect(url.deletingLastPathComponent().standardizedFileURL == folder.standardizedFileURL)
+}

@@ -1,11 +1,12 @@
 import AppKit
 import RemoraCore
+import SwiftUI
 import os
 
 @main @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var mainWindowController: MainWindowController?
-    private var settingsWindowController: SettingsWindowController?
+    private let settings = NSHostingSceneRepresentation { Settings { SettingsView() } }
     private var statusMenu: StatusMenu?
     private let sessionTabs = SessionTabs()
     private var commandLineController: CommandLineController?
@@ -29,6 +30,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        NSApplication.shared.addSceneRepresentation(settings)
         do {
             #if DEBUG
             if CommandLine.arguments.contains("--shortcut-capture-demo") {
@@ -151,11 +153,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func showSettings(_ sender: Any?) {
-        let controller = settingsWindowController ?? SettingsWindowController()
-        settingsWindowController = controller
-        controller.showWindow(sender)
-        controller.window?.makeKeyAndOrderFront(sender)
-        updateActivationPolicy()
+        // SwiftUI may show the window later, so the Dock icon can't wait to find it.
+        NSApplication.shared.setActivationPolicy(.regular)
+        settings.environment.openSettings()
         NSApplication.shared.activate()
     }
 
@@ -195,7 +195,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     /// The Dock icon shows while the main window or Settings is open, including minimized.
     private func updateActivationPolicy() {
-        let windowOpen = [mainWindowController?.window, settingsWindowController?.window].contains {
+        let windowOpen = [mainWindowController?.window, NSApplication.shared.settingsWindow].contains {
             guard let window = $0 else { return false }
             return window.isVisible || window.isMiniaturized
         }
