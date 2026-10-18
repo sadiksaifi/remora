@@ -2,7 +2,13 @@ import ArgumentParser
 import Foundation
 import RemoraControl
 
-extension AgentSkill.Agent: @retroactive ExpressibleByArgument {}
+/// Claude Code reads only its own skills folder. The other agents read the shared Agent Skills folder.
+enum SkillAgent: String, CaseIterable, ExpressibleByArgument {
+    case agents, codex, opencode, pi, muse, antigravity, cursor, fx
+    case claudeCode = "claude-code"
+
+    var folder: AgentSkill.Folder { self == .claudeCode ? .claudeCode : .agents }
+}
 
 struct SkillCommand: ParsableCommand {
     static let configuration = CommandConfiguration(commandName: "skill", abstract: "Link the bundled agent skill into AI agents' skills folders.",
@@ -19,7 +25,7 @@ struct SkillCommand: ParsableCommand {
     }
 
     struct Install: ParsableCommand {
-        static let configuration = CommandConfiguration(abstract: "Link the skill as remora in each detected agent's skills folder.")
+        static let configuration = CommandConfiguration(abstract: "Link the skill as remora in ~/.agents/skills and ~/.claude/skills.")
         @OptionGroup var targets: Targets
         func run() throws { try targets.apply(install: true) }
     }
@@ -32,7 +38,7 @@ struct SkillCommand: ParsableCommand {
 
     struct Targets: ParsableArguments {
         @OptionGroup var options: CommonOptions
-        @Option(help: "Use only this agent's skills folder.") var agent: AgentSkill.Agent?
+        @Option(help: "Use only this agent's skills folder.") var agent: SkillAgent?
         @Option(help: "Use this skills folder instead.") var dir: String?
 
         func validate() throws {
@@ -45,10 +51,7 @@ struct SkillCommand: ParsableCommand {
             if let dir {
                 links = [("Folder", skill.link(in: URL(fileURLWithPath: (dir as NSString).expandingTildeInPath)))]
             } else {
-                links = (agent.map { [$0] } ?? AgentSkill.Agent.allCases.filter(\.isDetected)).map { ($0.name, skill.link(for: $0)) }
-                guard !links.isEmpty else {
-                    throw ControlFailure(.invalidArgument, "No supported agent was found.", hint: "Use --dir with your agent's user skills folder.")
-                }
+                links = (agent.map { [$0.folder] } ?? AgentSkill.Folder.allCases).map { ($0.name, skill.link(in: $0)) }
             }
             var results: [ControlValue] = []
             for (name, link) in links {
