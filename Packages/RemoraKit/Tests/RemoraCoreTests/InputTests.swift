@@ -34,6 +34,52 @@ import Testing
     #expect(state.flagsChanged(keyCode: 0, rawFlags: 0x40000) == [KeyInput(keyCode: 0x3B, isDown: true)])
 }
 
+@Test func localShortcutRemainsLocalWhenAppKitSeesItAfterTheTap() {
+    let chords: [(UInt, [UInt16])] = [
+        (0x100000, [0x0C]), (0x140000, [0x03]), // Cmd-Q, Ctrl-Cmd-F.
+        (0x1C0000, [0x21, 0x1E, 0x12, 0x13, 0x14, 0x15, 0x17, 0x16, 0x1A, 0x1C, 0x19,
+                    0x04, 0x0D, 0x01, 0x0F]), // Tab navigation, Home, close, capture.
+        (0x1E0000, [0x01]) // Copy Screenshot.
+    ]
+    for (flags, keys) in chords {
+        for key in keys {
+            var routing = KeyboardRouting()
+            #expect(routing.route(keyCode: key, rawFlags: flags, event: .keyDown) == .beginLocalChord)
+            #expect(routing.route(keyCode: key, rawFlags: flags, event: .keyDown) == .local)
+            #expect(routing.route(keyCode: key, rawFlags: flags, event: .keyUp) == .local)
+            #expect(routing.route(keyCode: 0, rawFlags: 0, event: .flagsChanged) == .local)
+            #expect(routing.route(keyCode: 0x04, rawFlags: 0, event: .keyDown) == .remote)
+        }
+    }
+}
+
+@Test func keyboardRoutingAcceptsEventsWithoutAPrecedingTapDelivery() {
+    var routing = KeyboardRouting()
+    #expect(routing.route(keyCode: 0x04, rawFlags: 0, event: .keyDown) == .remote)
+    #expect(routing.route(keyCode: 0x04, rawFlags: 0, event: .keyUp) == .remote)
+    #expect(routing.route(keyCode: 0x30, rawFlags: 0x100000, event: .keyDown) == .remote) // Cmd-Tab.
+    #expect(routing.route(keyCode: 0x7B, rawFlags: 0x1C0000, event: .keyDown) == .remote) // Window manager.
+    #expect(routing.route(keyCode: 0x35, rawFlags: 0x1C0000, event: .keyDown) == .releaseCapture)
+}
+
+@Test func localCapturePrefixDoesNotReachWindowsButRemoteChordsKeepTheirModifiers() {
+    var routing = KeyboardRouting()
+    var keyboard = KeyboardState()
+    #expect(keyboard.flagsChanged(keyCode: 0, rawFlags: 0xC0000) == [
+        KeyInput(keyCode: 0x3A, isDown: true), KeyInput(keyCode: 0x3B, isDown: true)
+    ])
+    #expect(routing.route(keyCode: 0, rawFlags: 0x1C0000, event: .flagsChanged) == .deferModifiers)
+    #expect(routing.route(keyCode: 0, rawFlags: 0x1E0000, event: .flagsChanged) == .deferModifiers)
+    #expect(routing.route(keyCode: 0x01, rawFlags: 0x1E0000, event: .keyDown) == .beginLocalChord)
+    #expect(keyboard.releaseAll() == [KeyInput(keyCode: 0x3A, isDown: false), KeyInput(keyCode: 0x3B, isDown: false)])
+    routing = KeyboardRouting()
+    #expect(routing.route(keyCode: 0x7B, rawFlags: 0x1C0000, event: .keyDown) == .remote)
+    #expect(keyboard.key(keyCode: 0x7B, isDown: true, rawFlags: 0x1C0000) == [
+        KeyInput(keyCode: 0x37, isDown: true), KeyInput(keyCode: 0x3A, isDown: true),
+        KeyInput(keyCode: 0x3B, isDown: true), KeyInput(keyCode: 0x7B, isDown: true)
+    ])
+}
+
 @Test func eachModifierSideReleasesIndependently() {
     let modifiers: [(UInt16, UInt, UInt16, UInt)] = [
         (0x38, 0x02, 0x3C, 0x04), (0x3B, 0x01, 0x3E, 0x2000),

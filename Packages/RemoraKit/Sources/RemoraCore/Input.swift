@@ -92,15 +92,16 @@ public struct KeyboardState: Sendable {
 
     public init() {}
 
-    public mutating func key(keyCode: UInt16, isDown: Bool) -> [KeyInput] {
+    public mutating func key(keyCode: UInt16, isDown: Bool, rawFlags: UInt? = nil) -> [KeyInput] {
         guard Self.modifierMask(keyCode) == nil, keyCode != 0x39, keyCode != 0x3F else { return [] }
+        let modifiers = isDown ? rawFlags.map { flagsChanged(keyCode: 0, rawFlags: $0) } ?? [] : []
         if isDown {
             pressed.insert(keyCode)
         } else if pressed.remove(keyCode) == nil {
             return []
         }
         // Forward ordinary repeat downs. The bridge marks repeats for Windows.
-        return [KeyInput(keyCode: keyCode, isDown: isDown)]
+        return modifiers + [KeyInput(keyCode: keyCode, isDown: isDown)]
     }
 
     public mutating func flagsChanged(keyCode: UInt16, rawFlags: UInt) -> [KeyInput] {
@@ -169,4 +170,56 @@ public struct KeyboardState: Sendable {
         default: nil
         }
     }
+}
+
+/// The same policy runs at the system tap and for events delivered directly to the app.
+/// A local event can pass through both routes; keep the entire chord local until release.
+public struct KeyboardRouting: Sendable {
+    public enum Event: Sendable {
+        case keyDown, keyUp, flagsChanged
+    }
+
+    public enum Disposition: Sendable, Equatable {
+        case remote
+        case local
+        case beginLocalChord
+        case releaseCapture
+        case deferModifiers
+    }
+
+    private var localChord = false
+
+    public init() {}
+
+    public mutating func route(keyCode: UInt16, rawFlags: UInt, event: Event) -> Disposition {
+        let modifiers = rawFlags & 0x1E0000 // Shift, Control, Option, Command.
+        if event == .keyDown {
+            if keyCode == 0x35, modifiers == 0x1C0000 { return .releaseCapture }
+            let local: Bool
+            switch modifiers {
+            case 0x100000: local = keyCode == 0x0C // Cmd-Q.
+            case 0x140000: local = keyCode == 0x03 // Ctrl-Cmd-F.
+            case 0x1C0000: local = Self.localChordKeys.contains(keyCode)
+            case 0x1E0000: local = keyCode == 0x01 // Copy Screenshot.
+            default: local = false
+            }
+            if local {
+                let disposition: Disposition = localChord ? .local : .beginLocalChord
+                localChord = true
+                return disposition
+            }
+        }
+        if localChord {
+            if modifiers == 0 { localChord = false }
+            return .local
+        }
+        // Modifier-only chords can trigger host actions. Do not send the complete
+        // reserved prefix until a non-local key needs it.
+        if event == .flagsChanged, modifiers & 0x1C0000 == 0x1C0000 { return .deferModifiers }
+        return .remote
+    }
+
+    private static let localChordKeys: Set<UInt16> = [
+        0x21, 0x1E, 0x04, 0x0D, 0x01, 0x0F, 0x12, 0x13, 0x14, 0x15, 0x17, 0x16, 0x1A, 0x1C, 0x19,
+    ]
 }
