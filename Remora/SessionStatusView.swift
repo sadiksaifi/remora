@@ -265,6 +265,32 @@ struct AgentControlCapsule: View {
     }
 }
 
+/// The key press display on the same glass as AgentControlCapsule. `KeyPressPill` places every item,
+/// so recordings, which draw their own rendition of the glass, match it.
+struct KeyPressCapsule: View {
+    let pill: KeyPressPill?
+
+    var body: some View {
+        if let pill {
+            ZStack(alignment: .topLeading) {
+                ForEach(Array(pill.items.enumerated()), id: \.offset) { _, item in
+                    Text(item.text)
+                        .font(.system(size: KeyPressPill.fontSize(item.kind) * pill.scale, weight: .semibold))
+                        .foregroundStyle(item.kind == .count ? .secondary : .primary)
+                        .lineLimit(1)
+                        .fixedSize()
+                        .frame(width: item.frame.width, height: item.frame.height)
+                        .background { if item.kind == .key { Capsule().fill(.quaternary) } }
+                        .offset(x: item.frame.minX, y: item.frame.minY)
+                }
+            }
+            .frame(width: pill.size.width, height: pill.size.height, alignment: .topLeading)
+            .glassEffect(.regular, in: .capsule)
+            .accessibilityHidden(true)
+        }
+    }
+}
+
 extension SessionControl.State {
     /// The tab's help and accessibility text, or nil while no program has controlled the session.
     func agentStatus(_ agent: String) -> String? {

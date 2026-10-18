@@ -179,7 +179,10 @@ final class RemoteDesktopInput: NSObject {
                 ? keyboard.flagsChanged(keyCode: event.keyCode, rawFlags: event.modifierFlags.rawValue)
                 : keyboard.key(keyCode: event.keyCode, isDown: event.type == .keyDown,
                                rawFlags: event.modifierFlags.rawValue)
-            for key in keys { input.sendKey(key) }
+            for key in keys {
+                input.sendKey(KeyInput(keyCode: key.keyCode, isDown: key.isDown,
+                    characters: key.keyCode == event.keyCode && event.type == .keyDown ? event.characters : nil))
+            }
             return true
         }
     }

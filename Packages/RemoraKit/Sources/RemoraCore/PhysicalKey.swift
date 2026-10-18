@@ -7,6 +7,15 @@ public struct PhysicalKey: Sendable, Hashable {
     public let isModifier: Bool
     public var isPause: Bool { name == "Pause" }
 
+    public init?(scancode: UInt32) {
+        guard let key = Self.table.values.first(where: { $0.scancode == scancode }) else { return nil }
+        self = key
+    }
+
+    private init(name: String, scancode: UInt32, isModifier: Bool) {
+        self.name = name; self.scancode = scancode; self.isModifier = isModifier
+    }
+
     public static var names: [String] { table.values.map(\.name).sorted() }
 
     public static func chord(_ text: String, modifiersOnly: Bool = false) throws -> [Self] {

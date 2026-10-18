@@ -54,7 +54,17 @@ public final class AgentInputRequest: Sendable {
             guard ContinuousClock.now < deadline else { throw AgentInputFailure.timedOut }
             guard let status = session.agentHandle({ rm_rdp_agent_status($0, id, sequence, false) }) else { throw AgentInputFailure.sessionEnded }
             switch status {
-            case 1: return
+            case 1:
+                let feedback: SessionInputFeedback?
+                switch event {
+                case .key(let key, let down): feedback = .key(scancode: key.scancode, down: down)
+                case .pointer(let point, let buttons): feedback = .pointer(point, buttons)
+                case .unicode(let scalar): feedback = .text(String(scalar))
+                case .pause: feedback = .key(scancode: 0x146, down: true)
+                case .wheel: feedback = nil
+                }
+                if let feedback { session.agentHandle { _ in session.inputFeedback(.agent, feedback) } }
+                return
             case -1: throw AgentInputFailure.cancelled
             case -2: throw AgentInputFailure.submissionFailed
             default: try await Task.sleep(for: .milliseconds(2))
@@ -72,7 +82,10 @@ public final class AgentInputRequest: Sendable {
             let deadline = ContinuousClock.now.advanced(by: .seconds(2))
             while sequence != 0, ContinuousClock.now < deadline {
                 guard let status = session.agentHandle({ rm_rdp_agent_status($0, id, sequence, true) }) else { return false }
-                if status == 1 { return true }
+                if status == 1 {
+                    session.agentHandle { _ in session.inputFeedback(.agent, .release) }
+                    return true
+                }
                 if status < 0 { break }
                 try? await Task.sleep(for: .milliseconds(2))
             }

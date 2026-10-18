@@ -1,108 +1,86 @@
 import AppKit
+import RemoraCore
+import SwiftUI
 
-/// The ghost pointer: a blue arrow at the agent's last point and a ring that flashes on each click.
-/// It is a view above the Metal desktop, so screenshots and recordings, which read the frame, never
-/// include it. The Settings switch hides it. It ignores the pointer.
+/// Screen feedback: pointer artwork shared with the movie compositor, and the key press glass capsule
+/// at the shared layout and placement. The recorder draws its own rendition of the same capsule.
 @MainActor
 final class AgentPointerView: NSView {
-    /// The point in remote pixels from the top left, or nil before the agent points.
-    private var remotePoint: CGPoint?
-    private let arrow = CAShapeLayer()
-    private let ring = CALayer()
-    private let ringStrokes = [CAShapeLayer(), CAShapeLayer(), CAShapeLayer()]
-    private static let ringDiameter: CGFloat = 30
+    private let state: SessionOverlayState
+    private let drawing = SessionOverlayDrawing()
+    private var observer: UUID?
+    private let keyPress = NSHostingView(rootView: KeyPressCapsule(pill: nil))
+    private var keyPressShown = false
 
-    var isShown = false { didSet { updateVisibility() } }
-
-    override init(frame: NSRect) {
+    init(state: SessionOverlayState, frame: NSRect) {
+        self.state = state
         super.init(frame: frame)
-        wantsLayer = true
-        // The arrow from the approved mockup, tip at the origin, about 17 pt tall with its outline.
-        let points: [(CGFloat, CGFloat)] = [(0, 0), (0, 15.2), (3.9, 11.5), (6.5, 17.6), (9.2, 16.4), (6.6, 10.5), (12, 10.5)]
-        let path = CGMutablePath()
-        path.addLines(between: points.map { CGPoint(x: $0.0 * 13 / 15, y: $0.1 * 13 / 15) })
-        path.closeSubpath()
-        arrow.path = path
-        arrow.lineWidth = 1.5
-        arrow.lineJoin = .round
-        arrow.shadowOpacity = 0.3
-        arrow.shadowRadius = 1.5
-        arrow.shadowOffset = CGSize(width: 0, height: 1)
-        // A 2 pt blue ring with a thin white halo on both sides.
-        let radius = Self.ringDiameter / 2
-        for (stroke, (inset, width)) in zip(ringStrokes, [(0.5, 1.0), (2, 2), (3.5, 1)]) {
-            stroke.path = CGPath(ellipseIn: CGRect(x: inset, y: inset, width: 2 * (radius - inset), height: 2 * (radius - inset)), transform: nil)
-            stroke.fillColor = nil
-            stroke.lineWidth = width
-            ring.addSublayer(stroke)
+        keyPress.sizingOptions = []
+        keyPress.alphaValue = 0
+        addSubview(keyPress)
+        state.setDarkAppearance(effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua)
+        observer = state.addObserver { [weak self] _ in
+            DispatchQueue.main.async { self?.update() }
         }
-        ring.bounds = CGRect(x: 0, y: 0, width: Self.ringDiameter, height: Self.ringDiameter)
-        ring.opacity = 0
-        layer?.addSublayer(ring)
-        layer?.addSublayer(arrow)
-        updateColors()
-        updateVisibility()
-        NotificationCenter.default.addObserver(self, selector: #selector(defaultsChanged),
-                                               name: UserDefaults.didChangeNotification, object: nil)
     }
 
-    required init?(coder: NSCoder) { fatalError("Use init(frame:)") }
-
+    required init?(coder: NSCoder) { fatalError("Use init(state:frame:)") }
+    isolated deinit { if let observer { state.removeObserver(observer) } }
     override var isFlipped: Bool { true }
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
 
-    func move(to point: CGPoint, click: Bool) {
-        remotePoint = point
-        needsLayout = true
-        layoutSubtreeIfNeeded()
-        updateVisibility()
-        guard click, !arrow.isHidden else { return }
-        let flash = CABasicAnimation(keyPath: "opacity")
-        flash.fromValue = 0.85
-        flash.toValue = 0
-        flash.duration = 0.5
-        flash.timingFunction = CAMediaTimingFunction(name: .easeIn)
-        ring.add(flash, forKey: "flash")
-    }
-
     override func layout() {
         super.layout()
-        guard let desktop = superview as? RemoteDesktopView, let remotePoint, desktop.remoteSize.width > 0 else { return }
-        let screen = desktop.screenRect
-        let scale = screen.width / desktop.remoteSize.width
-        let point = CGPoint(x: screen.minX + (remotePoint.x + 0.5) * scale, y: screen.minY + (remotePoint.y + 0.5) * scale)
-        CATransaction.begin()
-        CATransaction.setDisableActions(true)
-        arrow.position = point
-        ring.position = point
-        CATransaction.commit()
+        update()
     }
 
     override func viewDidChangeEffectiveAppearance() {
         super.viewDidChangeEffectiveAppearance()
-        updateColors()
+        state.setDarkAppearance(effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua)
     }
 
-    private func updateColors() {
-        effectiveAppearance.performAsCurrentDrawingAppearance {
-            arrow.fillColor = NSColor.systemBlue.cgColor
-            arrow.strokeColor = NSColor.white.cgColor
-            ringStrokes[0].strokeColor = NSColor.white.withAlphaComponent(0.85).cgColor
-            ringStrokes[1].strokeColor = NSColor.systemBlue.cgColor
-            ringStrokes[2].strokeColor = NSColor.white.withAlphaComponent(0.6).cgColor
+    /// The capsule fades with the recording's fade, which starts 0.25 seconds before the pill expires.
+    private func update() {
+        needsDisplay = true
+        let snapshot = state.snapshot()
+        guard snapshot.keyText != nil else {
+            keyPress.rootView = KeyPressCapsule(pill: nil)
+            keyPress.alphaValue = 0
+            keyPressShown = false
+            return
         }
+        guard let desktop = superview as? RemoteDesktopView, desktop.remoteSize.width > 0 else { return }
+        let screen = desktop.screenRect
+        let scale = screen.width / desktop.remoteSize.width
+        guard scale > 0 else { return }
+        if let (pill, frame) = KeyPressPill.placed(snapshot, desktop: desktop.remoteSize, pointsPerPixel: scale) {
+            if keyPress.rootView.pill != pill { keyPress.rootView = KeyPressCapsule(pill: pill) }
+            keyPress.frame = frame.offsetBy(dx: screen.minX, dy: screen.minY)
+        }
+        let shown = snapshot.keyOpacity >= 1
+        guard shown != keyPressShown else { return }
+        keyPressShown = shown
+        NSAnimationContext.runAnimationGroup { $0.duration = 0.25; keyPress.animator().alphaValue = shown ? 1 : 0 }
     }
 
-    private func updateVisibility() {
-        let visible = isShown && remotePoint != nil &&
-            UserDefaults.standard.object(forKey: AppSettings.showAgentPointerKey) as? Bool ?? true
-        CATransaction.begin()
-        CATransaction.setDisableActions(true)
-        arrow.isHidden = !visible
-        ring.isHidden = !visible
-        if !visible { ring.removeAnimation(forKey: "flash") }
-        CATransaction.commit()
+    override func draw(_ dirtyRect: NSRect) {
+        guard let desktop = superview as? RemoteDesktopView, desktop.remoteSize.width > 0,
+              let context = NSGraphicsContext.current?.cgContext else { return }
+        let screen = desktop.screenRect
+        let scale = screen.width / desktop.remoteSize.width
+        guard scale > 0 else { return }
+        context.saveGState()
+        context.clip(to: screen)
+        context.translateBy(x: screen.minX, y: screen.minY)
+        context.scaleBy(x: scale, y: scale)
+        for sprite in drawing.sprites(state.snapshot(), recording: false, pointsPerPixel: scale) {
+            context.saveGState()
+            context.setAlpha(sprite.opacity)
+            context.translateBy(x: sprite.rect.minX, y: sprite.rect.maxY)
+            context.scaleBy(x: 1, y: -1)
+            context.draw(sprite.image, in: CGRect(origin: .zero, size: sprite.rect.size))
+            context.restoreGState()
+        }
+        context.restoreGState()
     }
-
-    @objc private func defaultsChanged() { updateVisibility() }
 }

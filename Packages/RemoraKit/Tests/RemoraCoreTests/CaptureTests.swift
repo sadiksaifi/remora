@@ -104,10 +104,17 @@ private struct RecordingTestDestination: CaptureDestination {
     #expect(FileManager.default.createFile(atPath: url.path, contents: Data()))
     let frames = try MetalDesktop(device: #require(MTLCreateSystemDefaultDevice()))
     desktop(width: 320, height: 240, bgra: [20, 30, 240, 0], sink: frames)
-    let movie = try AppleCaptureMedia().movie(at: url, source: frames)
+    let overlays = SessionOverlayState()
+    let cursor = try #require(CGContext(data: nil, width: 32, height: 32, bitsPerComponent: 8,
+        bytesPerRow: 0, space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+    cursor.setFillColor(CGColor(srgbRed: 1, green: 0, blue: 1, alpha: 1))
+    cursor.fill(CGRect(x: 0, y: 0, width: 32, height: 32))
+    overlays.setCursor(cursor.makeImage(), hotspot: CGPoint(x: 16, y: 16))
+    let movie = try AppleCaptureMedia(overlays: overlays).movie(at: url, source: frames)
     let observer = frames.addFrameObserver { movie.submit(arrival: $0) }
     try await Task.sleep(for: .milliseconds(180))
     desktop(width: 160, height: 240, bgra: [30, 240, 20, 0], sink: frames)
+    overlays.receive(.human, .pointer(.init(x: 0, y: 120), []))
     // Exercise latest-frame coalescing faster than the 60 fps limit.
     let green: [UInt8] = [30, 240, 20, 0]
     var burst = Array(repeating: green, count: 160 * 240).flatMap { $0 }
@@ -164,6 +171,11 @@ private struct RecordingTestDestination: CaptureDestination {
     let stride = CVPixelBufferGetBytesPerRow(buffer)
     let edge = 120 * stride + 10 * 4
     #expect(pixels[edge] < 12 && pixels[edge + 1] < 12 && pixels[edge + 2] < 12)
+    // Half the cursor extends past the resized desktop's left edge. Only the desktop half is visible.
+    let bar = 120 * stride + 68 * 4
+    #expect(pixels[bar] < 12 && pixels[bar + 1] < 12 && pixels[bar + 2] < 12)
+    let pointer = 120 * stride + 84 * 4
+    #expect(pixels[pointer] > 180 && pixels[pointer + 1] < 80 && pixels[pointer + 2] > 180)
     let center = 120 * stride + 160 * 4
     #expect(pixels[center + 1] > 210)
     let top = 40 * stride + 160 * 4
@@ -233,4 +245,69 @@ private func movieMediaDuration(_ data: Data, range: Range<Int>? = nil) -> Doubl
     defer { try? FileManager.default.removeItem(at: folder) }
     let url = try ScreenshotDestination(folder: { folder }).reserve(connectionName: "Lab PC", extension: "png")
     #expect(url.deletingLastPathComponent().standardizedFileURL == folder.standardizedFileURL)
+}
+
+@Test func recordingFeedbackAnimatesOnIdleDesktopWithoutChangingScreenshots() async throws {
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let url = directory.appendingPathComponent("feedback.mov")
+    #expect(FileManager.default.createFile(atPath: url.path, contents: Data()))
+    let frames = try MetalDesktop(device: #require(MTLCreateSystemDefaultDevice()))
+    desktop(width: 640, height: 360, bgra: [80, 80, 80, 0], sink: frames)
+    let overlays = SessionOverlayState()
+    overlays.configure(showPointerInRecordings: true, showKeyPresses: true, showAgentPointer: true, scale: 1)
+    let cursorContext = try #require(CGContext(data: nil, width: 20, height: 20, bitsPerComponent: 8,
+        bytesPerRow: 0, space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+    cursorContext.setFillColor(CGColor(srgbRed: 1, green: 0, blue: 1, alpha: 1))
+    cursorContext.fill(CGRect(x: 0, y: 0, width: 20, height: 20))
+    overlays.setCursor(cursorContext.makeImage(), hotspot: CGPoint(x: 5, y: 7))
+    overlays.receive(.human, .pointer(.init(x: 100, y: 100), .left))
+    let media = AppleCaptureMedia(overlays: overlays)
+    let rawPNG = try media.png(frames.snapshot())
+    let startedAt = ProcessInfo.processInfo.systemUptime
+    let movie = try media.movie(at: url, source: frames)
+    try await Task.sleep(for: .milliseconds(30))
+    let pillAt = ProcessInfo.processInfo.systemUptime - startedAt
+    overlays.receive(.human, .key(scancode: 0x0F, down: true))
+    // There are no frame observers or additional decoded frames. Only overlay invalidations wake the movie.
+    try await Task.sleep(for: .milliseconds(1750))
+    overlays.configure(showPointerInRecordings: false, showKeyPresses: false, showAgentPointer: true, scale: 1)
+    try await Task.sleep(for: .milliseconds(120))
+    _ = try await movie.finish().get()
+    #expect(try media.png(frames.snapshot()) == rawPNG)
+    let asset = AVURLAsset(url: url)
+    let track = try #require(try await asset.loadTracks(withMediaType: .video).first)
+    let reader = try AVAssetReader(asset: asset)
+    let output = AVAssetReaderTrackOutput(track: track, outputSettings: [kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA])
+    reader.add(output)
+    #expect(reader.startReading())
+    var first: CVPixelBuffer?
+    var faded: CVPixelBuffer?
+    var disabled: CVPixelBuffer?
+    var count = 0
+    while let sample = output.copyNextSampleBuffer() {
+        let time = CMSampleBufferGetPresentationTimeStamp(sample).seconds
+        if first == nil && time > pillAt + 0.05 { first = CMSampleBufferGetImageBuffer(sample) }
+        if time > pillAt + 1.49 && time < pillAt + 1.7 { faded = CMSampleBufferGetImageBuffer(sample) }
+        if time > 1.75 { disabled = CMSampleBufferGetImageBuffer(sample) }
+        count += 1
+    }
+    func rgb(_ buffer: CVPixelBuffer, x: Int, y: Int) -> [Int] {
+        CVPixelBufferLockBaseAddress(buffer, .readOnly)
+        defer { CVPixelBufferUnlockBaseAddress(buffer, .readOnly) }
+        let p = CVPixelBufferGetBaseAddress(buffer)!.assumingMemoryBound(to: UInt8.self)
+            + y * CVPixelBufferGetBytesPerRow(buffer) + x * 4
+        return [Int(p[2]), Int(p[1]), Int(p[0])]
+    }
+    let initial = try #require(first)
+    // The hotspot puts the cursor at (95,93), rather than centering it on the point.
+    #expect(rgb(initial, x: 98, y: 96)[0] > 180)
+    #expect(rgb(initial, x: 98, y: 96)[2] > 180)
+    #expect(rgb(initial, x: 98, y: 96)[1] < 80)
+    // Inside the light glass, above the Tab keycap, the gray desktop is tinted toward white.
+    #expect(rgb(initial, x: 320, y: 255).allSatisfy { $0 > 120 })
+    #expect(try rgb(#require(faded), x: 320, y: 255).allSatisfy { abs($0 - 80) < 8 })
+    #expect(try rgb(#require(disabled), x: 98, y: 96).allSatisfy { abs($0 - 80) < 8 })
+    #expect(count > 30)
 }

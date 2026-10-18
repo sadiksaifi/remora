@@ -111,6 +111,7 @@ private struct SessionTabView: View {
     let onHover: (Bool) -> Void
     /// Hovering the button reevaluates the body, which refreshes the elapsed time in its help.
     @State private var recordHovered = false
+    @AppStorage(AppSettings.showKeyPressesKey) private var showKeyPresses = false
     @State private var actionsFrame = CGRect.zero
 
     var body: some View {
@@ -192,6 +193,7 @@ private struct SessionTabView: View {
                 let captured = tab.isKeyboardCaptured
                 Button(captured ? "Release Keyboard Capture" : "Capture Keyboard") { onSetKeyboardCapture(!captured) }
             }
+            Button(showKeyPresses ? "Hide Key Presses" : "Show Key Presses") { showKeyPresses.toggle() }
         }
         // Outside the tab's element, so VoiceOver reaches the button on its own, after the tab.
         .overlay(alignment: .trailing) {

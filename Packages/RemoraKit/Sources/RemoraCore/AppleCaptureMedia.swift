@@ -48,7 +48,9 @@ public struct ScreenshotDestination: CaptureDestination {
 }
 
 public struct AppleCaptureMedia: CaptureMedia {
-    public init() {}
+    private let overlays: SessionOverlayState?
+
+    public init(overlays: SessionOverlayState? = nil) { self.overlays = overlays }
 
     public func png(_ frame: CaptureFrame) throws -> Data {
         try png(frame, geometry: ScreenshotGeometry(desktop: frame.size))
@@ -90,7 +92,7 @@ public struct AppleCaptureMedia: CaptureMedia {
     public func movie(at url: URL, source: any CaptureSource) throws -> any CaptureMovie {
         guard let source = source as? MetalDesktop else { throw CaptureFailure.recording("A Metal desktop is required.") }
         let workingURL = url.deletingLastPathComponent().appendingPathComponent(".Remora-\(UUID().uuidString).partial.mov")
-        do { return try AppleCaptureMovie(url: url, workingURL: workingURL, source: source) }
+        do { return try AppleCaptureMovie(url: url, workingURL: workingURL, source: source, overlays: overlays) }
         catch {
             do {
                 if FileManager.default.fileExists(atPath: workingURL.path) { try FileManager.default.removeItem(at: workingURL) }
@@ -105,7 +107,7 @@ public struct AppleCaptureMedia: CaptureMedia {
 /// After construction, media operations run on queue. The mailbox holds one arrival time.
 /// @unchecked covers queue-confined framework objects; mailbox and outcome use lock.
 final class AppleCaptureMovie: CaptureMovie, @unchecked Sendable {
-    private let queue = DispatchQueue(label: "dev.sadiksaifi.Remora.capture", qos: .utility)
+    private let queue = DispatchQueue(label: "dev.sadiksaifi.Remora.capture", qos: .userInitiated)
     private let lock = NSLock()
     private var pending: TimeInterval?
     private var scheduled = false
@@ -117,6 +119,9 @@ final class AppleCaptureMovie: CaptureMovie, @unchecked Sendable {
     private let adaptor: AVAssetWriterInputPixelBufferAdaptor
     private var context: CIContext?
     private let source: MetalDesktop
+    private let overlays: SessionOverlayState?
+    private var overlayObserver: UUID?
+    private let overlayDrawing = SessionOverlayDrawing()
     private let textureCache: CVMetalTextureCache
     private let url: URL
     private let workingURL: URL
@@ -136,7 +141,8 @@ final class AppleCaptureMovie: CaptureMovie, @unchecked Sendable {
     private let failureContinuation: AsyncStream<CaptureFailure>.Continuation
     private var writerObservation: NSKeyValueObservation?
 
-    init(url: URL, workingURL: URL, source: MetalDesktop) throws {
+    init(url: URL, workingURL: URL, source: MetalDesktop, overlays: SessionOverlayState?) throws {
+        self.overlays = overlays
         self.url = url
         self.workingURL = workingURL
         (failures, failureContinuation) = AsyncStream.makeStream(bufferingPolicy: .bufferingNewest(1))
@@ -183,12 +189,15 @@ final class AppleCaptureMovie: CaptureMovie, @unchecked Sendable {
             guard writer.status == .failed, let self else { return }
             self.queue.async { self.fail(.recording(self.writer.error?.localizedDescription ?? "Encoder failed.")) }
         }
+        overlayObserver = overlays?.addObserver { [weak self] in self?.submit(arrival: $0) }
     }
+
+    deinit { stopObservingOverlays() }
 
     func submit(arrival: TimeInterval) {
         let wake = lock.withLock {
             guard accepting, outcome == nil else { return false }
-            pending = arrival
+            pending = max(pending ?? arrival, arrival)
             guard !scheduled else { return false }
             scheduled = true
             return true
@@ -207,6 +216,7 @@ final class AppleCaptureMovie: CaptureMovie, @unchecked Sendable {
                 return true
             }
             if begin {
+                stopObservingOverlays()
                 queue.async {
                     self.finishing = true
                     self.stopTime = stoppedAt
@@ -238,10 +248,12 @@ final class AppleCaptureMovie: CaptureMovie, @unchecked Sendable {
             }
             if let selected, selected > lastArrival {
                 do {
-                    if let arrival = try append() {
+                    if let arrival = try append(at: selected) {
                         lastArrival = arrival
-                        lastAppend = now
+                        // Preserve the pacing clock across small scheduling delays, without replaying idle time.
+                        lastAppend = now - lastAppend >= 2.0 / 60 ? now : lastAppend + 1.0 / 60
                     } else {
+                        lastAppend = ProcessInfo.processInfo.systemUptime
                         lock.withLock { if pending == nil { pending = selected } }
                     }
                 } catch { fail(error as? CaptureFailure ?? .recording(error.localizedDescription)); return }
@@ -276,11 +288,13 @@ final class AppleCaptureMovie: CaptureMovie, @unchecked Sendable {
                 } else { self.fail(.recording(self.writer.error?.localizedDescription ?? "Could not finish the movie.")) }
             } }
         } else if hasPending {
-            queue.asyncAfter(deadline: .now() + 1.0 / 60) { self.drain() }
+            let delay = input.isReadyForMoreMediaData
+                ? max(0.0001, lastAppend + 1.0 / 60 - ProcessInfo.processInfo.systemUptime) : 1.0 / 60
+            queue.asyncAfter(deadline: .now() + delay) { self.drain() }
         }
     }
 
-    private func append() throws -> TimeInterval? {
+    private func append(at arrival: TimeInterval) throws -> TimeInterval? {
         guard let pool = adaptor.pixelBufferPool else { throw CaptureFailure.recording("No pixel buffer pool.") }
         var pixelBuffer: CVPixelBuffer?
         let status = CVPixelBufferPoolCreatePixelBufferWithAuxAttributes(nil, pool,
@@ -300,7 +314,11 @@ final class AppleCaptureMovie: CaptureMovie, @unchecked Sendable {
             throw CaptureFailure.recording("Could not map encoder pixel buffer into Metal (\(textureStatus)).")
         }
         let submission = try source.submit { texture, command in
-            if texture.width == size.width && texture.height == size.height {
+            let desktopSize = CGSize(width: texture.width, height: texture.height)
+            let snapshot = overlays?.snapshot(at: arrival)
+            let sprites = snapshot.map { overlayDrawing.sprites($0, recording: true) } ?? []
+            let glass = snapshot.flatMap { overlayDrawing.keyPress($0, desktop: desktopSize) }
+            if texture.width == size.width && texture.height == size.height && sprites.isEmpty && glass == nil {
                 guard let blit = command.makeBlitCommandEncoder() else { throw CaptureFailure.recording("No encoder blit command.") }
                 blit.copy(from: texture, sourceSlice: 0, sourceLevel: 0, sourceOrigin: MTLOrigin(),
                           sourceSize: MTLSize(width: size.width, height: size.height, depth: 1),
@@ -316,8 +334,19 @@ final class AppleCaptureMovie: CaptureMovie, @unchecked Sendable {
                     let image = CIImage(mtlTexture: opaque, options: [.colorSpace: CGColorSpace(name: CGColorSpace.sRGB)!]) else {
                     throw CaptureFailure.recording("Invalid desktop texture.")
                 }
+                var decorated = glass.map { Self.composite($0, over: image) } ?? image
+                for sprite in sprites {
+                    let rect = sprite.rect
+                    let overlay = CIImage(cgImage: sprite.image)
+                        .transformed(by: CGAffineTransform(scaleX: rect.width / CGFloat(sprite.image.width),
+                                                          y: -rect.height / CGFloat(sprite.image.height)))
+                        .transformed(by: CGAffineTransform(translationX: rect.minX, y: rect.maxY))
+                        .applyingFilter("CIColorMatrix", parameters: ["inputAVector": CIVector(x: 0, y: 0, z: 0, w: sprite.opacity)])
+                    decorated = overlay.composited(over: decorated)
+                }
                 let scale = min(Double(size.width) / Double(texture.width), Double(size.height) / Double(texture.height))
-                let fitted = image.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
+                let fitted = decorated.cropped(to: image.extent)
+                    .transformed(by: CGAffineTransform(scaleX: scale, y: scale))
                     .transformed(by: CGAffineTransform(translationX: (Double(size.width) - Double(texture.width) * scale) / 2,
                                                       y: (Double(size.height) - Double(texture.height) * scale) / 2))
                 let bounds = CGRect(x: 0, y: 0, width: size.width, height: size.height)
@@ -331,13 +360,46 @@ final class AppleCaptureMovie: CaptureMovie, @unchecked Sendable {
         guard submission.command.status == .completed else {
             throw CaptureFailure.recording(submission.command.error?.localizedDescription ?? "Encoder GPU copy failed.")
         }
-        let timestamp = lastPTS < 0 ? 0 : max(lastPTS + 1.0 / 60, submission.arrival - origin)
+        let captureTime = max(arrival, submission.arrival)
+        let timestamp = lastPTS < 0 ? 0 : max(lastPTS + 1.0 / 60, captureTime - origin)
         guard adaptor.append(pixelBuffer, withPresentationTime: CMTime(seconds: timestamp, preferredTimescale: 60_000)) else {
             throw CaptureFailure.recording(writer.error?.localizedDescription ?? "Frame append failed.")
         }
         lastPTS = timestamp
         lastPixelBuffer = pixelBuffer
-        return submission.arrival
+        return captureTime
+    }
+
+    /// The closest rendition of Liquid Glass a frame can hold: the desktop behind the capsule blurred,
+    /// saturated and tinted for the appearance, under the drawn shadow, rim, keycaps and text.
+    /// Image coordinates here are desktop pixels from the top left, like sprite rects.
+    private static func composite(_ glass: SessionOverlayDrawing.Glass, over image: CIImage) -> CIImage {
+        let frame = glass.frame
+        let backdrop = image.clampedToExtent().applyingGaussianBlur(sigma: frame.height / 5).cropped(to: frame)
+            .applyingFilter("CIColorControls", parameters: [kCIInputSaturationKey: glass.dark ? 3 : 1.4])
+        // Dark glass flattens the backdrop toward a dark gray and keeps its hue, matched to screen captures.
+        let tint = CIImage(color: glass.dark ? CIColor(red: 0.25, green: 0.25, blue: 0.25, alpha: 0.9) : CIColor(red: 1, green: 1, blue: 1, alpha: 0.45))
+            .cropped(to: frame)
+        let fade = CIVector(x: 0, y: 0, z: 0, w: glass.opacity)
+        let mask = CIFilter(name: "CIRoundedRectangleGenerator", parameters: ["inputExtent": CIVector(cgRect: frame),
+            "inputRadius": frame.height / 2, "inputColor": CIColor(red: 1, green: 1, blue: 1, alpha: glass.opacity)])!.outputImage!
+        let rect = glass.imageRect
+        let chrome = CIImage(cgImage: glass.image)
+            .transformed(by: CGAffineTransform(scaleX: rect.width / CGFloat(glass.image.width), y: -rect.height / CGFloat(glass.image.height)))
+            .transformed(by: CGAffineTransform(translationX: rect.minX, y: rect.maxY))
+            .applyingFilter("CIColorMatrix", parameters: ["inputAVector": fade])
+        // Masking keeps the glass within its frame, so no extra pass touches the rest of the desktop.
+        return chrome.composited(over: tint.composited(over: backdrop)
+            .applyingFilter("CISourceInCompositing", parameters: [kCIInputBackgroundImageKey: mask])).composited(over: image)
+    }
+
+    private func stopObservingOverlays() {
+        let observer = lock.withLock {
+            let observer = overlayObserver
+            overlayObserver = nil
+            return observer
+        }
+        if let observer { overlays?.removeObserver(observer) }
     }
 
     private func fail(_ error: CaptureFailure) {
@@ -352,6 +414,7 @@ final class AppleCaptureMovie: CaptureMovie, @unchecked Sendable {
     }
 
     private func complete(_ result: Result<URL, CaptureFailure>) {
+        stopObservingOverlays()
         lastPixelBuffer = nil
         finishTimer?.cancel()
         finishTimer = nil
