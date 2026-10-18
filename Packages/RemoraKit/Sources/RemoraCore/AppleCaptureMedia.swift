@@ -314,8 +314,10 @@ final class AppleCaptureMovie: CaptureMovie, @unchecked Sendable {
         }
         let submission = try source.submit { texture, command in
             let desktopSize = CGSize(width: texture.width, height: texture.height)
-            let sprites = overlays.map { overlayDrawing.sprites($0.snapshot(at: arrival), desktop: desktopSize, recording: true) } ?? []
-            if texture.width == size.width && texture.height == size.height && sprites.isEmpty {
+            let snapshot = overlays?.snapshot(at: arrival)
+            let sprites = snapshot.map { overlayDrawing.sprites($0, desktop: desktopSize, recording: true) } ?? []
+            let glass = snapshot.flatMap { overlayDrawing.keyPress($0, desktop: desktopSize) }
+            if texture.width == size.width && texture.height == size.height && sprites.isEmpty && glass == nil {
                 guard let blit = command.makeBlitCommandEncoder() else { throw CaptureFailure.recording("No encoder blit command.") }
                 blit.copy(from: texture, sourceSlice: 0, sourceLevel: 0, sourceOrigin: MTLOrigin(),
                           sourceSize: MTLSize(width: size.width, height: size.height, depth: 1),
@@ -331,7 +333,7 @@ final class AppleCaptureMovie: CaptureMovie, @unchecked Sendable {
                     let image = CIImage(mtlTexture: opaque, options: [.colorSpace: CGColorSpace(name: CGColorSpace.sRGB)!]) else {
                     throw CaptureFailure.recording("Invalid desktop texture.")
                 }
-                var decorated = image
+                var decorated = glass.map { Self.composite($0, over: image) } ?? image
                 for sprite in sprites {
                     let rect = sprite.rect
                     let overlay = CIImage(cgImage: sprite.image)
@@ -364,6 +366,29 @@ final class AppleCaptureMovie: CaptureMovie, @unchecked Sendable {
         lastPTS = timestamp
         lastPixelBuffer = pixelBuffer
         return captureTime
+    }
+
+    /// The closest rendition of Liquid Glass a frame can hold: the desktop behind the capsule blurred,
+    /// saturated and tinted for the appearance, under the drawn shadow, rim, keycaps and text.
+    /// Image coordinates here are desktop pixels from the top left, like sprite rects.
+    private static func composite(_ glass: SessionOverlayDrawing.Glass, over image: CIImage) -> CIImage {
+        let frame = glass.frame
+        let backdrop = image.clampedToExtent().applyingGaussianBlur(sigma: frame.height / 5).cropped(to: frame)
+            .applyingFilter("CIColorControls", parameters: [kCIInputSaturationKey: glass.dark ? 3 : 1.4])
+        // Dark glass flattens the backdrop toward a dark gray and keeps its hue, matched to screen captures.
+        let tint = CIImage(color: glass.dark ? CIColor(red: 0.25, green: 0.25, blue: 0.25, alpha: 0.9) : CIColor(red: 1, green: 1, blue: 1, alpha: 0.45))
+            .cropped(to: frame)
+        let fade = CIVector(x: 0, y: 0, z: 0, w: glass.opacity)
+        let mask = CIFilter(name: "CIRoundedRectangleGenerator", parameters: ["inputExtent": CIVector(cgRect: frame),
+            "inputRadius": frame.height / 2, "inputColor": CIColor(red: 1, green: 1, blue: 1, alpha: glass.opacity)])!.outputImage!
+        let rect = glass.imageRect
+        let chrome = CIImage(cgImage: glass.image)
+            .transformed(by: CGAffineTransform(scaleX: rect.width / CGFloat(glass.image.width), y: -rect.height / CGFloat(glass.image.height)))
+            .transformed(by: CGAffineTransform(translationX: rect.minX, y: rect.maxY))
+            .applyingFilter("CIColorMatrix", parameters: ["inputAVector": fade])
+        // Masking keeps the glass within its frame, so no extra pass touches the rest of the desktop.
+        return chrome.composited(over: tint.composited(over: backdrop)
+            .applyingFilter("CISourceInCompositing", parameters: [kCIInputBackgroundImageKey: mask])).composited(over: image)
     }
 
     private func stopObservingOverlays() {

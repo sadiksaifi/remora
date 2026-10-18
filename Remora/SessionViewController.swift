@@ -843,7 +843,7 @@ extension SessionViewController {
         inputOverlays.configure(showPointerInRecordings: AppSettings.showPointerInRecordings,
             showKeyPresses: AppSettings.showKeyPresses,
             showAgentPointer: control.state == .active && AppSettings.showAgentPointer,
-            scale: overlayScale)
+            scale: overlayScale, keyPressSize: AppSettings.keyPressSize)
     }
 
     private func updateOverlayCursor(_ cursor: RemoteCursor) {

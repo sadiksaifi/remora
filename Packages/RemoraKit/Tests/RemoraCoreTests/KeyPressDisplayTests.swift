@@ -53,3 +53,15 @@ import RemoraCore
     overlays.configure(showPointerInRecordings: true, showKeyPresses: true, showAgentPointer: true, scale: 1)
     #expect(overlays.snapshot().keyText == nil)
 }
+
+@Test func pillLaysOutKeysTextAndRepeatsAtAnySize() throws {
+    let chord = try #require(KeyPressPill(text: "Ctrl+Alt+Delete", isText: false, scale: 1))
+    #expect(chord.items.map(\.kind) == [.key, .key, .key] && chord.items.map(\.text) == ["Ctrl", "Alt", "Delete"])
+    let repeated = try #require(KeyPressPill(text: "Tab ×3", isText: false, scale: 1))
+    #expect(repeated.items.map(\.text) == ["Tab", "×3"] && repeated.items.last?.kind == .count)
+    #expect(KeyPressPill(text: " ", isText: true, scale: 1)?.items.map(\.text) == ["Space"])
+    #expect(KeyPressPill(text: "a+b", isText: true, scale: 1)?.items.map(\.kind) == [.text])
+    let large = try #require(KeyPressPill(text: "Ctrl+Alt+Delete", isText: false, scale: 2))
+    // SF Pro tracks tighter at larger optical sizes, so widths scale slightly less than heights.
+    #expect(large.size.height == 2 * chord.size.height && abs(large.size.width / chord.size.width - 2) < 0.1)
+}

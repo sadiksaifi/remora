@@ -1,5 +1,6 @@
 import AppKit
 import RemoraControl
+import RemoraCore
 
 extension CommandLineController {
     func handleSettings(_ request: ControlRequest) throws -> ControlValue {
@@ -48,6 +49,7 @@ extension SettingKey {
         case .showAgentPointer: AppSettings.showAgentPointerKey
         case .showPointerInRecordings: AppSettings.showPointerInRecordingsKey
         case .showKeyPresses: AppSettings.showKeyPressesKey
+        case .keyPressSize: AppSettings.keyPressSizeKey
         case .saveLocation: AppSettings.saveLocationKey
         }
     }
@@ -56,6 +58,7 @@ extension SettingKey {
 extension AppSettings {
     static func value(_ key: SettingKey) -> ControlValue {
         if key == .saveLocation { return .string(UserDefaults.standard.string(forKey: key.defaultsKey) ?? "") }
+        if key == .keyPressSize { return .number(keyPressSize) }
         return .bool(UserDefaults.standard.object(forKey: key.defaultsKey) as? Bool ?? (key != .showKeyPresses))
     }
 
@@ -65,6 +68,11 @@ extension AppSettings {
                 throw ControlFailure(.invalidArgument, "saveLocation must be an absolute folder path, or empty for the macOS screenshot location.")
             }
             UserDefaults.standard.set(value, forKey: key.defaultsKey)
+        } else if key == .keyPressSize {
+            guard let size = Double(value), KeyPressPill.sizes.contains(size) else {
+                throw ControlFailure(.invalidArgument, "keyPressSize must be a number from 0.75 to 2, where 1 is the standard size.")
+            }
+            UserDefaults.standard.set(size, forKey: key.defaultsKey)
         } else {
             guard value == "true" || value == "false" else { throw ControlFailure(.invalidArgument, "\(key.rawValue) must be true or false.") }
             UserDefaults.standard.set(value == "true", forKey: key.defaultsKey)

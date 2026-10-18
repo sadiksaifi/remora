@@ -3,14 +3,24 @@ import CoreText
 import Foundation
 
 /// Shared raster artwork in desktop pixels, with top-left coordinates. Each consumer owns a cache.
-/// AppKit and movies both use these exact images and placement.
+/// AppKit and movies both use these exact pointer images and placement. The screen draws the key press
+/// pill as Liquid Glass; movies draw `keyPress(_:desktop:)` over a blurred backdrop.
 public final class SessionOverlayDrawing {
     public struct Sprite {
         public let image: CGImage
         public let rect: CGRect
         public let opacity: Double
     }
-    private var pill: (text: String, isText: Bool, unit: CGFloat, image: CGImage)?
+    /// The recorder's key press glass: the capsule's frame, and its shadow, rim, keycaps and text
+    /// in `image` over `imageRect`. The compositor blurs and tints the desktop inside the capsule.
+    public struct Glass {
+        public let frame: CGRect
+        public let image: CGImage
+        public let imageRect: CGRect
+        public let opacity: Double
+        public let dark: Bool
+    }
+    private var glass: (pill: KeyPressPill, dark: Bool, image: CGImage)?
     private lazy var arrow = Self.image(width: 24, height: 27) { context in
         context.translateBy(x: 4, y: 4)
         let points: [(CGFloat, CGFloat)] = [(0, 0), (0, 15.2), (3.9, 11.5), (6.5, 17.6), (9.2, 16.4), (6.6, 10.5), (12, 10.5)]
@@ -57,82 +67,67 @@ public final class SessionOverlayDrawing {
                 }
             }
         }
-        if let text = state.keyText {
-            // Points at the session's scale, but never smaller than at 1080p, so large fixed desktops stay legible.
-            let unit = max(CGFloat(scale), desktop.height / 1080)
-            if pill?.text != text || pill?.isText != state.keyIsText || pill?.unit != unit {
-                pill = (text, state.keyIsText, unit, Self.makePill(text, isText: state.keyIsText, unit: unit))
-            }
-            if let image = pill?.image {
-                let fit = min(1, max(0.1, (desktop.width - 16 * unit) / CGFloat(image.width)))
-                let width = CGFloat(image.width) * fit, height = CGFloat(image.height) * fit
-                let fade = state.keyOpacity * state.keyOpacity * (3 - 2 * state.keyOpacity)
-                // The image's 16-point shadow margin adds to this, so the pill clears a taskbar or dock.
-                result.append(Sprite(image: image, rect: CGRect(x: (desktop.width - width) / 2,
-                    y: max(0, desktop.height - height - 48 * unit), width: width, height: height), opacity: fade))
-            }
-        }
         return result
     }
 
-    /// A dark HUD, opaque enough to read over any desktop without a blur, with a hairline edge for dark
-    /// desktops and a shadow for light ones. Typed text sits on the pill; keys and shortcuts sit in keycaps
-    /// followed by any repeat count. Layout is in points; the image is `unit` pixels per point.
-    private static func makePill(_ text: String, isText: Bool, unit: CGFloat) -> CGImage {
-        func line(_ string: String, size: CGFloat, weight: CGFloat, gray: CGFloat) -> (line: CTLine, width: CGFloat, cap: CGFloat) {
-            let system = CTFontCreateUIFontForLanguage(.system, size, nil)!
-            let font = CTFontCreateWithFontDescriptor(CTFontDescriptorCreateCopyWithAttributes(CTFontCopyFontDescriptor(system),
-                [kCTFontTraitsAttribute: [kCTFontWeightTrait: weight]] as CFDictionary), size, nil)
-            let line = CTLineCreateWithAttributedString(NSAttributedString(string: string, attributes: [
-                NSAttributedString.Key(kCTFontAttributeName as String): font,
-                NSAttributedString.Key(kCTForegroundColorAttributeName as String): CGColor(gray: gray, alpha: 1)
-            ]))
-            return (line, CGFloat(CTLineGetTypographicBounds(line, nil, nil, nil)), CTFontGetCapHeight(font))
-        }
-        let blank = text.allSatisfy(\.isWhitespace)
-        let parts = text.components(separatedBy: " ×")
-        let keys = isText && !blank ? [] : (blank ? ["Space"] : parts[0].split(separator: "+").map(String.init))
-            .map { line($0, size: 16, weight: 0.3, gray: 1) }
-        let label = keys.isEmpty ? line(text, size: 22, weight: 0.23, gray: 1)
-            : parts.count > 1 ? line("×" + parts[1], size: 16, weight: 0.23, gray: 0.7) : nil
-        let height: CGFloat = 44, margin: CGFloat = 16
-        var x = margin, caps: [CGRect] = []
-        for key in keys {
-            x += caps.isEmpty ? 7 : 5
-            caps.append(CGRect(x: x, y: margin + 7, width: max(30, key.width + 20), height: 30))
-            x = caps.last!.maxX
-        }
-        let labelX = x + (keys.isEmpty ? 18 : 10)
-        x = label.map { labelX + $0.width + (keys.isEmpty ? 18 : 14) } ?? x + 7
-        let body = CGRect(x: margin, y: margin, width: max(height, x - margin), height: height)
-        func draw(_ text: (line: CTLine, width: CGFloat, cap: CGFloat), x: CGFloat, in context: CGContext) {
+    public func keyPress(_ state: SessionOverlayState.Snapshot, desktop: CGSize) -> Glass? {
+        guard let (pill, frame) = KeyPressPill.placed(state, desktop: desktop) else { return nil }
+        if glass?.pill != pill || glass?.dark != state.dark { glass = (pill, state.dark, Self.makeGlass(pill, dark: state.dark)) }
+        let margin = 16 * pill.scale
+        return Glass(frame: frame, image: glass!.image, imageRect: frame.insetBy(dx: -margin, dy: -margin),
+            opacity: state.keyOpacity * state.keyOpacity * (3 - 2 * state.keyOpacity), dark: state.dark)
+    }
+
+    /// Label colors as AppKit resolves them for the appearance, and a hairline rim brighter at the top.
+    private static func makeGlass(_ pill: KeyPressPill, dark: Bool) -> CGImage {
+        let scale = pill.scale, margin = 16 * scale
+        let body = CGRect(origin: CGPoint(x: margin, y: margin), size: pill.size)
+        let shape = CGPath(roundedRect: body, cornerWidth: body.height / 2, cornerHeight: body.height / 2, transform: nil)
+        let label = CGFloat(dark ? 1 : 0)
+        return image(width: Int(ceil(body.width + 2 * margin)), height: Int(ceil(body.height + 2 * margin))) { context in
             context.saveGState()
-            context.translateBy(x: x, y: body.midY + text.cap / 2)
-            context.scaleBy(x: 1, y: -1)
-            context.textPosition = .zero
-            CTLineDraw(text.line, context)
-            context.restoreGState()
-        }
-        return image(width: Int(ceil((body.width + 2 * margin) * unit)), height: Int(ceil((height + 2 * margin) * unit))) { context in
-            context.scaleBy(x: unit, y: unit)
-            let shape = CGPath(roundedRect: body, cornerWidth: 14, cornerHeight: 14, transform: nil)
-            context.saveGState()
-            // Shadow geometry is in device pixels and ignores the flip.
-            context.setShadow(offset: CGSize(width: 0, height: -4 * unit), blur: 16 * unit, color: CGColor(gray: 0, alpha: 0.35))
-            context.setFillColor(CGColor(gray: 0.1, alpha: 0.82))
+            // Shadow geometry is in device pixels and ignores the flip. The glass covers the capsule itself.
+            context.setShadow(offset: CGSize(width: 0, height: -2 * scale), blur: 12 * scale, color: CGColor(gray: 0, alpha: 0.22))
             context.addPath(shape)
             context.fillPath()
             context.restoreGState()
-            context.setStrokeColor(CGColor(gray: 1, alpha: 0.18))
-            context.addPath(CGPath(roundedRect: body.insetBy(dx: 0.5, dy: 0.5), cornerWidth: 13.5, cornerHeight: 13.5, transform: nil))
-            context.strokePath()
-            context.setFillColor(CGColor(gray: 1, alpha: 0.16))
-            for (key, cap) in zip(keys, caps) {
-                context.addPath(CGPath(roundedRect: cap, cornerWidth: 7, cornerHeight: 7, transform: nil))
-                context.fillPath()
-                draw(key, x: cap.midX - key.width / 2, in: context)
+            context.setBlendMode(.clear)
+            context.addPath(shape)
+            context.fillPath()
+            context.setBlendMode(.normal)
+            context.saveGState()
+            context.addPath(CGPath(roundedRect: body.insetBy(dx: 0.5 * scale, dy: 0.5 * scale),
+                cornerWidth: body.height / 2 - 0.5 * scale, cornerHeight: body.height / 2 - 0.5 * scale, transform: nil))
+            context.setLineWidth(scale)
+            context.replacePathWithStrokedPath()
+            context.clip()
+            let rim = CGGradient(colorsSpace: CGColorSpace(name: CGColorSpace.sRGB), colors: [
+                CGColor(gray: 1, alpha: dark ? 0.22 : 0.9), CGColor(gray: 1, alpha: dark ? 0.04 : 0.3),
+                CGColor(gray: 1, alpha: dark ? 0.1 : 0.6)] as CFArray, locations: [0, 0.5, 1])!
+            context.drawLinearGradient(rim, start: CGPoint(x: 0, y: body.minY), end: CGPoint(x: 0, y: body.maxY), options: [])
+            context.restoreGState()
+            for item in pill.items {
+                let frame = item.frame.offsetBy(dx: margin, dy: margin)
+                if item.kind == .key {
+                    context.setFillColor(CGColor(gray: label, alpha: dark ? 0.08 : 0.07))
+                    context.addPath(CGPath(roundedRect: frame, cornerWidth: frame.height / 2, cornerHeight: frame.height / 2, transform: nil))
+                    context.fillPath()
+                }
+                let line = CTLineCreateWithAttributedString(NSAttributedString(string: item.text, attributes: [
+                    NSAttributedString.Key(kCTFontAttributeName as String): KeyPressPill.font(item.kind, scale: scale),
+                    NSAttributedString.Key(kCTForegroundColorAttributeName as String):
+                        CGColor(gray: label, alpha: item.kind == .count ? 0.5 : 0.85)
+                ]))
+                var ascent: CGFloat = 0, descent: CGFloat = 0
+                let width = CGFloat(CTLineGetTypographicBounds(line, &ascent, &descent, nil))
+                // SwiftUI centers the line box, so the baseline sits half the ascent and descent difference below the middle.
+                context.saveGState()
+                context.translateBy(x: frame.midX - width / 2, y: frame.midY + (ascent - descent) / 2)
+                context.scaleBy(x: 1, y: -1)
+                context.textPosition = .zero
+                CTLineDraw(line, context)
+                context.restoreGState()
             }
-            if let label { draw(label, x: labelX, in: context) }
         }
     }
 

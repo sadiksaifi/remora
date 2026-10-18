@@ -17,6 +17,10 @@ public final class SessionOverlayState: @unchecked Sendable {
         public let keyText: String?
         public let keyIsText: Bool
         public let keyOpacity: Double
+        /// A multiple of the pill's standard size.
+        public let keySize: Double
+        /// The screen's appearance, which the recorded glass follows.
+        public let dark: Bool
         public let showPointerInRecordings: Bool
         public let showAgentPointer: Bool
         public let scale: Double
@@ -39,6 +43,8 @@ public final class SessionOverlayState: @unchecked Sendable {
     private var showPointer = true
     private var showKeys = false
     private var showAgent = false
+    private var keySize = 1.0
+    private var dark = false
     private var scale = 1.0
     private var observers: [UUID: @Sendable (TimeInterval) -> Void] = [:]
     private var timer: DispatchSourceTimer?
@@ -56,8 +62,10 @@ public final class SessionOverlayState: @unchecked Sendable {
         }
     }
 
-    public func configure(showPointerInRecordings: Bool, showKeyPresses: Bool, showAgentPointer: Bool, scale: Double) {
+    public func configure(showPointerInRecordings: Bool, showKeyPresses: Bool, showAgentPointer: Bool, scale: Double,
+                          keyPressSize: Double = 1) {
         change {
+            keySize = min(KeyPressPill.sizes.upperBound, max(KeyPressPill.sizes.lowerBound, keyPressSize))
             showPointer = showPointerInRecordings
             showKeys = showKeyPresses
             showAgent = showAgentPointer
@@ -65,6 +73,8 @@ public final class SessionOverlayState: @unchecked Sendable {
             if !showKeys { press = nil }
         }
     }
+
+    public func setDarkAppearance(_ dark: Bool) { change { self.dark = dark } }
 
     public func setCursor(_ image: CGImage?, hotspot: CGPoint) {
         change { cursor = image; self.hotspot = hotspot }
@@ -102,7 +112,7 @@ public final class SessionOverlayState: @unchecked Sendable {
             let text = showKeys && age < 1.5 ? press.map { $0.text + (repeats > 1 ? " ×\(repeats)" : "") } : nil
             return Snapshot(point: point, owner: owner, cursor: cursor, hotspot: hotspot,
                 clicks: clicks.filter { time - $0.time < 0.5 }, keyText: text, keyIsText: press?.isText ?? false,
-                keyOpacity: min(1, max(0, (1.5 - age) / 0.25)),
+                keyOpacity: min(1, max(0, (1.5 - age) / 0.25)), keySize: keySize, dark: dark,
                 showPointerInRecordings: showPointer, showAgentPointer: showAgent, scale: scale, time: time)
         }
     }

@@ -225,7 +225,7 @@ final class RemoteDesktopView: NSView {
         if let size = renderer.present(on: metalLayer, redraw: redrawNeeded) {
             if remoteSize != size {
                 remoteSize = size
-                agentPointer?.needsDisplay = true
+                agentPointer?.needsLayout = true
                 window?.invalidateCursorRects(for: self)
                 updateScreenElement()
                 NSAccessibility.post(element: screenElement, notification: .valueChanged)

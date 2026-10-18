@@ -11,6 +11,9 @@ enum AppSettings {
     static var showAgentPointer: Bool { UserDefaults.standard.object(forKey: showAgentPointerKey) as? Bool ?? true }
     static var showPointerInRecordings: Bool { UserDefaults.standard.object(forKey: showPointerInRecordingsKey) as? Bool ?? true }
     static var showKeyPresses: Bool { UserDefaults.standard.bool(forKey: showKeyPressesKey) }
+    /// A multiple of the key press display's standard size, within `KeyPressPill.sizes`.
+    static let keyPressSizeKey = "KeyPressSize"
+    static var keyPressSize: Double { UserDefaults.standard.object(forKey: keyPressSizeKey) as? Double ?? 1 }
     /// A folder path. Empty means the macOS screenshot location.
     static let saveLocationKey = "SaveLocation"
 
@@ -106,6 +109,7 @@ private struct GeneralPane: View {
 private struct KeyboardPane: View {
     @AppStorage(SystemShortcutCapture.enabledKey) private var captureShortcuts = true
     @AppStorage(AppSettings.showKeyPressesKey) private var showKeyPresses = false
+    @AppStorage(AppSettings.keyPressSizeKey) private var keyPressSize = 1.0
     @State private var trusted = SystemShortcutCapture.isTrusted
     private static let captureShortcutsTitle = "Send system shortcuts to the remote computer"
     private static let keyPressesTitle = "Show key presses"
@@ -135,6 +139,16 @@ private struct KeyboardPane: View {
                 }
                 .accessibilityLabel(Self.keyPressesTitle)
                 .accessibilityIdentifier("showKeyPresses")
+                // Like the Dock's size slider: small and large glyphs at the ends, snapping to quarter steps.
+                Slider(value: $keyPressSize, in: KeyPressPill.sizes, step: 0.25) {
+                    Text("Size")
+                } minimumValueLabel: {
+                    Image(systemName: "textformat.size.smaller").accessibilityLabel("Small")
+                } maximumValueLabel: {
+                    Image(systemName: "textformat.size.larger").accessibilityLabel("Large")
+                }
+                .disabled(!showKeyPresses)
+                .accessibilityIdentifier("keyPressSize")
             }
         }
         .settingsPane()
