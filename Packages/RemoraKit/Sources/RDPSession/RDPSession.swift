@@ -233,8 +233,18 @@ public final class RDPSession: RemoteSession, @unchecked Sendable {
             }
             session(user).emit(.cursorChanged(cursor))
         }
-        callbacks.remote_clipboard_text = { user, text in
-            session(user).emit(.remoteClipboardText(string(text)))
+        callbacks.clipboard_changed = { user, revision, status, text in
+            let value: RemoteClipboard.Status
+            switch status {
+            case RMRDP_CLIPBOARD_UNKNOWN: value = .unknown
+            case RMRDP_CLIPBOARD_PENDING: value = .pending
+            case RMRDP_CLIPBOARD_UNAVAILABLE: value = .unavailable
+            case RMRDP_CLIPBOARD_REMOTE_TEXT: value = .text(string(text))
+            case RMRDP_CLIPBOARD_FAILED: value = .failed
+            case RMRDP_CLIPBOARD_LOCAL_TEXT: value = .offered(string(text))
+            default: value = .notReady
+            }
+            session(user).emit(.clipboardChanged(revision: revision, status: value))
         }
         callbacks.credentials = { user, username, domain, rejected, newUsername, newDomain, newPassword in
             let owner = session(user)

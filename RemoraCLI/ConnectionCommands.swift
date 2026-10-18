@@ -25,6 +25,10 @@ struct ConnectionFields: ParsableArguments {
 }
 
 func readPassword() async throws -> String {
+    try PasswordInput.decode(try await readStandardInput())
+}
+
+func readStandardInput() async throws -> Data {
     let input = FileHandle.standardInput
     let chunks = AsyncThrowingStream<Data, any Error>(bufferingPolicy: .bufferingOldest(16)) { continuation in
         continuation.onTermination = { _ in input.readabilityHandler = nil }
@@ -33,10 +37,10 @@ func readPassword() async throws -> String {
                 let chunk = try handle.read(upToCount: 65_536) ?? Data()
                 if chunk.isEmpty { continuation.finish() }
                 else if case .dropped = continuation.yield(chunk) {
-                    continuation.finish(throwing: ControlFailure(.invalidArgument, "Password stdin exceeds the read buffer."))
+                    continuation.finish(throwing: ControlFailure(.invalidArgument, "Stdin exceeds the read buffer."))
                 }
             } catch {
-                continuation.finish(throwing: ControlFailure(.ioFailed, "Could not read password stdin."))
+                continuation.finish(throwing: ControlFailure(.ioFailed, "Could not read stdin."))
             }
         }
     }
@@ -44,10 +48,10 @@ func readPassword() async throws -> String {
     var data = Data()
     for try await chunk in chunks {
         data.append(chunk)
-        guard data.count < 1_048_576 else { throw ControlFailure(.invalidArgument, "Password stdin exceeds the request size limit.") }
+        guard data.count < 1_048_576 else { throw ControlFailure(.invalidArgument, "Stdin exceeds the request size limit.") }
     }
     if Task.isCancelled { throw ControlFailure(.cancelled, "The command was interrupted.") }
-    return try PasswordInput.decode(data)
+    return data
 }
 
 struct ConnectionCommand: AsyncParsableCommand {

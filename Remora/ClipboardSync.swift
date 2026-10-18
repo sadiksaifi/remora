@@ -11,9 +11,11 @@ final class ClipboardSync {
     private var changeCount: Int?
     private var attemptedPrompt = false
     private var connected = false
+    private let canSync: () -> Bool
 
-    init(session: any RemoteSession) {
+    init(session: any RemoteSession, canSync: @escaping () -> Bool) {
         self.session = session
+        self.canSync = canSync
     }
 
     func sessionDidConnect() {
@@ -25,6 +27,7 @@ final class ClipboardSync {
     }
 
     func receiveRemoteText(_ text: String) {
+        guard canSync() else { return }
         let pasteboard = NSPasteboard.general
         pasteboard.clearContents()
         pasteboard.setString(text, forType: .string)
@@ -32,7 +35,7 @@ final class ClipboardSync {
     }
 
     private func sendLocalTextIfChanged() {
-        guard connected else { return }
+        guard connected, canSync() else { return }
         let pasteboard = NSPasteboard.general
         guard changeCount != pasteboard.changeCount else { return }
         let access = pasteboard.accessBehavior

@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		184B1CDBC2176E82003D8FF3 /* ClipboardCommands.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1DA8E222592E8458A63660D /* ClipboardCommands.swift */; };
 		2B90048E1C415F08629B0F65 /* remora in Embed Dependencies */ = {isa = PBXBuildFile; fileRef = 00A12A4D5662F66E68A846F4 /* remora */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 		36942A6BC008F4DCAE232FCF /* PromptCommands.swift in Sources */ = {isa = PBXBuildFile; fileRef = F4B73C5B05D6A343D4717514 /* PromptCommands.swift */; };
 		3DD3F2D30298024A67E8AA6A /* RemoraControl in Frameworks */ = {isa = PBXBuildFile; productRef = 60133FC969A2D683DBDC1397 /* RemoraControl */; };
@@ -17,6 +18,7 @@
 		BF3629BE785DAD332249FF76 /* RDPSession in Frameworks */ = {isa = PBXBuildFile; productRef = CEE650B072CCF9E151EF611A /* RDPSession */; };
 		DA3C773AD4CF29259B8F1BE8 /* ArgumentParser in Frameworks */ = {isa = PBXBuildFile; productRef = 3F0067FBBEC140EDB05ACBCB /* ArgumentParser */; };
 		E03EDE23E73F6310DE1E7FF1 /* ConnectionCommands.swift in Sources */ = {isa = PBXBuildFile; fileRef = 32288A5FADB0939E34A8C07D /* ConnectionCommands.swift */; };
+		E314C4C3BC51A2B84C43CFA5 /* SettingsCommands.swift in Sources */ = {isa = PBXBuildFile; fileRef = 138AE6D8487D62E879520635 /* SettingsCommands.swift */; };
 		E9111E3861BEE04603B7723C /* RemoraControl in Frameworks */ = {isa = PBXBuildFile; productRef = 6E81E453A5FACCD885723067 /* RemoraControl */; };
 /* End PBXBuildFile section */
 
@@ -47,9 +49,11 @@
 /* Begin PBXFileReference section */
 		00A12A4D5662F66E68A846F4 /* remora */ = {isa = PBXFileReference; includeInIndex = 0; path = remora; sourceTree = BUILT_PRODUCTS_DIR; };
 		032183C95484016E7FA4168D /* ApplicationClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ApplicationClient.swift; sourceTree = "<group>"; };
+		138AE6D8487D62E879520635 /* SettingsCommands.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsCommands.swift; sourceTree = "<group>"; };
 		32288A5FADB0939E34A8C07D /* ConnectionCommands.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConnectionCommands.swift; sourceTree = "<group>"; };
 		774002F2A34E21E2D626D880 /* SessionCommands.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionCommands.swift; sourceTree = "<group>"; };
 		B508BCE9DE4C6DC56D8AA602 /* RemoraCommand.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoraCommand.swift; sourceTree = "<group>"; };
+		C1DA8E222592E8458A63660D /* ClipboardCommands.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClipboardCommands.swift; sourceTree = "<group>"; };
 		E3C547F7F1E1AEA0842A1FA7 /* Remora.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Remora.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		F4B73C5B05D6A343D4717514 /* PromptCommands.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PromptCommands.swift; sourceTree = "<group>"; };
 		F54EA48F30A2A5C79C170AE7 /* RemoraKit */ = {isa = PBXFileReference; lastKnownFileType = folder; name = RemoraKit; path = Packages/RemoraKit; sourceTree = SOURCE_ROOT; };
@@ -113,10 +117,12 @@
 			isa = PBXGroup;
 			children = (
 				032183C95484016E7FA4168D /* ApplicationClient.swift */,
+				C1DA8E222592E8458A63660D /* ClipboardCommands.swift */,
 				32288A5FADB0939E34A8C07D /* ConnectionCommands.swift */,
 				F4B73C5B05D6A343D4717514 /* PromptCommands.swift */,
 				B508BCE9DE4C6DC56D8AA602 /* RemoraCommand.swift */,
 				774002F2A34E21E2D626D880 /* SessionCommands.swift */,
+				138AE6D8487D62E879520635 /* SettingsCommands.swift */,
 			);
 			path = RemoraCLI;
 			sourceTree = "<group>";
@@ -238,10 +244,12 @@
 			buildActionMask = 2147483647;
 			files = (
 				BDE8D1D89FD473F62EB7E3C2 /* ApplicationClient.swift in Sources */,
+				184B1CDBC2176E82003D8FF3 /* ClipboardCommands.swift in Sources */,
 				E03EDE23E73F6310DE1E7FF1 /* ConnectionCommands.swift in Sources */,
 				36942A6BC008F4DCAE232FCF /* PromptCommands.swift in Sources */,
 				BC282B680631E3344190DDDB /* RemoraCommand.swift in Sources */,
 				A791380DFFB1D7C1FCEFADC2 /* SessionCommands.swift in Sources */,
+				E314C4C3BC51A2B84C43CFA5 /* SettingsCommands.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

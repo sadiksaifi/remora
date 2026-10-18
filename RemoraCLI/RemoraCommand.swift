@@ -56,7 +56,7 @@ struct RemoraCommand: AsyncParsableCommand {
         commandName: "remora",
         abstract: "Control the Remora desktop app.",
         discussion: "Run 'remora help agent' for the agent guide. Durations accept ms, s or m; bare numbers are seconds.",
-        subcommands: [Capabilities.self, AppCommand.self, ConnectionCommand.self, ConnectCommand.self, SessionCommand.self, PromptCommand.self, WaitCommand.self])
+        subcommands: [Capabilities.self, AppCommand.self, ConnectionCommand.self, ConnectCommand.self, SessionCommand.self, PromptCommand.self, WaitCommand.self, ClipboardCommand.self, SettingsCommand.self])
     @OptionGroup var options: CommonOptions
 }
 
@@ -83,7 +83,7 @@ struct Capabilities: ParsableCommand {
 
     func run() throws {
         Output.write(.success(.object([
-            "commands": .array(["help", "help agent", "capabilities", "app status", "app show", "app hide", "app close", "app quit", "connection list", "connection get", "connection create", "connection update", "connection duplicate", "connection delete", "connection password set", "connection password clear", "connect", "session list", "session get", "session show", "session disconnect", "session reconnect", "session close", "session resize", "prompt list", "prompt get", "prompt respond", "wait"].map(ControlValue.string)),
+            "commands": .array(["help", "help agent", "capabilities", "app status", "app show", "app hide", "app close", "app quit", "connection list", "connection get", "connection create", "connection update", "connection duplicate", "connection delete", "connection password set", "connection password clear", "connect", "session list", "session get", "session show", "session disconnect", "session reconnect", "session close", "session resize", "prompt list", "prompt get", "prompt respond", "wait", "clipboard get", "clipboard set", "settings get", "settings set", "settings reset", "settings permission", "settings cli get", "settings cli repair", "settings cli uninstall"].map(ControlValue.string)),
             "protocols": .array([.string("rdp")])
         ])), json: options.json)
     }

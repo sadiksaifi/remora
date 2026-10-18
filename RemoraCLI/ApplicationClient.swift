@@ -4,7 +4,7 @@ import RemoraControl
 /// Launch Services owns app identity and startup. Only read-only probes are retried.
 @MainActor
 struct ApplicationClient {
-    private var bundleURL: URL {
+    var bundleURL: URL {
         (Bundle.main.executableURL ?? URL(fileURLWithPath: CommandLine.arguments[0])).resolvingSymlinksInPath()
             .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
     }

@@ -11,6 +11,16 @@ extern "C" {
 
 typedef struct RMRDPSession RMRDPSession;
 
+typedef enum {
+    RMRDP_CLIPBOARD_NOT_READY,
+    RMRDP_CLIPBOARD_UNKNOWN,
+    RMRDP_CLIPBOARD_PENDING,
+    RMRDP_CLIPBOARD_UNAVAILABLE,
+    RMRDP_CLIPBOARD_REMOTE_TEXT,
+    RMRDP_CLIPBOARD_FAILED,
+    RMRDP_CLIPBOARD_LOCAL_TEXT
+} RMRDPClipboardStatus;
+
 typedef struct {
     const char *host;
     uint16_t port;
@@ -58,7 +68,7 @@ typedef struct {
     /* Straight-alpha BGRA32, tightly packed. Copy before returning. */
     void (*cursor)(void *user, RMRDPCursorKind kind, const uint8_t *pixels,
                    uint32_t width, uint32_t height, uint32_t hotspot_x, uint32_t hotspot_y);
-    void (*remote_clipboard_text)(void *user, const char *text);
+    void (*clipboard_changed)(void *user, uint64_t revision, RMRDPClipboardStatus status, const char *text);
     /* On success supply malloc-owned strings in all three outputs; the bridge takes ownership.
      * On cancellation return false and leave outputs NULL. */
     bool (*credentials)(void *user, const char *username, const char *domain, bool rejected,
