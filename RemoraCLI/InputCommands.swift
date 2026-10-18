@@ -16,8 +16,8 @@ struct MoveCommand: AsyncParsableCommand {
     @OptionGroup var options: CommonOptions
     @OptionGroup var target: SessionOptions
     @OptionGroup var basis: ImageOptions
-    @Argument var x: Int
-    @Argument var y: Int
+    @Argument(help: "Horizontal pixel coordinate from the top-left.") var x: Int
+    @Argument(help: "Vertical pixel coordinate from the top-left.") var y: Int
     @MainActor func run() async throws {
         try await options.execute(.init(command: "move", session: target.target,
             arguments: basis.adding(to: ["x": .number(Double(x)), "y": .number(Double(y))])))
@@ -29,11 +29,11 @@ struct ClickCommand: AsyncParsableCommand {
     @OptionGroup var options: CommonOptions
     @OptionGroup var target: SessionOptions
     @OptionGroup var basis: ImageOptions
-    @Argument var x: Int
-    @Argument var y: Int
-    @Option var button = "left"
-    @Option var count = 1
-    @Option var modifiers: String?
+    @Argument(help: "Horizontal pixel coordinate from the top-left.") var x: Int
+    @Argument(help: "Vertical pixel coordinate from the top-left.") var y: Int
+    @Option(help: "Mouse button: left, right, middle, back or forward.") var button = "left"
+    @Option(help: "Number of clicks, 1 to 3.") var count = 1
+    @Option(help: "Modifier chord held during the action, such as Ctrl+Shift.") var modifiers: String?
     @MainActor func run() async throws {
         var args: [String: ControlValue] = ["x": .number(Double(x)), "y": .number(Double(y)), "button": .string(button), "count": .number(Double(count))]
         if let modifiers { args["modifiers"] = .string(modifiers) }
@@ -46,11 +46,11 @@ struct DragCommand: AsyncParsableCommand {
     @OptionGroup var options: CommonOptions
     @OptionGroup var target: SessionOptions
     @OptionGroup var basis: ImageOptions
-    @Option var from: String
-    @Option var to: String
-    @Option var button = "left"
-    @Option var modifiers: String?
-    @Option var duration = "500ms"
+    @Option(help: "Start point as X,Y pixels from the top-left.") var from: String
+    @Option(help: "End point as X,Y pixels from the top-left.") var to: String
+    @Option(help: "Mouse button: left, right, middle, back or forward.") var button = "left"
+    @Option(help: "Modifier chord held during the action, such as Ctrl+Shift.") var modifiers: String?
+    @Option(help: "Drag duration, 1ms to 10s. Bare numbers are seconds.") var duration = "500ms"
     @MainActor func run() async throws {
         var args: [String: ControlValue] = ["from": try inputPoint(from), "to": try inputPoint(to), "button": .string(button),
             "durationMs": .number(try CommandTimeout(duration).seconds * 1000)]
@@ -64,9 +64,9 @@ struct ScrollCommand: AsyncParsableCommand {
     @OptionGroup var options: CommonOptions
     @OptionGroup var target: SessionOptions
     @OptionGroup var basis: ImageOptions
-    @Option var at: String
-    @Option(parsing: .unconditional) var dx: Double = 0
-    @Option(parsing: .unconditional) var dy: Double = 0
+    @Option(help: "Pointer position as X,Y pixels from the top-left.") var at: String
+    @Option(parsing: .unconditional, help: "Horizontal notches. Positive scrolls right.") var dx: Double = 0
+    @Option(parsing: .unconditional, help: "Vertical notches. Positive scrolls down.") var dy: Double = 0
     @MainActor func run() async throws {
         try await options.execute(.init(command: "scroll", session: target.target, arguments: basis.adding(to:
             ["at": try inputPoint(at), "dx": .number(dx), "dy": .number(dy)])))
@@ -77,7 +77,7 @@ struct TypeCommand: AsyncParsableCommand {
     static let configuration = CommandConfiguration(commandName: "type", abstract: "Send Unicode text without using the clipboard or Mac keyboard.")
     @OptionGroup var options: CommonOptions
     @OptionGroup var target: SessionOptions
-    @Option var text: String?
+    @Option(help: "Text to send instead of reading stdin.") var text: String?
     @Flag(name: .customLong("stdin"), help: "Read untrimmed UTF-8 text to EOF. This is the default.") var readStdin = false
     @MainActor func run() async throws {
         guard text == nil || !readStdin else { throw ControlFailure(.invalidArgument, "Choose --text or --stdin.") }
@@ -97,8 +97,8 @@ struct KeyCommand: AsyncParsableCommand {
     static let configuration = CommandConfiguration(commandName: "key", abstract: "Press a physical key chord, such as Ctrl+Alt+Delete or Win+R.")
     @OptionGroup var options: CommonOptions
     @OptionGroup var target: SessionOptions
-    @Argument var chord: String
-    @Option(name: .customLong("repeat")) var repetitions = 1
+    @Argument(help: "Physical key chord, such as Ctrl+Alt+Delete or Win+R.") var chord: String
+    @Option(name: .customLong("repeat"), help: "Number of times to press the chord, 1 to 100.") var repetitions = 1
     @MainActor func run() async throws {
         try await options.execute(.init(command: "key", session: target.target,
             arguments: ["key": .string(chord), "repeat": .number(Double(repetitions))]))

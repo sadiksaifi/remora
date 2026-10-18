@@ -17,7 +17,7 @@ struct ClipboardCommand: AsyncParsableCommand {
     struct Set: AsyncParsableCommand {
         @OptionGroup var options: CommonOptions
         @OptionGroup var target: SessionOptions
-        @Option var text: String?
+        @Option(help: "Remote clipboard text instead of reading stdin.") var text: String?
         @Flag(name: .customLong("stdin"), help: "Read untrimmed UTF-8 text to EOF. This is the default.") var readStdin = false
         @MainActor func run() async throws {
             guard text == nil || !readStdin else { throw ControlFailure(.invalidArgument, "Choose --text or --stdin.") }
