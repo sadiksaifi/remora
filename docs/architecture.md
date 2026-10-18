@@ -18,8 +18,10 @@ This is personal software. Prefer an existing library or a FreeRDP built-in over
 ```
 Remora.xcodeproj           app target, synchronized folders
 Remora/                    AppKit app, SwiftUI sheets, Metal renderer
+RemoraCLI/                 bundled Swift Argument Parser executable
 Packages/RemoraKit/
   RemoraCore               session protocol, connection model, connection store, credentials, neutral input
+  RemoraControl            Codable control messages and Network.framework Unix sockets
   CFreeRDPBridge           plain C bridge; the only code that includes FreeRDP headers
   RDPSession               Swift RDP adapter implementing the session protocol
 Vendor/build-engine.sh     builds OpenSSL, FreeRDP, and FFmpeg into an arm64 static XCFramework
@@ -35,7 +37,7 @@ Remora has one main window. Its home page is the connections list. Each open ses
 
 The toolbar shows the title "Connections", the + button, and search while no tab is open. With tabs open, the title hides, a Home button follows the traffic lights, and the tabs sit between two flexible spaces. The toolbar draws its glass capsule around the tab strip, centers it, and lets it grow to its ideal width (220 points per tab). Past that the tabs share the available width and finally scroll. Tab contents follow Safari's compact tabs. The title is centered, with the status dot to its left. The shown tab and the tab under the pointer show two controls: a close button (`xmark.circle.fill`) at the left end and a menu button (`slider.horizontal.3`) at the right end. Other tabs show neither. Both sit in the title's 24-point side padding, so the title stays centered and truncates between them. Tabs share the width equally, but the shown tab keeps at least 132 points, taken from the other tabs down to their 76-point minimum. The menu button hangs that tab's menu under it, including on a hovered tab that is not shown, and its items act on that tab without selecting it: Capture Keyboard with a checkmark, a separator, Take Screenshot, Copy Screenshot, and the recording item with their shortcuts, a separator, then the tab context menu's items, ending with Close Tab. Capture Keyboard is enabled only on the shown, connected tab, because only its desktop is in the window. AppKit has no public menu with Safari's arrow, so it is a plain pop-up menu centered under the button. Secondary-clicking a tab shows the context menu, which has the same items without the first two groups. `MainWindowController.tabMenu(for:includingActions:)` builds both, and `makeCaptureItems()` builds the capture items for this menu and the Session menu. The tab's accessibility element sorts first, then VoiceOver reaches the menu button as its own element. Closing stays a "Close Tab" action on the tab. The search item collapses to a button through a low-priority width on its field. On home it filters the list; on a tab it offers saved connections through `NSTextField.suggestionsDelegate`. On a tab, Escape works like a native search field: the first press closes the suggestions, and the next clears and closes the search and gives the keyboard back to the desktop.
 
-A hidden tab's desktop leaves the window. Its display link stops, so it presents no frames, and its keys, buttons, and keyboard capture are released. Its session stays connected and asks the server to stop sending desktop updates. `SessionDisplay` does the same while the window is minimized or fully covered (`NSWindow.occlusionState`). Showing the tab redraws the last frame at once, turns updates back on with a refresh of the whole desktop, and requests the current size for Fit to Window. A credentials or certificate request on a hidden tab marks the tab with an orange dot and waits; its sheet appears when the tab shows. Tabs can't change while the window has a sheet.
+A hidden tab's desktop leaves the window. Its display link stops, so it presents no frames, and its human-held keys, buttons, and keyboard capture are released. Its session stays connected and asks the server to stop sending desktop updates unless recording or CLI frame demand keeps them on. `SessionDisplay` does the same while the window is minimized or fully covered (`NSWindow.occlusionState`). Showing the tab redraws the last frame at once, turns updates back on with a refresh of the whole desktop, and requests the current size for Fit to Window. A credentials or certificate request on a hidden tab marks the tab with an orange dot and waits; its sheet appears when the tab shows. Tabs can't change while the window has a sheet.
 
 Closing a tab disconnects its session. Closing the window keeps every tab and its session.
 
@@ -45,7 +47,46 @@ Remora runs from the menu bar. The `terminal` menu bar icon shows while Remora r
 
 `StatusMenu` owns the icon. It builds its menu each time the menu opens, so it has no observers or timers. Each tab is an item with its status dot, its name, the state as the subtitle, and a submenu: Show, then Disconnect while the session is live. Then come Open Remora, Settings… and Quit Remora. With no tabs, a disabled No Sessions comes first. `sessionItem(for:)` builds one tab's item and submenu.
 
-The red close button closes the window, and its sessions stay connected. A closed window counts as covered, so `SessionDisplay` stops desktop updates unless the tab records. Launching Remora from Finder, Spotlight or the Dock while it runs shows the window through `applicationShouldHandleReopen(_:hasVisibleWindows:)`. Command-Q, Dock menu Quit and Quit Remora ask "Quit Remora and disconnect N sessions?" while any session is live, and add "Recordings in progress are saved." while a tab records.
+The red close button closes the window, and its sessions stay connected. A closed window counts as covered, so `SessionDisplay` stops desktop updates unless the tab records or has CLI frame demand. Launching Remora from Finder, Spotlight or the Dock while it runs shows the window through `applicationShouldHandleReopen(_:hasVisibleWindows:)`. Command-Q, Dock menu Quit and Quit Remora ask "Quit Remora and disconnect N sessions?" while any session is live, and add "Recordings in progress are saved." while a tab records.
+
+## Control socket
+
+The `remora` executable ships at `Remora.app/Contents/Helpers/remora`. Settings installs a symlink at `~/.local/bin/remora`. The helper resolves symlinks to find its containing app bundle. Both targets link RemoraControl, which owns the Codable request, response and event types and the Network.framework Unix-domain client and server. RemoraControl depends on neither FreeRDP nor the Keychain. `CommandLineController` maps requests onto the app's stores, tabs, sessions and captures.
+
+The listener runs whenever the app runs, whether the CLI is installed or not. Its path is `/tmp/remora-<uid>/control.sock`, with mode `0600` inside a directory with mode `0700`. There is no authentication, token, peer check or approval prompt. Installing the CLI symlink is the only opt-in. `REMORA_SOCKET` is an undocumented development override for both processes, used to isolate parallel builds.
+
+Each connection carries one JSON-line request and one JSON-line reply. Requests contain `command`, an optional `session`, an optional `timeout` in seconds, and `arguments`. Replies use `{"ok":true,"result":{...}}` or `{"ok":false,"error":{"code":"...","message":"...","hint":"..."}}`; failures may include `details`. `events` keeps the connection open for NDJSON, beginning with a snapshot. `screenshot --output -` receives a JSON reply with `result.byteLength`, followed by that many raw PNG bytes. The helper writes only the PNG to stdout for that command.
+
+When the app is absent, the helper asks Launch Services to open its bundle without activation and with `--cli-background`. It waits up to ten seconds for the socket, separately from the command deadline. It never resends a mutation after a lost reply; the caller must inspect current state before retrying.
+
+## Control state machine
+
+`SessionControl` in RemoraCore owns input policy as a pure state machine. `SessionViewController` applies its decisions to input, clipboard synchronization and frame demand. Its states are:
+
+- `idle`: no agent is attached, and human input is forwarded.
+- `active`: CLI input has attached the agent. Human clicks, keys and scrolls stay local while local menus remain available.
+- `paused`: the human chose Take Over. Agent input fails with `user-active` until an explicit Resume.
+- `stopped`: Stop Agent Control detached the agent and restored human input. This is a soft stop; the next CLI input attaches again.
+
+Take Over moves `active` to `paused`. Stop moves `active` or `paused` to `stopped`. Both first close input admission, cancel queued agent input and await release of its held keys and buttons before forwarding human input. Take Over emits `user.tookOver`; Stop emits `control.stopped`. Resume moves `paused` or `stopped` to `active` and emits `user.resumed` with click, key and scroll counts and `screenChanged`, never typed text. There is no automatic resume timer. Agents must wait for the human to Resume rather than invoke Resume themselves.
+
+Resume requires a new CLI screenshot before the next input, or the command fails with `observation-required`. A screenshot taken while paused does not clear that requirement. Desktop geometry changes also invalidate observation. Each session admits one pointer, key, text or batch input command at a time; overlapping commands fail immediately with `input-busy`. Session end cancels input and moves active control to `stopped`, preserving a human pause. Manual reconnect replaces the session attempt UUID, so old session targets and screenshot mappings expire.
+
+The RDP adapter tracks held input per source. Focus changes release human input only. Agent requests release their own held state on every exit, including cancellation and timeout. Showing or focusing an agent-controlled tab does not release agent keys, synchronize lock keys, capture the keyboard, or show the shortcut-permission banner.
+
+Mac clipboard synchronization follows human ownership, independently of who opened the tab. It is disabled during active agent control and handover. It can resume while paused or stopped only when the connected desktop is visible, focused and in the active key window. CLI `clipboard get` reads remote text without attaching control. `clipboard set` attaches control and obeys the same pause and observation checks as input. Neither command accesses the Mac clipboard.
+
+`SessionDisplay` enables desktop updates while the desktop is visible, recording runs, or CLI frame demand is nonzero. Active and paused control retain background frame demand. Stop drops that demand. Connect, reconnect, resize, screenshot, frame waits and recording start hold temporary demand while waiting for frames. When no consumer needs frames, RDP Suppress Output pauses updates; re-enabling them requests a full refresh. These demands do not start the hidden view's display link. An idle app with no sessions has no polling timer or drawing work.
+
+The capsule, tab marker and ghost pointer from #34 will be documented here after that UI merges and the end-to-end run verifies it.
+
+## CLI lifecycle
+
+CLI startup opens no window, does not activate Remora and shows no Dock icon. The menu bar icon remains available. Help, `app status` and `settings cli get` work without launching the app; command discovery through `capabilities` without a session is also local. `app show` opens and activates the main window or Settings, and a foreground `connect` shows the main window. Opening either window restores the Dock icon.
+
+`app hide` hides the app. `app close` closes the main window. Both preserve sessions, as does the red close button. Closing the last window leaves Remora in the menu bar. Opening Remora from Finder, Spotlight or the Dock shows the main window even if the app is already running.
+
+Quit paths are Command-Q, Dock menu Quit while a window is open, Quit Remora in the menu bar, and `remora app quit`. The human paths use the session confirmation described above, with Quit as the default button and Cancel available. `app quit` skips confirmation. Every quit path disconnects sessions and finishes recordings, including captures retained after their tabs closed, before stopping the socket listener. App termination bounds recording cleanup to ten seconds.
 
 ## Session interface
 
@@ -84,7 +125,7 @@ The window never resizes for a session. Fixed sessions and unrequested server de
 - Key events carry the macOS virtual key code. RDP maps it with WinPR's Apple keycode table to scancodes.
 - Physical mapping: Command is Windows/Super, Control is Control, Option is Alt.
 - The keyboard layout announced to the server follows the current Mac input source.
-- All pressed keys and buttons are released when the window loses key status, the app deactivates, or the tab hides. Modifiers still held when the key state resets stay out of the remote state until released.
+- Human-held keys and buttons are released when the window loses key status, the app deactivates, or the tab hides. Modifiers still held when the key state resets stay out of the remote state until released.
 - Scroll accumulates into 1/120-notch wheel units.
 - System shortcuts (Cmd-Tab, Cmd-Space) are captured with a `CGEventTap` while a session tab shows, its desktop has the keyboard, and the window is key. This needs the Accessibility permission. Without it, or with capture turned off in Settings, those shortcuts stay local.
 - Cmd-Q and Ctrl-Cmd-F always stay local, and so does the Ctrl-Option-Cmd family: `[` and `]` for the previous and next tab, 1 through 9 for tab N, H for the connections list, W to close the tab, S to save a screenshot, Shift-S to copy one, R to start or stop recording, and Escape to release the keyboard, like Session > Release Keyboard Capture. Clicking the desktop captures the keyboard again. Ctrl-Option-Cmd-arrows are left to window managers such as Rectangle. Other menu shortcuts, including Cmd-W, act only while the desktop does not have the keyboard.
@@ -198,7 +239,7 @@ The arrival clock is process uptime, read only while the recording observer is i
 
 The incremental idle capture storage is the optional observer and arrival metadata, plus the session's source reference. There is no desktop-sized capture allocation. Recording adds the bounded encoder pool, texture cache, and one pending timestamp. At equal dimensions it adds one full GPU texture-to-pool blit per encoded frame, at most 60 per second, with no full CPU copy or Core Image pass. At 3024 by 1964 each blit transfers 23,756,544 bytes, about 1.43 GB/s of GPU copy traffic at the cap. The renderer's normal dirty uploads remain shared with display. No new live profile was taken; these are code-path and byte-count costs, not measured CPU percentages.
 
-Recording forces `SessionDisplay` updates on, including hidden tabs, minimized windows, and occluded windows. Stop removes that override and applies the current visibility state. Automatic RDP reconnect keeps the capture object, movie, timeline, and update override. Frames resume in the same movie after reconnect, with any new desktop size fitted into the original video size. Terminal disconnect finishes the movie. A later manual connection attempt attaches a new renderer with no old desktop texture.
+Recording forces `SessionDisplay` updates on, including hidden tabs, minimized windows, and occluded windows. Stop removes that override and applies the current visibility and CLI frame demand. Automatic RDP reconnect keeps the capture object, movie, timeline, and update override. Frames resume in the same movie after reconnect, with any new desktop size fitted into the original video size. Terminal disconnect finishes the movie. A later manual connection attempt attaches a new renderer with no old desktop texture.
 
 Stop, explicit disconnect, terminal session end, and controller teardown remove the renderer's recording observer before finishing the movie. Tab close and quit use the same controller disconnect path. `SessionTabs` retains captures from closed tabs until they finish, so quitting also waits for movies whose tabs have already disappeared. `AppDelegate.applicationShouldTerminate(_:)` disconnects sessions, returns `.terminateLater`, waits for all captures, and calls `reply(toApplicationShouldTerminate:)`. A pending frame has five seconds to drain. Movie finalization has an eight-second cancellation deadline. The app has a ten-second overall deadline and logs any unfinished destination and partial-file location before replying. Force Quit, process crashes, and power loss cannot run this teardown.
 
@@ -222,7 +263,7 @@ When any tab records or finishes a recording, the quit alert adds "Recordings in
 
 Automatic lifecycle failures are also written to the session log. On-screen verification, real reconnect, encoder saturation, disk-full failure, and quit with a live remote session have not been exercised by these automated tests.
 
-The on-screen verifier should use only a development instance it launches itself. It must leave the user's installed `/Applications/Remora.app` and other instances alone. Do not use Penguin, type passwords, modify saved connections or Keychain entries, or back up or restore the user's live `connections.json`. Use only the saved Windows connection `desktop-b8l68ps.tail5b813.ts.net` and only look at its desktop. Keep remote captures under `/Users/sdk/Projects/Remora/.snap/`; remove any test captures saved into the configured screenshot location.
+The on-screen verifier should use only a development instance it launches itself. It must leave the user's installed `/Applications/Remora.app` and other instances alone. Do not use Penguin, type passwords, modify saved connections or Keychain entries, or back up or restore the user's live `connections.json`. Use only a temporary connection to the local test RDP target. Keep remote captures under `/Users/sdk/Projects/Remora/.snap/`; remove any test captures saved into the configured screenshot location.
 
 - Verify save and clipboard screenshots after the desktop becomes idle. Compare native dimensions and the whole image, excluding the Mac toolbar, tab strip, and overlays.
 - Verify a second save in the same second does not overwrite the first.
