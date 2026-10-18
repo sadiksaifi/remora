@@ -115,9 +115,16 @@ private struct SessionTabView: View {
 
     var body: some View {
         HStack(spacing: 6) {
+            if let agentStatus {
+                // A status marker only: a stray click must not end agent control.
+                Image(systemName: "pointer.arrow.motionlines")
+                    .font(.system(size: 12))
+                    .foregroundStyle(Color(nsColor: tab.control == .active ? .systemBlue : .systemGray))
+                    .help(agentStatus)
+            }
             if let recording {
                 recordButton(recording)
-            } else if let dotColor {
+            } else if agentStatus == nil, let dotColor {
                 Circle()
                     .fill(Color(nsColor: dotColor))
                     .frame(width: 7, height: 7)
@@ -211,7 +218,7 @@ private struct SessionTabView: View {
 
     private var showsControls: Bool { isSelected || isHovered }
 
-    /// Replaces the status dot: recording needs a connected session, so the dot would always be green.
+    /// Replaces the status dot, after any agent marker: recording needs a connected session, so the dot would always be green.
     private func recordButton(_ recording: Recording) -> some View {
         Button(action: onStopRecording) {
             Image(systemName: "record.circle")
@@ -242,8 +249,11 @@ private struct SessionTabView: View {
         return "Recording for \(Duration.seconds(elapsed).formatted(.time(pattern: .minuteSecond))). Click to stop."
     }
 
+    private var agentStatus: String? { tab.control.agentStatus(tab.agentName) }
+
     private var accessibilityValue: String {
-        let status = tab.needsAttention ? "Needs attention" : tab.state.statusTitle
+        var status = tab.needsAttention ? "Needs attention" : tab.state.statusTitle
+        if let agentStatus { status += ", \(agentStatus.trimmingCharacters(in: ["."]))" }
         switch recording {
         case .recording: return "\(status), recording"
         case .finishing: return "\(status), finishing recording"

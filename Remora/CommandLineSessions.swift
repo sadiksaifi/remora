@@ -156,7 +156,7 @@ extension CommandLineController {
                resolution != (existing.attemptResolution ?? existing.attemptConnection.resolution) {
                 throw ControlFailure(.sessionExists, "An active session uses a different resolution.", hint: "Inspect it or disconnect explicitly.")
             }
-            let started = sessions.open(connection, select: !background, commandLine: true, resolution: resolution)
+            let started = sessions.open(connection, select: !background, agent: request.agent ?? "remora CLI", resolution: resolution)
             if started {
                 do { try connectionStore.markConnected(id: connection.id) }
                 catch { throw ControlFailure(.storeFailed, "Session started, but its last-connected date could not be saved.", hint: "Inspect session list before retrying.") }

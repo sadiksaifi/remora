@@ -92,7 +92,8 @@ struct CommonOptions: ParsableArguments {
 
     @MainActor func execute(_ request: ControlRequest, launch: Bool = true, defaultTimeout: String = "10s") async throws {
         let seconds = try CommandTimeout(timeout ?? defaultTimeout).seconds
-        let bounded = ControlRequest(command: request.command, session: request.session, timeout: seconds, arguments: request.arguments)
+        let bounded = ControlRequest(command: request.command, session: request.session, timeout: seconds,
+                                     arguments: request.arguments, agent: AgentName.current)
         let result = try await ApplicationClient().request(bounded, launch: launch, timeout: seconds + 1)
         switch result {
         case .success: Output.write(result, json: json)

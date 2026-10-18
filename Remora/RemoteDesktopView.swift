@@ -132,6 +132,23 @@ final class RemoteDesktopView: NSView {
         updateDrawableSize()
     }
 
+    /// True while the agent has control. The Settings switch can still hide the pointer.
+    var showsAgentPointer = false {
+        didSet { agentPointer?.isShown = showsAgentPointer }
+    }
+    private var agentPointer: AgentPointerView?
+
+    func moveAgentPointer(to remotePoint: CGPoint, click: Bool) {
+        if agentPointer == nil {
+            let pointer = AgentPointerView(frame: bounds)
+            pointer.autoresizingMask = [.width, .height]
+            pointer.isShown = showsAgentPointer
+            addSubview(pointer)
+            agentPointer = pointer
+        }
+        agentPointer?.move(to: remotePoint, click: click)
+    }
+
     override func becomeFirstResponder() -> Bool {
         let accepted = super.becomeFirstResponder()
         if accepted { desktopInput.becameFirstResponder() }
@@ -211,6 +228,7 @@ final class RemoteDesktopView: NSView {
         if let size = renderer.present(on: metalLayer, redraw: redrawNeeded) {
             if remoteSize != size {
                 remoteSize = size
+                agentPointer?.needsLayout = true
                 window?.invalidateCursorRects(for: self)
                 updateScreenElement()
                 NSAccessibility.post(element: screenElement, notification: .valueChanged)
@@ -260,7 +278,7 @@ extension RemoteDesktopView {
     }
 
     /// The drawn remote screen in this view's flipped points, without letterbox bars.
-    private var screenRect: CGRect {
+    var screenRect: CGRect {
         DesktopGeometry(remoteSize: remoteSize, drawableSize: bounds.size).contentRect.offsetBy(dx: bounds.minX, dy: bounds.minY)
     }
 

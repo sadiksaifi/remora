@@ -1,4 +1,5 @@
 import AppKit
+import RemoraCore
 import SwiftUI
 
 /// Session-only chrome stays above the desktop, preserving its last rendered frame.
@@ -8,30 +9,76 @@ final class SessionOverlays: NSObject {
     private var reconnectingView: NSHostingView<SessionStatusView>?
     private var permissionView: NSView?
     private var confirmationView: NSView?
+    private var capsuleView: NSView?
+    private var capsule: AgentControlCapsule?
     private var offeredPermission = false
     private let computerName: String
     private let address: String
     private let cancel: () -> Void
+    private let toggleControl: () -> Void
     private static let dismissedPermissionKey = "ShortcutCapturePermissionDismissed"
 
-    init(desktop: RemoteDesktopView, computerName: String, address: String, cancel: @escaping () -> Void) {
+    init(desktop: RemoteDesktopView, computerName: String, address: String,
+         cancel: @escaping () -> Void, toggleControl: @escaping () -> Void) {
         self.desktop = desktop
         self.computerName = computerName
         self.address = address
         self.cancel = cancel
+        self.toggleControl = toggleControl
         super.init()
         NotificationCenter.default.addObserver(self, selector: #selector(appBecameActive),
                                                name: NSApplication.didBecomeActiveNotification, object: nil)
     }
 
-    func controlChanged(allowsHumanInput: Bool) {
-        if !allowsHumanInput { removePermissionBanner() }
+    /// Control changes post on every agent command, so only a new capsule state replaces the capsule.
+    /// The stopped capsule shows only when `showsStop` and the agent had control or was paused; it fades after 4 s.
+    func controlChanged(_ control: SessionControl, agent: String, showsStop: Bool) {
+        if !control.allowsHumanInput { removePermissionBanner() }
+        let next: AgentControlCapsule?
+        switch control.state {
+        case .active, .paused:
+            next = AgentControlCapsule(state: control.state, agent: agent, action: toggleControl)
+        case .stopped where showsStop && capsule != nil && capsule?.state != .stopped:
+            next = AgentControlCapsule(state: .stopped, agent: capsule?.agent ?? agent, action: toggleControl)
+        case .stopped where capsule?.state == .stopped:
+            return
+        default:
+            next = nil
+        }
+        guard next?.state != capsule?.state || next?.agent != capsule?.agent else { return }
+        capsule = next
+        capsuleView?.removeFromSuperview()
+        capsuleView = nil
+        guard let next, let desktop else { return }
+        removePermissionBanner()
+        let view = NSHostingView(rootView: next)
+        view.sizingOptions = .intrinsicContentSize
+        view.translatesAutoresizingMaskIntoConstraints = false
+        desktop.addSubview(view, positioned: .below, relativeTo: reconnectingView)
+        NSLayoutConstraint.activate([
+            view.topAnchor.constraint(equalTo: desktop.topAnchor, constant: 12),
+            view.centerXAnchor.constraint(equalTo: desktop.centerXAnchor),
+            view.widthAnchor.constraint(lessThanOrEqualTo: desktop.widthAnchor, constant: -24),
+        ])
+        capsuleView = view
+        NSAccessibility.post(element: view, notification: .announcementRequested,
+                             userInfo: [.announcement: next.message, .priority: NSAccessibilityPriorityLevel.high.rawValue])
+        guard next.state == .stopped else { return }
+        Task { @MainActor [weak self, weak view] in
+            try? await Task.sleep(for: .seconds(4))
+            guard let self, let view, capsuleView === view else { return }
+            await NSAnimationContext.runAnimationGroup { $0.duration = 0.3; view.animator().alphaValue = 0 }
+            guard capsuleView === view else { return }
+            view.removeFromSuperview()
+            capsuleView = nil
+            capsule = nil
+        }
     }
 
     func connected() {
         reconnectingView?.removeFromSuperview()
         reconnectingView = nil
-        guard desktop?.allowsHumanInput == true, !offeredPermission else { return }
+        guard desktop?.allowsHumanInput == true, capsuleView == nil, !offeredPermission else { return }
         offeredPermission = true
         guard SystemShortcutCapture.isEnabled, !SystemShortcutCapture.isTrusted,
               !UserDefaults.standard.bool(forKey: Self.dismissedPermissionKey), let desktop else { return }

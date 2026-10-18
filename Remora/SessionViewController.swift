@@ -35,7 +35,10 @@ final class SessionViewController: NSViewController {
             onControlEvent?("session.replaced", .object(["previousSession": .string(oldValue.uuidString), "session": .string(attemptID.uuidString)]))
         }
     }
-    private(set) var startedBy = "Remora"
+    /// "you", or the label of the command-line program that opened the tab.
+    private(set) var startedBy = "you"
+    /// The command-line program that last took control, for the capsule, tab and menus.
+    private(set) var agentName = "remora CLI"
     private(set) var attemptResolution: ConnectionResolution?
     private var commandLine = false
     /// Follows human control ownership, independently of who opened the tab.
@@ -52,10 +55,10 @@ final class SessionViewController: NSViewController {
             view.window?.isMiniaturized == false && view.window?.firstResponder === desktopView
     }
 
-    func offerClipboardText(_ text: String) throws {
+    func offerClipboardText(_ text: String, agent: String?) throws {
         guard state == .connected, let session else { throw ControlFailure(.notConnected, "The session is not connected.") }
         guard !text.utf8.contains(0) else { throw ControlFailure(.invalidArgument, "Clipboard text cannot contain NUL bytes.") }
-        try attachAgentControl()
+        try attachAgentControl(agent: agent)
         session.setLocalClipboard(text: text)
     }
     private var renderer: FrameRenderer?
@@ -76,10 +79,12 @@ final class SessionViewController: NSViewController {
     }
     private(set) var credentialDraft: SessionCredentialDraft?
 
-    func configureCommandLine(_ active: Bool, resolution: ConnectionResolution?) {
-        commandLine = active
-        startedBy = active ? "remora CLI" : "Remora"
-        attemptResolution = active ? resolution ?? (connection.resolution == .fitToWindow ? .fixed(width: 1920, height: 1080) : connection.resolution) : nil
+    /// A nil `agent` means a person opened the tab in Remora.
+    func configureCommandLine(agent: String?, resolution: ConnectionResolution?) {
+        commandLine = agent != nil
+        startedBy = agent ?? "you"
+        if let agent { agentName = agent }
+        attemptResolution = commandLine ? resolution ?? (connection.resolution == .fitToWindow ? .fixed(width: 1920, height: 1080) : connection.resolution) : nil
     }
 
     func addFrameDemand() {
@@ -124,7 +129,10 @@ final class SessionViewController: NSViewController {
     private(set) var control = SessionControl()
     static let controlDidChange = Notification.Name("SessionControlDidChange")
     private var controlFrameDemand = false
-    var activeAgentInput: AgentInputRequest?
+    var activeAgentInput: AgentInputRequest? {
+        didSet { if activeAgentInput == nil { agentButtons = [] } }
+    }
+    private var agentButtons: PointerButtons = []
     var agentInputCancellation: ControlFailure?
 
     /// Take Over and Stop can cancel even events detached by the C drain loop.
@@ -213,7 +221,7 @@ final class SessionViewController: NSViewController {
     }
 
     func reconnect() {
-        configureCommandLine(commandLine, resolution: nil)
+        configureCommandLine(agent: commandLine ? startedBy : nil, resolution: nil)
         startSession()
     }
 
@@ -435,8 +443,12 @@ final class SessionViewController: NSViewController {
             desktopView.input = session
             self.desktopView = desktopView
             overlays = SessionOverlays(
-                desktop: desktopView, computerName: connection.name, address: connection.displayAddress
-            ) { [weak session] in session?.disconnect() }
+                desktop: desktopView, computerName: connection.name, address: connection.displayAddress,
+                cancel: { [weak session] in session?.disconnect() },
+                toggleControl: { [weak self] in self?.toggleAgentControl() }
+            )
+            overlays?.controlChanged(control, agent: agentName, showsStop: false)
+            desktopView.showsAgentPointer = control.state == .active
             self.session = session
             remoteClipboard = RemoteClipboard()
             clipboardSync = ClipboardSync(session: session, canSync: { [weak self] in self?.canSyncMacClipboard == true })
@@ -808,10 +820,30 @@ extension SessionViewController {
         }
     }
 
-    func attachAgentControl() throws {
+    /// A nil `agent` comes from a request that did not name its program.
+    func attachAgentControl(agent: String?) throws {
         try checkAgentInput()
         try control.attach()
+        agentName = agent ?? "remora CLI"
         applyControl()
+    }
+
+    /// Moves the ghost pointer to the agent's submitted point. A newly pressed button flashes the click ring.
+    func showAgentPointer(at point: RemotePoint, buttons: PointerButtons) {
+        let click = !buttons.subtracting(agentButtons).isEmpty
+        agentButtons = buttons
+        desktopView?.moveAgentPointer(to: CGPoint(x: Int(point.x), y: Int(point.y)), click: click)
+    }
+
+    /// Take Over while the agent has control, or Resume while it is paused.
+    func toggleAgentControl() {
+        guard !control.isTransferring else { return }
+        Task {
+            do {
+                if control.state == .paused { try resumeAgentControl() }
+                else { try await handoverAgentControl(stopping: false) }
+            } catch { NSApp.presentError(error) }
+        }
     }
 
     func observedForAgent() { control.observed() }
@@ -860,16 +892,17 @@ extension SessionViewController {
     private func endAgentControl() {
         cancelAgentInput(ControlFailure(.sessionEnded, "The session ended during input."))
         control.ended()
-        applyControl()
+        applyControl(sessionEnded: true)
     }
 
-    private func applyControl() {
+    private func applyControl(sessionEnded: Bool = false) {
         // Disable clipboard synchronization before closing the human input gate.
         if allowsMacClipboardSync != control.allowsHumanInput {
             allowsMacClipboardSync = control.allowsHumanInput
         }
         desktopView?.allowsHumanInput = control.allowsHumanInput
-        overlays?.controlChanged(allowsHumanInput: control.allowsHumanInput)
+        overlays?.controlChanged(control, agent: agentName, showsStop: isConnected && !sessionEnded)
+        desktopView?.showsAgentPointer = control.state == .active
         if control.needsFrames != controlFrameDemand {
             controlFrameDemand = control.needsFrames
             if controlFrameDemand { addFrameDemand() } else { removeFrameDemand() }

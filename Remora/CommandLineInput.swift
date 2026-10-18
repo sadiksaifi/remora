@@ -30,7 +30,7 @@ extension CommandLineController {
         } else { receipt = nil }
         let geometryRevision = session.inputGeometryRevision
         let plan = try InputPlan(request, size: size, geometry: receipt?.geometry, capabilities: capabilities)
-        try session.attachAgentControl()
+        try session.attachAgentControl(agent: request.agent)
         guard let input = backend.beginAgentInput() else { throw ControlFailure(.notConnected, "The session is not connected.") }
         session.activeAgentInput = input
         session.agentInputCancellation = nil
@@ -58,6 +58,7 @@ extension CommandLineController {
                 case .event(let event):
                     try await input.send(event, deadline: deadline)
                     submitted += 1
+                    if case .pointer(let point, let buttons) = event { session.showAgentPointer(at: point, buttons: buttons) }
                 case .delay(let milliseconds):
                     let until = min(deadline, ContinuousClock.now.advanced(by: .milliseconds(milliseconds)))
                     // Poll cancellation from Take Over while held in a delay.

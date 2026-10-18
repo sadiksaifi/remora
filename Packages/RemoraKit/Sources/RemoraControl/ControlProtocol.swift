@@ -36,17 +36,20 @@ public struct ControlRequest: Codable, Sendable {
     public let session: String?
     public let timeout: Double?
     public let arguments: [String: ControlValue]
+    /// A display-only label for the program that ran the command line, such as "codex".
+    public let agent: String?
 
-    public init(command: String, session: String? = nil, timeout: Double? = nil, arguments: [String: ControlValue] = [:]) {
+    public init(command: String, session: String? = nil, timeout: Double? = nil, arguments: [String: ControlValue] = [:], agent: String? = nil) {
         self.command = command
         self.session = session
         self.timeout = timeout
         self.arguments = arguments
+        self.agent = agent
     }
 
     public init(from decoder: any Decoder) throws {
         let fields = try [String: ControlValue](from: decoder)
-        guard Set(fields.keys).isSubset(of: ["command", "session", "timeout", "arguments"]),
+        guard Set(fields.keys).isSubset(of: ["command", "session", "timeout", "arguments", "agent"]),
               case .string(let command) = fields["command"], !command.isEmpty else {
             throw ControlFailure(.invalidArgument, "A request needs a command and only known fields.")
         }
@@ -65,6 +68,11 @@ public struct ControlRequest: Codable, Sendable {
         case nil: arguments = [:]
         case .object(let value): arguments = value
         default: throw ControlFailure(.invalidArgument, "arguments must be an object.")
+        }
+        switch fields["agent"] {
+        case nil, .null: agent = nil
+        case .string(let value): agent = value.isEmpty ? nil : String(value.prefix(64))
+        default: throw ControlFailure(.invalidArgument, "agent must be a string.")
         }
     }
 }

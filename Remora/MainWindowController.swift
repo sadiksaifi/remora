@@ -233,13 +233,8 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
         close(selection)
     }
 
-    @objc func takeOverAgentControl(_ sender: Any?) {
-        guard let session = targetSession(sender) else { return }
-        Task { do { try await session.handoverAgentControl(stopping: false) } catch { NSApp.presentError(error) } }
-    }
-    @objc func resumeAgentControl(_ sender: Any?) {
-        do { try targetSession(sender)?.resumeAgentControl() } catch { NSApp.presentError(error) }
-    }
+    /// Take Over, which validation retitles Resume while the tab is paused.
+    @objc func toggleAgentControl(_ sender: Any?) { targetSession(sender)?.toggleAgentControl() }
     @objc func stopAgentControl(_ sender: Any?) {
         guard let session = targetSession(sender) else { return }
         Task { do { try await session.handoverAgentControl(stopping: true) } catch { NSApp.presentError(error) } }
@@ -273,6 +268,29 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
         let record = NSMenuItem(title: "Start Recording", action: #selector(toggleRecording(_:)), keyEquivalent: "r")
         record.keyEquivalentModifierMask = chord
         return [take, copy, record]
+    }
+
+    var canStopAnyAgent: Bool {
+        sessionTabs.tabs.contains { sessionTabs.session(for: $0.id)?.control.canStop == true }
+    }
+
+    /// Take Over or Resume and Stop Agent Control for one tab, then Stop All Agent Control, leaving out
+    /// the items that don't apply. For the tab menus and the menu bar menu.
+    func agentControlItems(for id: UUID, includingStopAll: Bool) -> [NSMenuItem] {
+        guard let control = sessionTabs.session(for: id)?.control else { return [] }
+        var items: [NSMenuItem] = []
+        func add(_ title: String, _ action: Selector, _ applies: Bool) {
+            guard applies else { return }
+            let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
+            item.target = self
+            item.representedObject = id
+            items.append(item)
+        }
+        add(control.state == .paused ? "Resume" : "Take Over", #selector(toggleAgentControl(_:)),
+            control.canTakeOver || (control.canResume && sessionTabs.session(for: id)?.isConnected == true))
+        add("Stop Agent Control", #selector(stopAgentControl(_:)), control.canStop)
+        add("Stop All Agent Control", #selector(stopAllAgentControl(_:)), includingStopAll && canStopAnyAgent)
+        return items
     }
 
     /// An item from a tab's own menu names its tab. Other items act on the shown tab.
@@ -311,11 +329,12 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
         case #selector(toggleTabKeyboardCapture(_:)):
             menuItem.state = session?.hasKeyboard == true ? .on : .off
             return session?.isConnected == true && session === sessionTabs.selectedSession
-        case #selector(takeOverAgentControl(_:)): return session?.control.canTakeOver == true
-        case #selector(resumeAgentControl(_:)): return session?.isConnected == true && session?.control.canResume == true
+        case #selector(toggleAgentControl(_:)):
+            let paused = session?.control.state == .paused
+            menuItem.title = paused ? "Resume" : "Take Over"
+            return paused ? session?.isConnected == true && session?.control.canResume == true : session?.control.canTakeOver == true
         case #selector(stopAgentControl(_:)): return session?.control.canStop == true
-        case #selector(stopAllAgentControl(_:)):
-            return sessionTabs.tabs.contains { sessionTabs.session(for: $0.id)?.control.canStop == true }
+        case #selector(stopAllAgentControl(_:)): return canStopAnyAgent
         case #selector(disconnectSession(_:)):
             return session?.canDisconnect ?? false
         case #selector(reconnectSession(_:)):
@@ -361,8 +380,8 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
         menu.popUp(positioning: nil, at: NSPoint(x: button.midX - menu.size.width / 2, y: button.maxY + 6), in: tabStrip)
     }
 
-    /// The context menu has the tab items. The menu button's menu puts Capture Keyboard and the
-    /// capture items first.
+    /// The context menu has the agent control items that apply and Close Tab. The menu button's menu
+    /// puts Capture Keyboard and the capture items first.
     private func tabMenu(for id: UUID, includingActions: Bool) -> NSMenu {
         let menu = NSMenu()
         if includingActions {
@@ -377,6 +396,9 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
             }
             menu.addItem(.separator())
         }
+        let agentItems = agentControlItems(for: id, includingStopAll: true)
+        for item in agentItems { menu.addItem(item) }
+        if !agentItems.isEmpty { menu.addItem(.separator()) }
         let close = menu.addItem(withTitle: "Close Tab", action: #selector(closeClickedTab(_:)), keyEquivalent: "")
         close.target = self
         close.representedObject = id
