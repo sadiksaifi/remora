@@ -8,12 +8,36 @@ enum RemoraEntry {
         let arguments = Array(CommandLine.arguments.dropFirst())
         if arguments == ["help", "agent"] {
             print("""
-                Use remora capabilities to discover the commands in this build.
-                Use remora app status --json to inspect Remora without launching it.
-                Commands that need Remora launch it in the background. app show opens its window.
-                Use --json for structured results and --timeout 10s to bound a command.
-                After a timeout or lost reply, inspect current state before repeating a mutation.
-                Session observation, input and takeover guidance will ship with those commands.
+                Connect, screenshot, act, wait, verify.
+                Replace C with a saved connection UUID or exact name.
+                Replace S, I and F with the returned session UUID, image receipt and frame revision.
+
+                1. Connect: remora connect C --background --json
+                   Save result.session as S. Connect waits for the first frame.
+                2. Observe: remora screenshot --session S --json
+                   Read the PNG at result.path. Save result.image as I and result.frame as F.
+                3. Act on what you saw: remora click 100 200 --image I --session S --json
+                   With --image, coordinates use that screenshot's pixels from the top-left.
+                   Send text with remora type --text "Hello" --session S --json.
+                4. Wait: remora wait --for frame --after F --session S --timeout 10s --json
+                   A newer frame does not prove the remote app finished the action.
+                5. Verify: remora screenshot --session S --json
+                   Inspect the result before choosing the next action.
+
+                Refusals:
+                user-active: The human took over. Stop sending input.
+                  Wait with remora wait --for resumed --session S --timeout 1m --json.
+                  If it times out, keep waiting for them. Never resume the session yourself.
+                  After they Resume, take a new screenshot before sending input.
+                observation-required: Take a new screenshot before sending input.
+                input-busy: Another input command is running on this session, or control is transferring.
+                  Wait for it to finish. Observe again before retrying.
+
+                Stop Agent Control is a soft stop. Your next input command reattaches.
+                To leave control with the human, stop issuing input.
+                Input success acknowledges protocol submission. Verify the remote result with a screenshot.
+                After a timeout or lost reply, inspect state and screenshot before repeating an action.
+                Use --json for result and error envelopes. Use remora COMMAND --help for command details.
                 """)
             return
         }
