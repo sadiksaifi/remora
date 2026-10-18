@@ -20,7 +20,8 @@ Replace C with a saved connection name or UUID (`remora connection list`). Repla
 
 ## Rules
 
-- Record your work with `remora recording start --session S`; finish with `remora recording stop --session S`.
+- Use screenshots for observation and verification by default.
+- Record only when the user requests video or the task needs a record of motion or timing. Start with `remora recording start --session S`; finish with `remora recording stop --session S`.
 - Success means the input was sent, not that the remote app finished. Only a screenshot shows the result.
 - Pass `--output` with a new path you can read. Remora never overwrites a file.
 - `type` sends line breaks as Enter. Servers can drop characters their keyboard layout lacks, and some drop emoji. For those, and for long text, use `remora clipboard set --text "..." --session S`, then `remora key Ctrl+V --session S`.
