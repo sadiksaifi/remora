@@ -14,6 +14,7 @@
 		7943F21C2B787C5DD67C6E30 /* ScreenCommands.swift in Sources */ = {isa = PBXBuildFile; fileRef = B6681F072D5A435B89C65498 /* ScreenCommands.swift */; };
 		A791380DFFB1D7C1FCEFADC2 /* SessionCommands.swift in Sources */ = {isa = PBXBuildFile; fileRef = 774002F2A34E21E2D626D880 /* SessionCommands.swift */; };
 		B1C9787A91AEA39CBD37D6CA /* RemoraCore in Frameworks */ = {isa = PBXBuildFile; productRef = F4412091013E9923095E958D /* RemoraCore */; };
+		B4A08E7BD7FDC5A9DDA0BC35 /* InputCommands.swift in Sources */ = {isa = PBXBuildFile; fileRef = CDC9A14AD4B548E7D634FC98 /* InputCommands.swift */; };
 		BC282B680631E3344190DDDB /* RemoraCommand.swift in Sources */ = {isa = PBXBuildFile; fileRef = B508BCE9DE4C6DC56D8AA602 /* RemoraCommand.swift */; };
 		BDE8D1D89FD473F62EB7E3C2 /* ApplicationClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 032183C95484016E7FA4168D /* ApplicationClient.swift */; };
 		BF3629BE785DAD332249FF76 /* RDPSession in Frameworks */ = {isa = PBXBuildFile; productRef = CEE650B072CCF9E151EF611A /* RDPSession */; };
@@ -56,6 +57,7 @@
 		B508BCE9DE4C6DC56D8AA602 /* RemoraCommand.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoraCommand.swift; sourceTree = "<group>"; };
 		B6681F072D5A435B89C65498 /* ScreenCommands.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScreenCommands.swift; sourceTree = "<group>"; };
 		C1DA8E222592E8458A63660D /* ClipboardCommands.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClipboardCommands.swift; sourceTree = "<group>"; };
+		CDC9A14AD4B548E7D634FC98 /* InputCommands.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InputCommands.swift; sourceTree = "<group>"; };
 		E3C547F7F1E1AEA0842A1FA7 /* Remora.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Remora.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		F4B73C5B05D6A343D4717514 /* PromptCommands.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PromptCommands.swift; sourceTree = "<group>"; };
 		F54EA48F30A2A5C79C170AE7 /* RemoraKit */ = {isa = PBXFileReference; lastKnownFileType = folder; name = RemoraKit; path = Packages/RemoraKit; sourceTree = SOURCE_ROOT; };
@@ -121,6 +123,7 @@
 				032183C95484016E7FA4168D /* ApplicationClient.swift */,
 				C1DA8E222592E8458A63660D /* ClipboardCommands.swift */,
 				32288A5FADB0939E34A8C07D /* ConnectionCommands.swift */,
+				CDC9A14AD4B548E7D634FC98 /* InputCommands.swift */,
 				F4B73C5B05D6A343D4717514 /* PromptCommands.swift */,
 				B508BCE9DE4C6DC56D8AA602 /* RemoraCommand.swift */,
 				B6681F072D5A435B89C65498 /* ScreenCommands.swift */,
@@ -249,6 +252,7 @@
 				BDE8D1D89FD473F62EB7E3C2 /* ApplicationClient.swift in Sources */,
 				184B1CDBC2176E82003D8FF3 /* ClipboardCommands.swift in Sources */,
 				E03EDE23E73F6310DE1E7FF1 /* ConnectionCommands.swift in Sources */,
+				B4A08E7BD7FDC5A9DDA0BC35 /* InputCommands.swift in Sources */,
 				36942A6BC008F4DCAE232FCF /* PromptCommands.swift in Sources */,
 				BC282B680631E3344190DDDB /* RemoraCommand.swift in Sources */,
 				7943F21C2B787C5DD67C6E30 /* ScreenCommands.swift in Sources */,

@@ -7,7 +7,7 @@ final class RemoteDesktopInput: NSObject {
     weak var view: RemoteDesktopView?
     var input: (any RemoteSession)? {
         didSet {
-            oldValue?.releaseAll()
+            oldValue?.releaseHumanInput()
             keyboardRouting = KeyboardRouting()
             reset()
             focusIn()
@@ -119,7 +119,7 @@ final class RemoteDesktopInput: NSObject {
     }
 
     private func releaseKeys() {
-        input?.releaseAll()
+        input?.releaseHumanInput()
         reset()
     }
 

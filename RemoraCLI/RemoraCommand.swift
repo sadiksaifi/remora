@@ -56,7 +56,7 @@ struct RemoraCommand: AsyncParsableCommand {
         commandName: "remora",
         abstract: "Control the Remora desktop app.",
         discussion: "Run 'remora help agent' for the agent guide. Durations accept ms, s or m; bare numbers are seconds.",
-        subcommands: [Capabilities.self, AppCommand.self, ConnectionCommand.self, ConnectCommand.self, SessionCommand.self, PromptCommand.self, WaitCommand.self, ClipboardCommand.self, SettingsCommand.self, ScreenshotCommand.self, RecordingCommand.self, EventsCommand.self])
+        subcommands: [Capabilities.self, AppCommand.self, ConnectionCommand.self, ConnectCommand.self, SessionCommand.self, PromptCommand.self, WaitCommand.self, ClipboardCommand.self, SettingsCommand.self, ScreenshotCommand.self, RecordingCommand.self, EventsCommand.self, MoveCommand.self, ClickCommand.self, DragCommand.self, ScrollCommand.self, TypeCommand.self, KeyCommand.self, InputCommand.self])
     @OptionGroup var options: CommonOptions
 }
 
@@ -77,13 +77,19 @@ struct CommonOptions: ParsableArguments {
     }
 }
 
-struct Capabilities: ParsableCommand {
-    static let configuration = CommandConfiguration(abstract: "List this build's implemented commands without launching Remora.")
+struct Capabilities: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(abstract: "List commands, or inspect negotiated input support with --session.")
     @OptionGroup var options: CommonOptions
 
-    func run() throws {
+    @OptionGroup var target: SessionOptions
+
+    @MainActor func run() async throws {
+        if let session = target.target {
+            try await options.execute(.init(command: "capabilities", session: session))
+            return
+        }
         Output.write(.success(.object([
-            "commands": .array(["help", "help agent", "capabilities", "app status", "app show", "app hide", "app close", "app quit", "connection list", "connection get", "connection create", "connection update", "connection duplicate", "connection delete", "connection password set", "connection password clear", "connect", "session list", "session get", "session show", "session disconnect", "session reconnect", "session close", "session resize", "prompt list", "prompt get", "prompt respond", "wait", "clipboard get", "clipboard set", "settings get", "settings set", "settings reset", "settings permission", "settings cli get", "settings cli repair", "settings cli uninstall", "screenshot", "recording start", "recording get", "recording stop", "events"].map(ControlValue.string)),
+            "commands": .array(["help", "help agent", "capabilities", "app status", "app show", "app hide", "app close", "app quit", "connection list", "connection get", "connection create", "connection update", "connection duplicate", "connection delete", "connection password set", "connection password clear", "connect", "session list", "session get", "session show", "session disconnect", "session reconnect", "session close", "session resize", "prompt list", "prompt get", "prompt respond", "wait", "clipboard get", "clipboard set", "settings get", "settings set", "settings reset", "settings permission", "settings cli get", "settings cli repair", "settings cli uninstall", "screenshot", "recording start", "recording get", "recording stop", "events", "move", "click", "drag", "scroll", "type", "key", "input"].map(ControlValue.string)),
             "protocols": .array([.string("rdp")])
         ])), json: options.json)
     }

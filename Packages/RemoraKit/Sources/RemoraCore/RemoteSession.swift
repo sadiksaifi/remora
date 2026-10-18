@@ -191,7 +191,8 @@ public protocol RemoteSession: AnyObject, Sendable {
     func sendPointer(position: RemotePoint, buttons: PointerButtons)
     func sendWheel(_ wheel: WheelInput)
     func synchronize(locks: LockKeys)
-    func releaseAll()
+    /// Releases only human-owned keys and buttons, preserving agent input.
+    func releaseHumanInput()
     func setLocalClipboard(text: String)
 }
 

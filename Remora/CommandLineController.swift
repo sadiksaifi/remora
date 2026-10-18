@@ -61,6 +61,9 @@ final class CommandLineController {
     private func handle(_ request: ControlRequest) async -> ControlReply {
         do {
             if Task.isCancelled { throw ControlFailure(.cancelled, "The command was interrupted.") }
+            if ["move", "click", "drag", "scroll", "type", "key", "input", "capabilities"].contains(request.command) {
+                return ControlReply(.success(try await handleInput(request)))
+            }
             if request.command.hasPrefix("settings.") {
                 return ControlReply(.success(try handleSettings(request)))
             }

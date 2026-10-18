@@ -107,8 +107,8 @@ public final class RDPSession: RemoteSession, @unchecked Sendable {
         }
     }
 
-    public func releaseAll() {
-        enqueue { rm_rdp_release_all($0) }
+    public func releaseHumanInput() {
+        enqueue { rm_rdp_release_human($0) }
     }
 
     public func setLocalClipboard(text: String) {
@@ -118,6 +118,22 @@ public final class RDPSession: RemoteSession, @unchecked Sendable {
             if state.connected, let handle = state.handle {
                 text.withCString { rm_rdp_set_local_clipboard(handle, $0) }
             }
+        }
+    }
+
+    public var inputCapabilities: AgentInputCapabilities {
+        AgentInputCapabilities(rawValue: agentHandle { rm_rdp_input_capabilities($0) } ?? 0)
+    }
+
+    public func beginAgentInput() -> AgentInputRequest? {
+        guard let id = agentHandle({ rm_rdp_agent_begin($0) }) else { return nil }
+        return AgentInputRequest(session: self, id: id)
+    }
+
+    func agentHandle<T>(_ operation: (OpaquePointer) -> T) -> T? {
+        state.lock.withLock {
+            guard state.connected, !state.cancelled, let handle = state.handle else { return nil }
+            return operation(handle)
         }
     }
 

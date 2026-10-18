@@ -58,12 +58,14 @@ extension CommandLineController {
                     catch { throw ControlFailure(.invalidArgument, error.localizedDescription) }
                 }
                 let baseline = session.captureFrameBaseline
+                let geometryRevision = session.inputGeometryRevision
                 let (png, geometry, revision) = try await session.capture.screenshot(region: region, maxSize: maxSize)
                 guard session.attemptID == id, sessions.session(for: session.connection.id) === session else {
                     throw ControlFailure(.sessionEnded, "The session attempt was closed or replaced during capture.")
                 }
+                guard session.inputGeometryRevision == geometryRevision else { throw ControlFailure(.imageExpired, "The desktop resized during capture. Take another screenshot.") }
                 try Task.checkCancellation()
-                let receipt = ScreenshotReceipt(session: id, geometry: geometry, frame: revision - baseline)
+                let receipt = ScreenshotReceipt(session: id, geometry: geometry, frame: revision - baseline, geometryRevision: geometryRevision)
                 let path: String?
                 if output == "-" { path = nil }
                 else {
