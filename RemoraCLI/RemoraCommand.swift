@@ -69,7 +69,7 @@ enum RemoraEntry {
 struct RemoraCommand: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "remora",
-        abstract: "Control the Remora desktop app. AI agents: run 'remora help agent' first.",
+        abstract: "Control the Remora app. AI agents: run 'remora help agent' first.",
         subcommands: [Capabilities.self, AppCommand.self, ConnectionCommand.self, ConnectCommand.self, SessionCommand.self, PromptCommand.self, WaitCommand.self, ClipboardCommand.self, SettingsCommand.self, ScreenshotCommand.self, RecordingCommand.self, EventsCommand.self, MoveCommand.self, ClickCommand.self, DragCommand.self, ScrollCommand.self, TypeCommand.self, KeyCommand.self, InputCommand.self, SkillCommand.self])
     @OptionGroup var options: CommonOptions
 }
