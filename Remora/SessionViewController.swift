@@ -93,7 +93,7 @@ final class SessionViewController: NSViewController {
         if resumed { refreshAfterFrame = before }
     }
     private var refreshAfterFrame = 0
-    var hasFreshFrame: Bool { frameRevision > refreshAfterFrame }
+    var hasFreshFrame: Bool { frameRevision > refreshAfterFrame && frameSize == desktopSize }
     var captureFrameBaseline: Int { frameBaseline }
     func removeFrameDemand() { display.removeCommandLineDemand() }
 
