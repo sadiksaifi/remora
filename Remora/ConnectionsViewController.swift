@@ -47,6 +47,7 @@ final class ConnectionsViewController: NSViewController, NSTableViewDataSource, 
         tableView.onReturn = { [weak self] in self?.connect(nil) }
         tableView.menu = contextMenu()
         tableView.setAccessibilityLabel("Connections")
+        tableView.setAccessibilityIdentifier("connectionsTable")
 
         let scrollView = NSScrollView()
         scrollView.documentView = tableView
@@ -154,8 +155,11 @@ final class ConnectionsViewController: NSViewController, NSTableViewDataSource, 
             alert.messageText = "Delete \(targets.count) Connections?"
             alert.informativeText = "This also removes their saved passwords. You can’t undo this action."
         }
-        alert.addButton(withTitle: "Delete").hasDestructiveAction = true
-        alert.addButton(withTitle: "Cancel")
+        let deleteButton = alert.addButton(withTitle: "Delete")
+        deleteButton.hasDestructiveAction = true
+        deleteButton.setAccessibilityIdentifier("deleteConfirm")
+        alert.addButton(withTitle: "Cancel").setAccessibilityIdentifier("deleteCancel")
+        alert.window.setAccessibilityIdentifier("deleteConfirmation")
         alert.beginSheetModal(for: window) { [weak self] response in
             guard response == .alertFirstButtonReturn else { return }
             self?.deleteConnections(ids: Set(targets.map(\.id)))
@@ -333,8 +337,10 @@ final class ConnectionsViewController: NSViewController, NSTableViewDataSource, 
 
         if connectionStore.connections.isEmpty {
             emptyStateView.rootView.kind = .noConnections
+            emptyStateView.setAccessibilityIdentifier("noConnections")
         } else if rows.isEmpty {
             emptyStateView.rootView.kind = .noResults(query)
+            emptyStateView.setAccessibilityIdentifier("noSearchResults")
         }
         emptyStateView.isHidden = !rows.isEmpty
         // Stripes fill the empty area below the rows, but would run through the empty state's text.
@@ -481,6 +487,7 @@ struct EmptyStateView: View {
                 Text("Add a computer to connect to it.")
             } actions: {
                 Button("Add Connection", action: addConnection)
+                    .accessibilityIdentifier("addConnection")
             }
         case .noResults(let query):
             ContentUnavailableView.search(text: query)
