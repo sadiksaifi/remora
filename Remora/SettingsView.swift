@@ -35,7 +35,6 @@ struct SettingsView: View {
     var body: some View {
         TabView {
             Tab("General", systemImage: "gearshape") { GeneralPane() }
-            Tab("Keyboard", systemImage: "keyboard") { KeyboardPane() }
             Tab("Command Line", systemImage: "terminal") { CommandLinePane() }
         }
     }
@@ -68,70 +67,40 @@ private struct StatusLabel: View {
 }
 
 private struct GeneralPane: View {
+    @AppStorage(SystemShortcutCapture.enabledKey) private var captureShortcuts = true
+    @AppStorage(AppSettings.showKeyPressesKey) private var showKeyPresses = false
+    @AppStorage(AppSettings.keyPressSizeKey) private var keyPressSize = 1.0
     @AppStorage(AppSettings.saveLocationKey) private var saveLocation = ""
     @AppStorage(AppSettings.showPointerInRecordingsKey) private var showPointer = true
+    @State private var trusted = SystemShortcutCapture.isTrusted
     @State private var choosingFolder = false
     private enum Choice { case current, screenshotLocation, other }
+    private static let captureShortcutsTitle = "Send system shortcuts to the remote computer"
+    private static let keyPressesTitle = "Show key presses"
     private static let pointerTitle = "Show pointer in recordings"
 
     private var folder: URL { AppSettings.folder(saveLocation) ?? ScreenshotDestination.screenshotLocation }
 
     var body: some View {
         Form {
-            Picker("Save screenshots and recordings to", selection: Binding(get: { Choice.current }, set: { choice in
-                switch choice {
-                case .current: break
-                case .screenshotLocation: saveLocation = ""
-                case .other: choosingFolder = true
+            Section("Keyboard") {
+                Toggle(isOn: $captureShortcuts) {
+                    Text(Self.captureShortcutsTitle)
+                    Text("While a session tab is active, shortcuts like Command-Tab and Command-Space go to the remote computer. Command-Q, Control-Command-F, and the Control-Option-Command tab and capture shortcuts stay on this Mac.")
                 }
-            })) {
-                Label(FileManager.default.displayName(atPath: folder.path), systemImage: "folder").tag(Choice.current)
-                Divider()
-                Text("Screenshot location").tag(Choice.screenshotLocation)
-                Text("Other…").tag(Choice.other)
+                // The form shows the label beside the switch; this puts it on the switch itself.
+                .accessibilityLabel(Self.captureShortcutsTitle)
+                .accessibilityIdentifier("captureSystemShortcuts")
+                LabeledContent {
+                    Button("Open System Settings") { SystemShortcutCapture.openAccessibilitySettings() }
+                        .accessibilityIdentifier("openAccessibilitySettings")
+                } label: {
+                    Text("Permission to control this Mac")
+                    StatusLabel(text: trusted ? "Allowed" : "Not allowed. System shortcuts stay on this Mac.", ok: trusted)
+                        .accessibilityIdentifier("accessibilityPermission")
+                }
+                .disabled(!captureShortcuts)
             }
-            .accessibilityIdentifier("saveLocation")
-            Toggle(isOn: $showPointer) {
-                Text(Self.pointerTitle)
-                Text("Recordings show the pointer and a ring on each click. Screenshots never do.")
-            }
-            .accessibilityLabel(Self.pointerTitle)
-            .accessibilityIdentifier("showPointerInRecordings")
-        }
-        .settingsPane()
-        .fileImporter(isPresented: $choosingFolder, allowedContentTypes: [.folder]) { result in
-            if case .success(let url) = result { saveLocation = url.path }
-        }
-        .fileDialogDefaultDirectory(folder)
-    }
-}
-
-private struct KeyboardPane: View {
-    @AppStorage(SystemShortcutCapture.enabledKey) private var captureShortcuts = true
-    @AppStorage(AppSettings.showKeyPressesKey) private var showKeyPresses = false
-    @AppStorage(AppSettings.keyPressSizeKey) private var keyPressSize = 1.0
-    @State private var trusted = SystemShortcutCapture.isTrusted
-    private static let captureShortcutsTitle = "Send system shortcuts to the remote computer"
-    private static let keyPressesTitle = "Show key presses"
-
-    var body: some View {
-        Form {
-            Toggle(isOn: $captureShortcuts) {
-                Text(Self.captureShortcutsTitle)
-                Text("While a session tab is active, shortcuts like Command-Tab and Command-Space go to the remote computer. Command-Q, Control-Command-F, and the Control-Option-Command tab and capture shortcuts stay on this Mac.")
-            }
-            // The form shows the label beside the switch; this puts it on the switch itself.
-            .accessibilityLabel(Self.captureShortcutsTitle)
-            .accessibilityIdentifier("captureSystemShortcuts")
-            LabeledContent {
-                Button("Open System Settings") { SystemShortcutCapture.openAccessibilitySettings() }
-                    .accessibilityIdentifier("openAccessibilitySettings")
-            } label: {
-                Text("Permission to control this Mac")
-                StatusLabel(text: trusted ? "Allowed" : "Not allowed. System shortcuts stay on this Mac.", ok: trusted)
-                    .accessibilityIdentifier("accessibilityPermission")
-            }
-            .disabled(!captureShortcuts)
             Section {
                 Toggle(isOn: $showKeyPresses) {
                     Text(Self.keyPressesTitle)
@@ -150,8 +119,33 @@ private struct KeyboardPane: View {
                 .disabled(!showKeyPresses)
                 .accessibilityIdentifier("keyPressSize")
             }
+            Section("Screenshots and Recordings") {
+                Picker("Save screenshots and recordings to", selection: Binding(get: { Choice.current }, set: { choice in
+                    switch choice {
+                    case .current: break
+                    case .screenshotLocation: saveLocation = ""
+                    case .other: choosingFolder = true
+                    }
+                })) {
+                    Label(FileManager.default.displayName(atPath: folder.path), systemImage: "folder").tag(Choice.current)
+                    Divider()
+                    Text("Screenshot location").tag(Choice.screenshotLocation)
+                    Text("Other…").tag(Choice.other)
+                }
+                .accessibilityIdentifier("saveLocation")
+                Toggle(isOn: $showPointer) {
+                    Text(Self.pointerTitle)
+                    Text("Recordings show the pointer and a ring on each click. Screenshots never do.")
+                }
+                .accessibilityLabel(Self.pointerTitle)
+                .accessibilityIdentifier("showPointerInRecordings")
+            }
         }
         .settingsPane()
+        .fileImporter(isPresented: $choosingFolder, allowedContentTypes: [.folder]) { result in
+            if case .success(let url) = result { saveLocation = url.path }
+        }
+        .fileDialogDefaultDirectory(folder)
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             trusted = SystemShortcutCapture.isTrusted
         }
