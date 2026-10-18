@@ -10,10 +10,15 @@ struct SessionOptions: ParsableArguments {
 struct ConnectCommand: AsyncParsableCommand {
     static let configuration = CommandConfiguration(commandName: "connect", abstract: "Connect and wait for the first frame.")
     @OptionGroup var options: CommonOptions
-    @Argument var connection: String
-    @Flag var background = false
-    @Flag var noWait = false
-    @Option var resolution: String?
+    @Argument(help: "Saved connection name or UUID.") var connection: String
+    @Flag(help: "Leave the selected tab unchanged and do not show the window.") var background = false
+    @Flag(help: "Return without waiting for the first frame.") var noWait = false
+    @Option(help: """
+        Use fit (follow the window) or WIDTHxHEIGHT for this attempt only.
+        The saved connection is unchanged.
+        Each side must be 200 to 8192 pixels, with an even width.
+        Defaults to the saved resolution, or 1920x1080 for fit-to-window connections.
+        """) var resolution: String?
     @MainActor func run() async throws {
         var args: [String: ControlValue] = ["connection": .string(connection), "background": .bool(background), "noWait": .bool(noWait)]
         if let resolution { _ = try ControlResolution(resolution); args["resolution"] = .string(resolution) }
@@ -52,7 +57,7 @@ struct SessionCommand: AsyncParsableCommand {
     struct Reconnect: AsyncParsableCommand {
         @OptionGroup var options: CommonOptions
         @OptionGroup var target: SessionOptions
-        @Flag var noWait = false
+        @Flag(help: "Return without waiting for the first frame.") var noWait = false
         @MainActor func run() async throws {
             try await options.execute(.init(command: "session.reconnect", session: target.target, arguments: ["noWait": .bool(noWait)]), defaultTimeout: "30s")
         }
@@ -79,7 +84,7 @@ struct SessionCommand: AsyncParsableCommand {
     struct Resize: AsyncParsableCommand {
         @OptionGroup var options: CommonOptions
         @OptionGroup var target: SessionOptions
-        @Argument var resolution: String
+        @Argument(help: "WIDTHxHEIGHT, 200 to 8192 pixels per side with an even width.") var resolution: String
         @MainActor func run() async throws {
             _ = try ControlResolution(resolution, allowFit: false)
             try await options.execute(.init(command: "session.resize", session: target.target, arguments: ["resolution": .string(resolution)]))

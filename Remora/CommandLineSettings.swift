@@ -7,7 +7,7 @@ extension CommandLineController {
         case "settings.get", "settings.set", "settings.reset":
             try request.validateArguments(request.command == "settings.set" ? ["key", "value"] : ["key"])
             let key = try request.string("key", required: request.command == "settings.set")
-            let keys = try key.map { [try AppSettings.Key($0)] } ?? AppSettings.Key.allCases
+            let keys = try key.map { [try SettingKey($0)] } ?? SettingKey.allCases
             if request.command == "settings.set" {
                 try AppSettings.set(keys[0], value: request.string("value", required: true)!)
             } else if request.command == "settings.reset" {
@@ -34,30 +34,30 @@ extension CommandLineController {
     }
 }
 
-extension AppSettings {
-    enum Key: String, CaseIterable {
-        case captureSystemShortcuts, showAgentPointer, saveLocation
-        init(_ name: String) throws {
-            guard let key = Self(rawValue: name) else {
-                throw ControlFailure(.invalidArgument, "Unknown setting '\(name)'.", hint: "Use captureSystemShortcuts, showAgentPointer or saveLocation.")
-            }
-            self = key
+extension SettingKey {
+    init(_ name: String) throws {
+        guard let key = Self(rawValue: name) else {
+            throw ControlFailure(.invalidArgument, "Unknown setting '\(name)'.",
+                hint: "Use \(Self.allCases.map(\.rawValue).joined(separator: ", ")).")
         }
-        var defaultsKey: String {
-            switch self {
-            case .captureSystemShortcuts: SystemShortcutCapture.enabledKey
-            case .showAgentPointer: AppSettings.showAgentPointerKey
-            case .saveLocation: AppSettings.saveLocationKey
-            }
+        self = key
+    }
+    var defaultsKey: String {
+        switch self {
+        case .captureSystemShortcuts: SystemShortcutCapture.enabledKey
+        case .showAgentPointer: AppSettings.showAgentPointerKey
+        case .saveLocation: AppSettings.saveLocationKey
         }
     }
+}
 
-    static func value(_ key: Key) -> ControlValue {
+extension AppSettings {
+    static func value(_ key: SettingKey) -> ControlValue {
         if key == .saveLocation { return .string(UserDefaults.standard.string(forKey: key.defaultsKey) ?? "") }
         return .bool(UserDefaults.standard.object(forKey: key.defaultsKey) as? Bool ?? true)
     }
 
-    static func set(_ key: Key, value: String) throws {
+    static func set(_ key: SettingKey, value: String) throws {
         if key == .saveLocation {
             guard value.isEmpty || (value.hasPrefix("/") && !value.utf8.contains(0)) else {
                 throw ControlFailure(.invalidArgument, "saveLocation must be an absolute folder path, or empty for the macOS screenshot location.")

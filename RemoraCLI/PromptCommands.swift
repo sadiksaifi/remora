@@ -11,17 +11,17 @@ struct PromptCommand: AsyncParsableCommand {
     }
     struct Get: AsyncParsableCommand {
         @OptionGroup var options: CommonOptions
-        @Argument var prompt: String
+        @Argument(help: "Prompt UUID from prompt list.") var prompt: String
         @MainActor func run() async throws { try await options.execute(.init(command: "prompt.get", arguments: ["prompt": .string(prompt)])) }
     }
     struct Respond: AsyncParsableCommand {
         enum Action: String, ExpressibleByArgument { case connect, cancel }
         @OptionGroup var options: CommonOptions
-        @Argument var prompt: String
-        @Argument var action: Action
-        @Option var set: [String] = []
-        @Flag var passwordStdin = false
-        @Flag var clearPassword = false
+        @Argument(help: "Prompt UUID from prompt list.") var prompt: String
+        @Argument(help: "connect to accept, or cancel to reject the prompt.") var action: Action
+        @Option(help: "Set username=VALUE, domain=VALUE or remember=true|false. Repeat once per field.") var set: [String] = []
+        @Flag(help: "Read the password from UTF-8 stdin, removing one trailing line ending.") var passwordStdin = false
+        @Flag(help: "Use an empty password for this prompt.") var clearPassword = false
         mutating func validate() throws {
             if passwordStdin && clearPassword { throw ValidationError("Choose --password-stdin or --clear-password.") }
             if action == .cancel && (!set.isEmpty || passwordStdin || clearPassword) { throw ValidationError("Cancel accepts no credential fields.") }
