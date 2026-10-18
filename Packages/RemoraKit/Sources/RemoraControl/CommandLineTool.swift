@@ -72,6 +72,7 @@ public struct CommandLineTool: Sendable {
     /// A symbolic link to a Remora helper, here or in a moved or deleted copy of Remora.
     private var isOwned: Bool {
         guard let destination = try? FileManager.default.destinationOfSymbolicLink(atPath: link.path) else { return false }
-        return destination.hasSuffix(".app/Contents/Helpers/remora")
+        let target = URL(fileURLWithPath: destination, relativeTo: link.deletingLastPathComponent()).standardizedFileURL
+        return target == helper.standardizedFileURL || target.path.hasSuffix("/Remora.app/Contents/Helpers/remora")
     }
 }
