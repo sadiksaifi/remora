@@ -96,8 +96,12 @@ final class AgentPointerView: NSView {
     private func updateVisibility() {
         let visible = isShown && remotePoint != nil &&
             UserDefaults.standard.object(forKey: AppSettings.showAgentPointerKey) as? Bool ?? true
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
         arrow.isHidden = !visible
         ring.isHidden = !visible
+        if !visible { ring.removeAnimation(forKey: "flash") }
+        CATransaction.commit()
     }
 
     @objc private func defaultsChanged() { updateVisibility() }
