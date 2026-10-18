@@ -67,7 +67,6 @@ final class SessionViewController: NSViewController {
     }
     private(set) var pendingPrompt: Prompt? {
         didSet {
-            if let oldValue { onControlEvent?("prompt.resolved", .object(["prompt": .string(oldValue.id.uuidString), "session": .string(attemptID.uuidString)])) }
             if pendingPrompt != nil { onControlEvent?("prompt.opened", nil) }
         }
     }
@@ -107,11 +106,11 @@ final class SessionViewController: NSViewController {
             if let answer, remember { try onRememberCredentials(answer) }
             credentials = answer
             cancelChallenge = nil
-            dismissChallenge()
+            dismissChallenge(action: answer == nil ? "cancel" : "connect")
             challenge.responder.respond(answer)
         } else if case .certificate(_, let challenge) = prompt {
             cancelChallenge = nil
-            dismissChallenge()
+            dismissChallenge(action: trust ? "connect" : "cancel")
             challenge.responder.respond(trust ? .trust : .reject)
         }
     }
@@ -642,11 +641,13 @@ final class SessionViewController: NSViewController {
     }
 
     /// Cancels a waiting or shown credentials or certificate request.
-    private func dismissChallenge() {
+    private func dismissChallenge(action: String = "cancel") {
         if let prompt = pendingPrompt {
             pendingPrompt = nil
             credentialDraft = nil
             onPromptResolved(prompt.id)
+            onControlEvent?("prompt.resolved", .object(["prompt": .string(prompt.id.uuidString),
+                "session": .string(attemptID.uuidString), "action": .string(action)]))
         }
         let cancel = cancelChallenge
         cancelChallenge = nil
