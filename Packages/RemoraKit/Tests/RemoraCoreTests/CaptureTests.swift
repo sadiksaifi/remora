@@ -293,8 +293,9 @@ private func movieMediaDuration(_ data: Data, range: Range<Int>? = nil) -> Doubl
     #expect(rgb(initial, x: 98, y: 96)[0] > 180)
     #expect(rgb(initial, x: 98, y: 96)[2] > 180)
     #expect(rgb(initial, x: 98, y: 96)[1] < 80)
-    #expect(rgb(initial, x: 296, y: 316).allSatisfy { $0 < 50 })
-    #expect(try rgb(#require(faded), x: 296, y: 316).allSatisfy { abs($0 - 80) < 8 })
+    // Inside the pill body, above the Tab keycap.
+    #expect(rgb(initial, x: 320, y: 255).allSatisfy { $0 < 50 })
+    #expect(try rgb(#require(faded), x: 320, y: 255).allSatisfy { abs($0 - 80) < 8 })
     #expect(try rgb(#require(disabled), x: 98, y: 96).allSatisfy { abs($0 - 80) < 8 })
     #expect(count > 30)
 }

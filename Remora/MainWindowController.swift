@@ -310,6 +310,11 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
         setKeyboardCapture(id, captured: !session.hasKeyboard)
     }
 
+    /// A global setting, so every tab's menu shows the same state.
+    @objc private func toggleShowKeyPresses(_ sender: NSMenuItem) {
+        UserDefaults.standard.set(!AppSettings.showKeyPresses, forKey: AppSettings.showKeyPressesKey)
+    }
+
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
         let session = targetSession(menuItem)
         switch menuItem.action {
@@ -329,6 +334,9 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
         case #selector(toggleTabKeyboardCapture(_:)):
             menuItem.state = session?.hasKeyboard == true ? .on : .off
             return session?.isConnected == true && session === sessionTabs.selectedSession
+        case #selector(toggleShowKeyPresses(_:)):
+            menuItem.state = AppSettings.showKeyPresses ? .on : .off
+            return true
         case #selector(toggleAgentControl(_:)):
             let paused = session?.control.state == .paused
             menuItem.title = paused ? "Resume" : "Take Over"
@@ -381,13 +389,14 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
     }
 
     /// The context menu has the agent control items that apply and Close Tab. The menu button's menu
-    /// puts Capture Keyboard and the capture items first.
+    /// puts Capture Keyboard, Show Key Presses, and the capture items first.
     private func tabMenu(for id: UUID, includingActions: Bool) -> NSMenu {
         let menu = NSMenu()
         if includingActions {
             let keyboard = menu.addItem(withTitle: "Capture Keyboard", action: #selector(toggleTabKeyboardCapture(_:)), keyEquivalent: "")
             keyboard.target = self
             keyboard.representedObject = id
+            menu.addItem(withTitle: "Show Key Presses", action: #selector(toggleShowKeyPresses(_:)), keyEquivalent: "").target = self
             menu.addItem(.separator())
             for item in Self.makeCaptureItems() {
                 item.target = self

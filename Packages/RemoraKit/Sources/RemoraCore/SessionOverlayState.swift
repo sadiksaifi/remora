@@ -15,6 +15,7 @@ public final class SessionOverlayState: @unchecked Sendable {
         public let hotspot: CGPoint
         public let clicks: [Click]
         public let keyText: String?
+        public let keyIsText: Bool
         public let keyOpacity: Double
         public let showPointerInRecordings: Bool
         public let showAgentPointer: Bool
@@ -100,7 +101,7 @@ public final class SessionOverlayState: @unchecked Sendable {
             let age = time - keyTime
             let text = showKeys && age < 1.5 ? press.map { $0.text + (repeats > 1 ? " ×\(repeats)" : "") } : nil
             return Snapshot(point: point, owner: owner, cursor: cursor, hotspot: hotspot,
-                clicks: clicks.filter { time - $0.time < 0.5 }, keyText: text,
+                clicks: clicks.filter { time - $0.time < 0.5 }, keyText: text, keyIsText: press?.isText ?? false,
                 keyOpacity: min(1, max(0, (1.5 - age) / 0.25)),
                 showPointerInRecordings: showPointer, showAgentPointer: showAgent, scale: scale, time: time)
         }

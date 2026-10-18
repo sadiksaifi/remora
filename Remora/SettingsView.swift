@@ -66,8 +66,10 @@ private struct StatusLabel: View {
 
 private struct GeneralPane: View {
     @AppStorage(AppSettings.saveLocationKey) private var saveLocation = ""
+    @AppStorage(AppSettings.showPointerInRecordingsKey) private var showPointer = true
     @State private var choosingFolder = false
     private enum Choice { case current, screenshotLocation, other }
+    private static let pointerTitle = "Show pointer in recordings"
 
     private var folder: URL { AppSettings.folder(saveLocation) ?? ScreenshotDestination.screenshotLocation }
 
@@ -86,6 +88,12 @@ private struct GeneralPane: View {
                 Text("Other…").tag(Choice.other)
             }
             .accessibilityIdentifier("saveLocation")
+            Toggle(isOn: $showPointer) {
+                Text(Self.pointerTitle)
+                Text("Recordings show the pointer and a ring on each click. Screenshots never do.")
+            }
+            .accessibilityLabel(Self.pointerTitle)
+            .accessibilityIdentifier("showPointerInRecordings")
         }
         .settingsPane()
         .fileImporter(isPresented: $choosingFolder, allowedContentTypes: [.folder]) { result in
@@ -97,8 +105,10 @@ private struct GeneralPane: View {
 
 private struct KeyboardPane: View {
     @AppStorage(SystemShortcutCapture.enabledKey) private var captureShortcuts = true
+    @AppStorage(AppSettings.showKeyPressesKey) private var showKeyPresses = false
     @State private var trusted = SystemShortcutCapture.isTrusted
     private static let captureShortcutsTitle = "Send system shortcuts to the remote computer"
+    private static let keyPressesTitle = "Show key presses"
 
     var body: some View {
         Form {
@@ -118,6 +128,14 @@ private struct KeyboardPane: View {
                     .accessibilityIdentifier("accessibilityPermission")
             }
             .disabled(!captureShortcuts)
+            Section {
+                Toggle(isOn: $showKeyPresses) {
+                    Text(Self.keyPressesTitle)
+                    Text("Typed text, including passwords, appears on screen and in recordings.")
+                }
+                .accessibilityLabel(Self.keyPressesTitle)
+                .accessibilityIdentifier("showKeyPresses")
+            }
         }
         .settingsPane()
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
@@ -219,7 +237,7 @@ private struct CommandLinePane: View {
             Section {
                 Toggle(isOn: $showAgentPointer) {
                     Text(Self.pointerTitle)
-                    Text("A blue arrow marks where the command line last pointed or clicked. It never appears in screenshots or recordings.")
+                    Text("A blue arrow marks where the command line last pointed or clicked. It never appears in screenshots.")
                 }
                 .accessibilityLabel(Self.pointerTitle)
                 .accessibilityIdentifier("showAgentPointer")
