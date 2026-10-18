@@ -113,8 +113,25 @@ extension CommandLineController {
         }
     }
 
+    /// Keep demand through a repaint burst, but use the newest frame when the budget ends.
+    func waitForSettledFrame(_ session: SessionViewController, id: UUID, deadline: TimeInterval) async throws {
+        var firstFrameAt: TimeInterval?
+        do {
+            try await waitFor(session, id: id, timeout: max(0, deadline - ProcessInfo.processInfo.systemUptime)) {
+                guard session.state == .connected, session.hasFreshFrame,
+                      let arrival = session.lastFrameArrival else { return false }
+                let now = ProcessInfo.processInfo.systemUptime
+                if firstFrameAt == nil { firstFrameAt = now }
+                return now >= min(arrival + 0.25, firstFrameAt! + 2, deadline)
+            }
+        } catch let failure as ControlFailure where failure.code == .timeout {
+            throw ControlFailure(.frameTimeout, "No fresh desktop frame arrived before the deadline.", hint: "Inspect session get and try another observation.")
+        }
+    }
+
     func handleSession(_ request: ControlRequest) async throws -> ControlValue {
         let timeout = request.timeout ?? (["connect", "session.reconnect"].contains(request.command) ? 30 : 10)
+        let deadline = ProcessInfo.processInfo.systemUptime + timeout
         switch request.command {
         case "prompt.list":
             try request.validateArguments([])
@@ -167,7 +184,7 @@ extension CommandLineController {
             if noWait { return sessionInfo(session) }
             session.addFrameDemand()
             defer { session.removeFrameDemand() }
-            try await waitFor(session, id: session.attemptID, timeout: timeout) { session.state == .connected && session.frameSize != nil }
+            try await waitForSettledFrame(session, id: session.attemptID, deadline: deadline)
             return sessionInfo(session)
         default: break
         }
@@ -218,7 +235,7 @@ extension CommandLineController {
             if !noWait {
                 session.addFrameDemand()
                 defer { session.removeFrameDemand() }
-                try await waitFor(session, id: session.attemptID, timeout: timeout) { session.state == .connected && session.frameSize != nil }
+                try await waitForSettledFrame(session, id: session.attemptID, deadline: deadline)
             }
         case "session.resize":
             let resolution = try parseResolution(request.string("resolution", required: true)!)
