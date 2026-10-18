@@ -829,11 +829,13 @@ extension SessionViewController {
             stopping ? "Agent control was stopped." : "The user has taken control of this session.",
             hint: stopping ? "" : "Wait for user.resumed, then take a new screenshot."))
         let attempt = attemptID
+        let backend = session
         // The executor owns finish(), including its transport-failure cleanup.
         while activeAgentInput != nil {
             await Task.detached { try? await Task.sleep(for: .milliseconds(5)) }.value
         }
         guard attemptID == attempt else {
+            if let backend, session === backend { disconnect() }
             throw ControlFailure(.sessionEnded, "The session attempt was replaced during handover.")
         }
         guard isConnected, agentInputReleaseSucceeded else {
