@@ -277,7 +277,7 @@ private struct InputPlan {
             for character in text {
                 switch character {
                 case "\n", "\r", "\r\n":
-                    guard !keys.contains(enter) else { throw ControlFailure(.invalidArgument, "Release the held terminal key before pressing its chord.") }
+                    guard !keys.contains(enter) else { throw ControlFailure(.invalidArgument, "Release the held Enter key before typing line breaks.") }
                     event(.key(enter, down: true))
                     event(.key(enter, down: false))
                     delay(5)
