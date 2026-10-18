@@ -101,7 +101,6 @@ private struct InputPlan {
     private var keys: Set<PhysicalKey> = []
     private var buttons: PointerButtons = []
     private var duration = 0.0
-    private var eventBudget = 0
     private let size: DesktopSize
     private let geometry: ScreenshotGeometry?
     private let capabilities: AgentInputCapabilities
@@ -129,8 +128,8 @@ private struct InputPlan {
             arguments.removeValue(forKey: "action")
             try append(ControlRequest(command: name, arguments: arguments))
             steps.append(.completed)
-            guard eventBudget <= 65_536, duration <= 60_000 else {
-                throw ControlFailure(.invalidArgument, "Input exceeds 65,536 protocol events or 60 seconds of intended duration.")
+            guard duration <= 60_000 else {
+                throw ControlFailure(.invalidArgument, "Input exceeds 60 seconds of intended duration.")
             }
         }
         if request.arguments["image"] != nil, ["type", "key"].contains(request.command) {
@@ -138,9 +137,8 @@ private struct InputPlan {
         }
     }
 
-    private mutating func event(_ event: AgentInputEvent, cost: Int = 1) {
+    private mutating func event(_ event: AgentInputEvent) {
         steps.append(.event(event))
-        if case .pointer = event { eventBudget += 2 } else { eventBudget += cost }
     }
     private mutating func delay(_ ms: Double) { steps.append(.delay(ms)); duration += ms }
 
@@ -259,13 +257,13 @@ private struct InputPlan {
             let horizontal = Int32(h), vertical = Int32(v)
             guard horizontal != 0 || vertical != 0 else { throw ControlFailure(.invalidArgument, "Scroll must move at least 1/120 notch.") }
             event(.pointer(at, buttons))
-            event(.wheel(.init(vertical: vertical, horizontal: horizontal)), cost: Int(ceil(Double(abs(Int64(horizontal)) + abs(Int64(vertical))) / 255)) + 1)
+            event(.wheel(.init(vertical: vertical, horizontal: horizontal)))
         case "type":
             try request.validateArguments(["text"])
             let text = try request.string("text", required: true)!
             guard text.utf8.count <= 262_144 else { throw ControlFailure(.invalidArgument, "Text exceeds 256 KiB of UTF-8.") }
             guard capabilities.contains(.unicode) else { throw ControlFailure(.unsupported, "The server did not negotiate Unicode keyboard input.") }
-            for scalar in text.unicodeScalars { event(.unicode(scalar), cost: scalar.value > 0xFFFF ? 4 : 2); delay(5) }
+            for scalar in text.unicodeScalars { event(.unicode(scalar)); delay(5) }
         case "key":
             try request.validateArguments(["key", "repeat"])
             let chord = try chord(request.string("key", required: true)!)
@@ -274,7 +272,7 @@ private struct InputPlan {
             let additions = chord.filter { !keys.contains($0) }
             for index in 0..<count {
                 for key in additions {
-                    if key.isPause { event(.pause, cost: 4) }
+                    if key.isPause { event(.pause) }
                     else { event(.key(key, down: true)) }
                 }
                 delay(20)
