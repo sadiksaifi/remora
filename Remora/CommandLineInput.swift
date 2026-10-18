@@ -59,10 +59,11 @@ extension CommandLineController {
         var skipCursorWaits = false
         var cursorTarget: CGPoint?
         var remainingDelay = plan.duration
-        func wait(_ seconds: Double) async throws {
+        func wait(_ seconds: Double, while shouldWait: () -> Bool = { true }) async throws {
             let until = min(deadline, ContinuousClock.now.advanced(by: .seconds(seconds)))
             while ContinuousClock.now < until {
                 try check()
+                guard shouldWait() else { return }
                 try await Task.sleep(until: min(until, ContinuousClock.now.advanced(by: .milliseconds(10))), clock: .continuous)
             }
         }
@@ -72,12 +73,14 @@ extension CommandLineController {
             if ContinuousClock.now.advanced(by: .seconds(seconds + remainingDelay / 1000 + 1)) > deadline {
                 skipCursorWaits = true
             }
-            if skipCursorWaits || !session.isAgentCursorPresented {
-                if let cursorTarget { session.inputOverlays.moveAgentCursor(to: cursorTarget, animated: false) }
-                session.inputOverlays.releaseAgentCursor()
-                return
-            }
-            try await wait(seconds)
+            try await wait(seconds, while: {
+                guard !skipCursorWaits, session.isAgentCursorPresented else {
+                    if let cursorTarget { session.inputOverlays.moveAgentCursor(to: cursorTarget, animated: false) }
+                    session.inputOverlays.releaseAgentCursor()
+                    return false
+                }
+                return true
+            })
         }
         do {
             for step in plan.steps {

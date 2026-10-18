@@ -68,6 +68,28 @@ private let moves: [(from: CGPoint, to: CGPoint, marks: [(Double, Double)])] = [
     }
 }
 
+@Test(arguments: [0.0, 18, -18])
+func cursorScootTiltDependsOnlyOnSignedHorizontalVelocity(dx: Double) {
+    let start = CGPoint(x: 400, y: 400)
+    for dy in [dx == 0 ? 30.0 : 24.0, dx == 0 ? -30.0 : -24.0] {
+        var diagonal = CursorMotion(hotspot: start, bounds: bounds)
+        diagonal.isVisible = true
+        diagonal.step(1)
+        var horizontal = diagonal
+        diagonal.move(to: CGPoint(x: start.x + dx, y: start.y + dy))
+        horizontal.move(to: CGPoint(x: start.x + dx, y: start.y))
+        diagonal.step(0.1)
+        horizontal.step(0.1)
+        // Both straight scoots have the same horizontal velocity at every instant.
+        #expect(abs(diagonal.pose.rotation - horizontal.pose.rotation) < 0.000001)
+        if dx == 0 {
+            #expect(abs(diagonal.pose.rotation - CursorTuning.restRotation) < 0.000001)
+        } else {
+            #expect((diagonal.pose.rotation - CursorTuning.restRotation) * dx > 0)
+        }
+    }
+}
+
 @Test func cursorTimeIsIndependentOfReadersAndMonotonic() {
     var base = CursorMotion(hotspot: moves[0].from, bounds: bounds, time: 100)
     base.isVisible = true

@@ -317,12 +317,13 @@ public struct CursorMotion: Sendable {
             }
         }
 
-        let newSpeed = (center - previous).length / dt
+        let velocity = (center - previous) * (1 / dt)
+        let newSpeed = velocity.length
         let rawAcceleration = (newSpeed - speed) / dt
         speed = newSpeed
         acceleration += (rawAcceleration - acceleration) * min(dt / CursorTuning.accelerationSmoothing, 1)
 
-        stepHeading(tangent: tangent, dt: dt)
+        stepHeading(tangent: tangent, horizontalVelocity: velocity.x, dt: dt)
         if !reduceMotion { stepShape(dt: dt) }
         let pressSpring = pressTarget < 1 ? CursorTuning.pressDown : CursorTuning.pressUp
         press.step(toward: pressTarget, response: pressSpring.response, damping: pressSpring.damping, dt: dt)
@@ -336,7 +337,7 @@ public struct CursorMotion: Sendable {
         return arrived
     }
 
-    private mutating func stepHeading(tangent: CGPoint?, dt: Double) {
+    private mutating func stepHeading(tangent: CGPoint?, horizontalVelocity: Double, dt: Double) {
         // Sway starts at phase 0 when the cursor goes idle while thinking. When it ends, the
         // current sway offset is handed to the heading spring so the angle stays continuous.
         let swaying = !reduceMotion && isVisible && (isThinking || thinkingWindow?.contains(time) == true) && !isMoving && pressTarget == 1
@@ -350,7 +351,7 @@ public struct CursorMotion: Sendable {
         let target: Double
         let spring: (response: Double, damping: Double)
         if let p = path, p.isScoot {
-            let tilt = clamp(speed * CursorTuning.scootTiltPerSpeed * (p.p3.x >= p.p0.x ? 1 : -1), CursorTuning.scootTiltMax)
+            let tilt = clamp(horizontalVelocity * CursorTuning.scootTiltPerSpeed, CursorTuning.scootTiltMax)
             target = CursorTuning.restRotation + tilt
             spring = CursorTuning.headingScoot
         } else if let p = path, let tangent, p.progress.value < CursorTuning.headingReleaseProgress {

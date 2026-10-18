@@ -138,8 +138,12 @@ private final class AgentCursorView: NSView {
 
     /// Starts the display link when there is something to show; the link stops itself once the frame settles.
     func wake() {
+        guard isPresentable, state?.snapshot().showAgentPointer == true else {
+            cursorLayer.isHidden = true
+            stop()
+            return
+        }
         guard displayLink == nil else { return }
-        guard isPresentable else { cursorLayer.isHidden = true; return }
         let link = displayLink(target: self, selector: #selector(step(_:)))
         link.add(to: .main, forMode: .common)
         displayLink = link
@@ -167,7 +171,8 @@ private final class AgentCursorView: NSView {
     private func render(at time: TimeInterval) -> Bool {
         guard let state, isPresentable else { cursorLayer.isHidden = true; return true }
         let snapshot = state.snapshot(at: time)
-        guard snapshot.showAgentPointer, let frame = snapshot.agentCursor, frame.pose.opacity > 0.001 else {
+        guard snapshot.showAgentPointer else { cursorLayer.isHidden = true; return true }
+        guard let frame = snapshot.agentCursor, frame.pose.opacity > 0.001 else {
             cursorLayer.isHidden = true
             return snapshot.agentCursor?.isSettled ?? true
         }
