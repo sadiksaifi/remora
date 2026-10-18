@@ -449,11 +449,13 @@ RMRDPSession *rm_rdp_create(const RMRDPConfiguration *config, const RMRDPCallbac
         freerdp_settings_set_bool(settings, FreeRDP_DynamicResolutionUpdate, config->dynamic_resolution) &&
         freerdp_settings_set_bool(settings, FreeRDP_AutoReconnectionEnabled, TRUE) &&
         freerdp_settings_set_uint32(settings, FreeRDP_AutoReconnectMaxRetries, 20) &&
-        /* These require rdpdr, which forces an rdpsnd addin even with sound off.
-         * This engine omits rdpsnd. None are needed for the session slice. */
-        freerdp_settings_set_bool(settings, FreeRDP_NetworkAutoDetect, FALSE) &&
+        /* GFX requires network detection and its MCS message channel.
+         * Client-common loads rdpdr and fake rdpsnd for these RDP8 features. */
+        freerdp_settings_set_bool(settings, FreeRDP_NetworkAutoDetect, TRUE) &&
         freerdp_settings_set_bool(settings, FreeRDP_SupportHeartbeatPdu, FALSE) &&
         freerdp_settings_set_bool(settings, FreeRDP_SupportMultitransport, FALSE) &&
+        /* GCC writes these flags independently of SupportMultitransport. */
+        freerdp_settings_set_uint32(settings, FreeRDP_MultitransportFlags, 0) &&
         freerdp_settings_set_bool(settings, FreeRDP_DeviceRedirection, FALSE) &&
         freerdp_settings_set_bool(settings, FreeRDP_AudioPlayback, FALSE) &&
         freerdp_settings_set_bool(settings, FreeRDP_RedirectClipboard, TRUE);
