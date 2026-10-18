@@ -10,6 +10,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let sessionTabs = SessionTabs()
     private var commandLineController: CommandLineController?
     private var terminationPending = false
+    private var commandLineQuit = false
     /// The command line launches Remora this way: no window and no Dock icon, only the menu bar icon.
     private static let launchedInBackground = CommandLine.arguments.contains("--cli-background")
     #if DEBUG
@@ -62,7 +63,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                         case "connections": self?.showConnections(nil)
                         default: self?.showMainWindow()
                         }
-                    }, quit: { NSApplication.shared.terminate(nil) })
+                    }, quit: { [weak self] in
+                        self?.commandLineQuit = true
+                        NSApplication.shared.terminate(nil)
+                    })
                 commandLineController = controller
                 Task {
                     do { try await controller.start() }
@@ -87,7 +91,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         guard !terminationPending else { return .terminateLater }
-        guard confirmQuit() else { return .terminateCancel }
+        guard commandLineQuit || confirmQuit() else { return .terminateCancel }
         terminationPending = true
         Task { @MainActor in
             await sessionTabs.prepareToQuit()
