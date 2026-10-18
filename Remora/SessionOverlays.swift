@@ -24,10 +24,14 @@ final class SessionOverlays: NSObject {
                                                name: NSApplication.didBecomeActiveNotification, object: nil)
     }
 
+    func controlChanged(allowsHumanInput: Bool) {
+        if !allowsHumanInput { removePermissionBanner() }
+    }
+
     func connected() {
         reconnectingView?.removeFromSuperview()
         reconnectingView = nil
-        guard !offeredPermission else { return }
+        guard desktop?.allowsHumanInput == true, !offeredPermission else { return }
         offeredPermission = true
         guard SystemShortcutCapture.isEnabled, !SystemShortcutCapture.isTrusted,
               !UserDefaults.standard.bool(forKey: Self.dismissedPermissionKey), let desktop else { return }

@@ -28,6 +28,7 @@ final class SessionViewController: NSViewController {
     private(set) var attemptID = UUID() {
         didSet {
             inputGeometryRevision += 1
+            control.invalidateObservation()
             frameBaseline = renderer?.desktop.revision ?? 0
             refreshAfterFrame = 0
             retiredFrameRevision = 0
@@ -54,6 +55,7 @@ final class SessionViewController: NSViewController {
     func offerClipboardText(_ text: String) throws {
         guard state == .connected, let session else { throw ControlFailure(.notConnected, "The session is not connected.") }
         guard !text.utf8.contains(0) else { throw ControlFailure(.invalidArgument, "Clipboard text cannot contain NUL bytes.") }
+        try attachAgentControl()
         session.setLocalClipboard(text: text)
     }
     private var renderer: FrameRenderer?
@@ -119,6 +121,9 @@ final class SessionViewController: NSViewController {
 
 
     var inputBackend: RDPSession? { session as? RDPSession }
+    private(set) var control = SessionControl()
+    static let controlDidChange = Notification.Name("SessionControlDidChange")
+    private var controlFrameDemand = false
     var activeAgentInput: AgentInputRequest?
     var agentInputCancellation: ControlFailure?
 
@@ -229,6 +234,7 @@ final class SessionViewController: NSViewController {
     }
 
     func disconnect() {
+        endAgentControl()
         finishCapture()
         capture.setSource(nil)
         retiredFrameRevision = frameRevision
@@ -273,7 +279,7 @@ final class SessionViewController: NSViewController {
     var canDisconnect: Bool { session != nil }
     var canReconnect: Bool { session == nil && !closed }
     var isConnected: Bool { state == .connected }
-    var hasKeyboard: Bool { state == .connected && view.window?.firstResponder === desktopView }
+    var hasKeyboard: Bool { control.allowsHumanInput && state == .connected && view.window?.firstResponder === desktopView }
 
     func disconnectSession() {
         finishCapture()
@@ -424,6 +430,8 @@ final class SessionViewController: NSViewController {
             capture.setSource(renderer.desktop)
             let session = RDPSession(configuration: configuration, frameSink: renderer)
             let desktopView = RemoteDesktopView(renderer: renderer)
+            desktopView.allowsHumanInput = control.allowsHumanInput
+            desktopView.onHumanInput = { [weak self] kind in self?.control.record(kind) }
             desktopView.input = session
             self.desktopView = desktopView
             overlays = SessionOverlays(
@@ -501,6 +509,7 @@ final class SessionViewController: NSViewController {
                 }
                 overlays?.reconnecting(attempt: attempt)
             case .disconnected(let reason):
+                endAgentControl()
                 finishCapture()
                 capture.setSource(nil)
                 desktopView.setSessionConnected(false)
@@ -781,5 +790,90 @@ private final class SessionContainerView: NSView {
     override func viewDidChangeBackingProperties() {
         super.viewDidChangeBackingProperties()
         onResize?()
+    }
+}
+
+// MARK: Agent control
+
+extension SessionViewController {
+    func checkAgentInput() throws {
+        do { try control.checkInput() }
+        catch SessionControl.Refusal.userActive {
+            throw ControlFailure(.userActive, "The user has taken control of this session.",
+                hint: "Wait for user.resumed, then take a new screenshot.")
+        } catch SessionControl.Refusal.observationRequired {
+            throw ControlFailure(.observationRequired, "Take a new screenshot before sending input.")
+        } catch {
+            throw ControlFailure(.inputBusy, "Control is being transferred.")
+        }
+    }
+
+    func attachAgentControl() throws {
+        try checkAgentInput()
+        try control.attach()
+        applyControl()
+    }
+
+    func observedForAgent() { control.observed() }
+
+    /// Runs independently of a CLI caller's cancellation. Human forwarding stays
+    /// closed until the input executor has completed its session-thread releases.
+    func handoverAgentControl(stopping: Bool, by: String = "ui") async throws {
+        if control.isTransferring { throw ControlFailure(.inputBusy, "Control is being transferred.") }
+        let from = control.state.rawValue
+        guard control.beginHandover(stopping: stopping, frame: frameRevision) else { return }
+        inputGeometryRevision += 1
+        applyControl()
+        cancelAgentInput(ControlFailure(stopping ? .cancelled : .userActive,
+            stopping ? "Agent control was stopped." : "The user has taken control of this session.",
+            hint: stopping ? "" : "Wait for user.resumed, then take a new screenshot."))
+        // The executor owns finish(). A failed release closes the transport, and a
+        // recovered reconnect releases every source before new input, so neither
+        // case can leave agent-held state under human input. A session that ends
+        // meanwhile has already settled the handover.
+        while activeAgentInput != nil {
+            await Task.detached { try? await Task.sleep(for: .milliseconds(5)) }.value
+        }
+        control.completeHandover()
+        applyControl()
+        onControlEvent?(stopping ? "control.stopped" : "user.tookOver", .object([
+            "session": .string(attemptID.uuidString), "by": .string(by), "from": .string(from),
+            "screenStale": .bool(true)]))
+    }
+
+    func resumeAgentControl(by: String = "ui") throws {
+        guard isConnected else { throw ControlFailure(.notConnected, "The session is not connected.") }
+        let from = control.state.rawValue
+        guard let summary = control.resume(frame: frameRevision) else {
+            if control.isTransferring { throw ControlFailure(.inputBusy, "Control is being transferred.") }
+            return
+        }
+        inputGeometryRevision += 1
+        applyControl()
+        onControlEvent?("user.resumed", .object([
+            "session": .string(attemptID.uuidString), "by": .string(by), "from": .string(from),
+            "counts": .object(["clicks": .number(Double(summary.counts.clicks)),
+                "keys": .number(Double(summary.counts.keys)), "scrolls": .number(Double(summary.counts.scrolls))]),
+            "screenChanged": .bool(summary.screenChanged), "screenStale": .bool(true), "observationRequired": .bool(true)]))
+    }
+
+    private func endAgentControl() {
+        cancelAgentInput(ControlFailure(.sessionEnded, "The session ended during input."))
+        control.ended()
+        applyControl()
+    }
+
+    private func applyControl() {
+        // Disable clipboard synchronization before closing the human input gate.
+        if allowsMacClipboardSync != control.allowsHumanInput {
+            allowsMacClipboardSync = control.allowsHumanInput
+        }
+        desktopView?.allowsHumanInput = control.allowsHumanInput
+        overlays?.controlChanged(allowsHumanInput: control.allowsHumanInput)
+        if control.needsFrames != controlFrameDemand {
+            controlFrameDemand = control.needsFrames
+            if controlFrameDemand { addFrameDemand() } else { removeFrameDemand() }
+        }
+        NotificationCenter.default.post(name: Self.controlDidChange, object: self)
     }
 }

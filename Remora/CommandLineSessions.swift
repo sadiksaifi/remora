@@ -41,6 +41,9 @@ extension CommandLineController {
             "session": .string(session.attemptID.uuidString), "connection": .string(session.connection.id.uuidString),
             "name": .string(session.connection.name), "host": .string(session.attemptConnection.host),
             "port": .number(Double(session.attemptConnection.port)), "state": .string(state), "reason": reason,
+            "control": .string(session.control.state.rawValue),
+            "observationRequired": .bool(session.control.observationRequired),
+            "controlTransferring": .bool(session.control.isTransferring),
             "startedBy": .string(session.startedBy), "dynamicResize": .bool(session.supportsDynamicResize),
             "desktop": size.map { .array([.number(Double($0.width)), .number(Double($0.height))]) } ?? .null,
             "hasFrame": .bool(session.frameSize != nil && session.frameRevision > 0),
@@ -168,9 +171,22 @@ extension CommandLineController {
             return sessionInfo(session)
         default: break
         }
+        if request.command == "session.stop" {
+            try request.validateArguments(["all"], sessionAllowed: true)
+            let all = try request.flag("all")
+            guard !all || request.session == nil else { throw ControlFailure(.invalidArgument, "Use --all without --session.") }
+            let targets = all ? sessions.tabs.compactMap { sessions.session(for: $0.id) } : [try resolveSession(request.session)]
+            var failure: Error?
+            for session in targets {
+                do { try await session.handoverAgentControl(stopping: true, by: "cli") }
+                catch { if failure == nil { failure = error } }
+            }
+            if let failure { throw failure }
+            return .array(targets.map(sessionInfo))
+        }
         let allowed: Set<String>
         switch request.command {
-        case "session.get", "session.show", "session.disconnect", "session.close": allowed = []
+        case "session.get", "session.show", "session.disconnect", "session.close", "session.resume": allowed = []
         case "session.reconnect": allowed = ["noWait"]
         case "session.resize": allowed = ["resolution"]
         case "wait": allowed = ["for"]
@@ -181,6 +197,7 @@ extension CommandLineController {
         let id = session.attemptID
         switch request.command {
         case "session.get": return sessionInfo(session)
+        case "session.resume": try session.resumeAgentControl(by: "cli")
         case "session.show": sessions.select(session.connection.id); show(nil)
         case "session.disconnect", "session.close":
             session.disconnectSession()
@@ -215,6 +232,13 @@ extension CommandLineController {
             }
         case "wait":
             let target = try request.string("for", required: true)!
+            if target == "resumed" {
+                let revision = session.control.resumeRevision
+                try await waitFor(session, id: id, timeout: timeout) {
+                    session.control.state == .active && !session.control.isTransferring || session.control.resumeRevision > revision
+                }
+                return sessionInfo(session)
+            }
             guard ["connected", "disconnected"].contains(target) else { throw ControlFailure(.invalidArgument, "Wait supports connected or disconnected.") }
             try await waitFor(session, id: id, timeout: timeout, disconnected: target == "disconnected") {
                 target == "connected" ? session.state == .connected : !session.state.isLive

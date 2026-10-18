@@ -18,6 +18,7 @@ extension CommandLineController {
                 "unicode": .bool(capabilities.contains(.unicode)), "extendedButtons": .bool(capabilities.contains(.extendedButtons)),
                 "horizontalWheel": .bool(capabilities.contains(.horizontalWheel)), "maximumActions": .number(256), "maximumDurationMs": .number(60_000)])
         }
+        try session.checkAgentInput()
         guard session.activeAgentInput == nil else { throw ControlFailure(.inputBusy, "Another input command is running on this session.") }
         let receipt: ScreenshotReceipt?
         if let image = try request.string("image") {
@@ -29,9 +30,11 @@ extension CommandLineController {
         } else { receipt = nil }
         let geometryRevision = session.inputGeometryRevision
         let plan = try InputPlan(request, size: size, geometry: receipt?.geometry, capabilities: capabilities)
+        try session.attachAgentControl()
         guard let input = backend.beginAgentInput() else { throw ControlFailure(.notConnected, "The session is not connected.") }
         session.activeAgentInput = input
         session.agentInputCancellation = nil
+        var finished = false
         defer { session.activeAgentInput = nil; session.agentInputCancellation = nil }
         let deadline = ContinuousClock.now.advanced(by: .seconds(min(60, request.timeout ?? 10)))
         var completed = 0
@@ -66,13 +69,16 @@ extension CommandLineController {
                 }
             }
             try check()
+            finished = true
             guard await input.finish() else { throw ControlFailure(.backendFailed, "The RDP input release failed. The transport was closed.") }
             try check()
             return .object(["session": .string(id.uuidString), "submittedActions": .number(Double(completed)),
                 "submittedEvents": .number(Double(submitted)), "acknowledgment": .string("protocol-submission")])
         } catch {
-            input.cancel()
-            await input.finish()
+            if !finished {
+                input.cancel()
+                await input.finish()
+            }
             let failure: ControlFailure
             if let cancelled = session.agentInputCancellation { failure = cancelled }
             else if let known = error as? ControlFailure { failure = known }

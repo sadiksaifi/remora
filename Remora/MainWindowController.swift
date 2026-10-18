@@ -233,6 +233,26 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
         close(selection)
     }
 
+    @objc func takeOverAgentControl(_ sender: Any?) {
+        guard let session = targetSession(sender) else { return }
+        Task { do { try await session.handoverAgentControl(stopping: false) } catch { NSApp.presentError(error) } }
+    }
+    @objc func resumeAgentControl(_ sender: Any?) {
+        do { try targetSession(sender)?.resumeAgentControl() } catch { NSApp.presentError(error) }
+    }
+    @objc func stopAgentControl(_ sender: Any?) {
+        guard let session = targetSession(sender) else { return }
+        Task { do { try await session.handoverAgentControl(stopping: true) } catch { NSApp.presentError(error) } }
+    }
+    @objc func stopAllAgentControl(_ sender: Any?) {
+        let targets = sessionTabs.tabs.compactMap { sessionTabs.session(for: $0.id) }
+        Task {
+            for session in targets {
+                do { try await session.handoverAgentControl(stopping: true) } catch { NSApp.presentError(error) }
+            }
+        }
+    }
+
     @objc func disconnectSession(_ sender: Any?) { sessionTabs.selectedSession?.disconnectSession() }
     @objc func reconnectSession(_ sender: Any?) { sessionTabs.selectedSession?.reconnect() }
     @objc func sendCtrlAltDelete(_ sender: Any?) { sessionTabs.selectedSession?.sendCtrlAltDelete() }
@@ -291,12 +311,17 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
         case #selector(toggleTabKeyboardCapture(_:)):
             menuItem.state = session?.hasKeyboard == true ? .on : .off
             return session?.isConnected == true && session === sessionTabs.selectedSession
+        case #selector(takeOverAgentControl(_:)): return session?.control.canTakeOver == true
+        case #selector(resumeAgentControl(_:)): return session?.isConnected == true && session?.control.canResume == true
+        case #selector(stopAgentControl(_:)): return session?.control.canStop == true
+        case #selector(stopAllAgentControl(_:)):
+            return sessionTabs.tabs.contains { sessionTabs.session(for: $0.id)?.control.canStop == true }
         case #selector(disconnectSession(_:)):
             return session?.canDisconnect ?? false
         case #selector(reconnectSession(_:)):
             return session?.canReconnect ?? false
         case #selector(sendCtrlAltDelete(_:)):
-            return session?.isConnected ?? false
+            return session?.isConnected == true && session?.control.allowsHumanInput == true
         case #selector(releaseKeyboardCapture(_:)):
             return session?.hasKeyboard ?? false
         case #selector(takeScreenshot(_:)), #selector(copyScreenshot(_:)):

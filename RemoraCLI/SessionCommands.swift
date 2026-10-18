@@ -23,7 +23,7 @@ struct ConnectCommand: AsyncParsableCommand {
 
 struct SessionCommand: AsyncParsableCommand {
     static let configuration = CommandConfiguration(commandName: "session", abstract: "Inspect and control session tabs.",
-        subcommands: [List.self, Get.self, Show.self, Disconnect.self, Reconnect.self, Close.self, Resize.self])
+        subcommands: [List.self, Get.self, Show.self, Disconnect.self, Reconnect.self, Close.self, Resize.self, Stop.self, Resume.self])
     @OptionGroup var options: CommonOptions
     struct List: AsyncParsableCommand {
         @OptionGroup var options: CommonOptions
@@ -57,6 +57,25 @@ struct SessionCommand: AsyncParsableCommand {
             try await options.execute(.init(command: "session.reconnect", session: target.target, arguments: ["noWait": .bool(noWait)]), defaultTimeout: "30s")
         }
     }
+    struct Stop: AsyncParsableCommand {
+        @OptionGroup var options: CommonOptions
+        @OptionGroup var target: SessionOptions
+        @Flag(help: "Stop agent control in every tab.") var all = false
+        mutating func validate() throws {
+            if all, target.session != nil { throw ValidationError("Use --all without --session.") }
+        }
+        @MainActor func run() async throws {
+            try await options.execute(.init(command: "session.stop", session: all ? nil : target.target,
+                arguments: ["all": .bool(all)]))
+        }
+    }
+    struct Resume: AsyncParsableCommand {
+        @OptionGroup var options: CommonOptions
+        @OptionGroup var target: SessionOptions
+        @MainActor func run() async throws {
+            try await options.execute(.init(command: "session.resume", session: target.target))
+        }
+    }
     struct Resize: AsyncParsableCommand {
         @OptionGroup var options: CommonOptions
         @OptionGroup var target: SessionOptions
@@ -70,7 +89,7 @@ struct SessionCommand: AsyncParsableCommand {
 
 struct WaitCommand: AsyncParsableCommand {
     static let configuration = CommandConfiguration(commandName: "wait", abstract: "Wait for a session state, frame, or completed recording.")
-    enum State: String, ExpressibleByArgument { case connected, disconnected, frame
+    enum State: String, ExpressibleByArgument { case connected, disconnected, frame, resumed
         case recordingFinished = "recording-finished"
     }
     @OptionGroup var options: CommonOptions

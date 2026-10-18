@@ -14,6 +14,14 @@ final class RemoteDesktopView: NSView {
     func setSessionConnected(_ connected: Bool) { desktopInput.setConnected(connected) }
     func sendCtrlAltDelete() { desktopInput.sendCtrlAltDelete() }
 
+    var allowsHumanInput: Bool {
+        get { desktopInput.allowsHumanInput }
+        set { desktopInput.allowsHumanInput = newValue }
+    }
+    var onHumanInput: ((SessionControl.HumanInput) -> Void)? {
+        get { desktopInput.onHumanInput }
+        set { desktopInput.onHumanInput = newValue }
+    }
     var onFocus: (() -> Void)?
     /// Called when the desktop gains or loses the keyboard: it is first responder of the key window,
     /// the app is active, and the session is connected. System shortcut capture follows the same state.
