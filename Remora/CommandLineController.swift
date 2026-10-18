@@ -12,6 +12,10 @@ final class CommandLineController {
     private var server: ControlServer?
     let connectionStore: ConnectionStore
     let credentialStore: CredentialStore
+    var screenshotReceipts: [ScreenshotReceipt] = []
+    var eventSubscribers: [UUID: EventSubscriber] = [:]
+    let eventInstance = UUID()
+    var eventSequence = 0
 
     init(mainWindow: MainWindowController, sessions: SessionTabs,
          connectionStore: ConnectionStore, credentialStore: CredentialStore,
@@ -22,6 +26,7 @@ final class CommandLineController {
         self.sessions = sessions
         self.show = show
         self.quit = quit
+        sessions.onControlEvent = { [weak self] type, session, data in self?.publishEvent(type, session: session, data: data) }
     }
 
     func start() async throws {
@@ -61,6 +66,12 @@ final class CommandLineController {
             }
             if request.command.hasPrefix("clipboard.") {
                 return ControlReply(.success(try await handleClipboard(request)))
+            }
+            if request.command == "events" { return try subscribeEvents(request) }
+            let waitCondition = request.command == "wait" ? try request.string("for") : nil
+            if request.command == "screenshot" || request.command.hasPrefix("recording.") ||
+                ["frame", "recording-finished"].contains(waitCondition ?? "") {
+                return try await handleScreen(request)
             }
             if request.command.hasPrefix("connection.") {
                 return ControlReply(.success(try handleConnection(request)))

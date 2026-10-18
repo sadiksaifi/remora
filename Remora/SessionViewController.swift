@@ -20,7 +20,18 @@ final class SessionViewController: NSViewController {
     private let onClose: () -> Void
     private let onPromptResolved: (UUID) -> Void
     private let onRememberCredentials: (SessionCredentials) throws -> Void
-    private(set) var attemptID = UUID()
+    var onControlEvent: ((String, ControlValue?) -> Void)?
+    private var frameBaseline = 0
+    private var retiredFrameRevision = 0
+    var frameRevision: Int { renderer.map { max(0, $0.desktop.revision - frameBaseline) } ?? retiredFrameRevision }
+    private(set) var attemptID = UUID() {
+        didSet {
+            frameBaseline = renderer?.desktop.revision ?? 0
+            refreshAfterFrame = 0
+            retiredFrameRevision = 0
+            onControlEvent?("session.replaced", .object(["previousSession": .string(oldValue.uuidString), "session": .string(attemptID.uuidString)]))
+        }
+    }
     private(set) var startedBy = "Remora"
     private(set) var attemptResolution: ConnectionResolution?
     private var commandLine = false
@@ -54,7 +65,11 @@ final class SessionViewController: NSViewController {
             switch self { case .credentials(let id, _), .certificate(let id, _): id }
         }
     }
-    private(set) var pendingPrompt: Prompt?
+    private(set) var pendingPrompt: Prompt? {
+        didSet {
+            if pendingPrompt != nil { onControlEvent?("prompt.opened", nil) }
+        }
+    }
     private(set) var credentialDraft: SessionCredentialDraft?
 
     func configureCommandLine(_ active: Bool, resolution: ConnectionResolution?) {
@@ -63,7 +78,14 @@ final class SessionViewController: NSViewController {
         attemptResolution = active ? resolution ?? (connection.resolution == .fitToWindow ? .fixed(width: 1920, height: 1080) : connection.resolution) : nil
     }
 
-    func addFrameDemand() { display.addCommandLineDemand() }
+    func addFrameDemand() {
+        let before = frameRevision
+        let resumed = display.addCommandLineDemand()
+        if resumed { refreshAfterFrame = before }
+    }
+    private var refreshAfterFrame = 0
+    var hasFreshFrame: Bool { frameRevision > refreshAfterFrame }
+    var captureFrameBaseline: Int { frameBaseline }
     func removeFrameDemand() { display.removeCommandLineDemand() }
 
     func resize(_ resolution: ConnectionResolution) throws {
@@ -84,11 +106,11 @@ final class SessionViewController: NSViewController {
             if let answer, remember { try onRememberCredentials(answer) }
             credentials = answer
             cancelChallenge = nil
-            dismissChallenge()
+            dismissChallenge(action: answer == nil ? "cancel" : "connect")
             challenge.responder.respond(answer)
         } else if case .certificate(_, let challenge) = prompt {
             cancelChallenge = nil
-            dismissChallenge()
+            dismissChallenge(action: trust ? "connect" : "cancel")
             challenge.responder.respond(trust ? .trust : .reject)
         }
     }
@@ -109,7 +131,7 @@ final class SessionViewController: NSViewController {
     /// The state the tab shows. Setup failures and teardown count as disconnected.
     private(set) var state: SessionState = .connecting {
         didSet {
-            if state != oldValue { onStateChange(state) }
+            if state != oldValue { onStateChange(state); onControlEvent?("session.state", nil) }
             updateDesktopAccessibility()
         }
     }
@@ -141,6 +163,7 @@ final class SessionViewController: NSViewController {
         self.onRememberCredentials = onRememberCredentials
         display = SessionDisplay(view: container)
         super.init(nibName: nil, bundle: nil)
+        capture.onRecordingStateChange = { [weak self] in self?.onControlEvent?("recording.state", nil) }
         capture.onRecordingActivityChange = { [weak self] active in
             self?.display.setRecording(active)
             self?.updateDesktopAccessibility()
@@ -194,6 +217,7 @@ final class SessionViewController: NSViewController {
     func disconnect() {
         finishCapture()
         capture.setSource(nil)
+        retiredFrameRevision = frameRevision
         renderer = nil
         state = .disconnected(nil)
         desktopView?.setSessionConnected(false)
@@ -328,6 +352,9 @@ final class SessionViewController: NSViewController {
         disconnect()
         attemptID = UUID()
         attemptConnection = connection
+        frameBaseline = 0
+        retiredFrameRevision = 0
+        refreshAfterFrame = 0
         desktopSize = nil
         state = .connecting
         let connectingView = showStatus(.connecting)
@@ -428,6 +455,7 @@ final class SessionViewController: NSViewController {
         case .stateChanged(let state):
             sessionLog.info("State: \(String(describing: state), privacy: .public)")
             let previous = self.state
+            if case .reconnecting = state, previous == .connected { attemptID = UUID() }
             self.state = state
             switch state {
             case .connecting:
@@ -450,7 +478,6 @@ final class SessionViewController: NSViewController {
                 desktopView.setSessionConnected(true)
             case .reconnecting(let attempt):
                 // One recovery cycle keeps one ID through its attempts and any certificate prompt.
-                if previous == .connected { attemptID = UUID() }
                 desktopView.setSessionConnected(false)
                 if let window = view.window, window.firstResponder === desktopView {
                     window.makeFirstResponder(nil)
@@ -614,11 +641,13 @@ final class SessionViewController: NSViewController {
     }
 
     /// Cancels a waiting or shown credentials or certificate request.
-    private func dismissChallenge() {
+    private func dismissChallenge(action: String = "cancel") {
         if let prompt = pendingPrompt {
             pendingPrompt = nil
             credentialDraft = nil
             onPromptResolved(prompt.id)
+            onControlEvent?("prompt.resolved", .object(["prompt": .string(prompt.id.uuidString),
+                "session": .string(attemptID.uuidString), "action": .string(action)]))
         }
         let cancel = cancelChallenge
         cancelChallenge = nil

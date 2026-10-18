@@ -69,12 +69,20 @@ struct SessionCommand: AsyncParsableCommand {
 }
 
 struct WaitCommand: AsyncParsableCommand {
-    static let configuration = CommandConfiguration(commandName: "wait", abstract: "Wait for a session to connect or disconnect.")
-    enum State: String, ExpressibleByArgument { case connected, disconnected }
+    static let configuration = CommandConfiguration(commandName: "wait", abstract: "Wait for a session state, frame, or completed recording.")
+    enum State: String, ExpressibleByArgument { case connected, disconnected, frame
+        case recordingFinished = "recording-finished"
+    }
     @OptionGroup var options: CommonOptions
     @OptionGroup var target: SessionOptions
     @Option(name: .customLong("for")) var state: State
+    @Option(help: "Wait for a frame strictly newer than this revision. Requires --for frame.") var after: Int?
+    mutating func validate() throws {
+        if let after, after < 0 || state != .frame { throw ValidationError("--after requires --for frame and a nonnegative revision.") }
+    }
     @MainActor func run() async throws {
-        try await options.execute(.init(command: "wait", session: target.target, arguments: ["for": .string(state.rawValue)]))
+        var arguments: [String: ControlValue] = ["for": .string(state.rawValue)]
+        if let after { arguments["after"] = .number(Double(after)) }
+        try await options.execute(.init(command: "wait", session: target.target, arguments: arguments))
     }
 }

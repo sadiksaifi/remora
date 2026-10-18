@@ -16,9 +16,12 @@ final class SessionDisplay {
     private var commandLineDemand = 0
     var followsWindow = true
 
-    func addCommandLineDemand() {
+    @discardableResult
+    func addCommandLineDemand() -> Bool {
+        let resumed = !visible && !recording && commandLineDemand == 0
         commandLineDemand += 1
         session?.setDisplayUpdatesEnabled(visible || recording || commandLineDemand > 0)
+        return resumed
     }
 
     func removeCommandLineDemand() {

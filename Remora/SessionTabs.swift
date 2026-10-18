@@ -18,6 +18,7 @@ final class SessionTabs {
         var isKeyboardCaptured = false
     }
 
+    @ObservationIgnored var onControlEvent: ((String, SessionViewController, ControlValue?) -> Void)?
     private(set) var tabs: [Tab] = []
     /// The shown tab, or nil while the connections list shows.
     private(set) var selection: UUID?
@@ -95,6 +96,11 @@ final class SessionTabs {
         if shouldSelect { select(id) }
         session.configureCommandLine(commandLine, resolution: resolution)
         session.start()
+        session.onControlEvent = { [weak self, weak session] type, data in
+            guard let session else { return }
+            self?.onControlEvent?(type, session, data)
+        }
+        onControlEvent?("session.state", session, nil)
         return true
     }
 
@@ -142,6 +148,7 @@ final class SessionTabs {
             let token = UUID()
             closingCaptures[token] = capture
             session.close()
+            onControlEvent?("session.state", session, .object(["session": .string(session.attemptID.uuidString), "state": .string("closed")]))
             Task { [self] in
                 await capture.stopRecording()
                 closingCaptures[token] = nil

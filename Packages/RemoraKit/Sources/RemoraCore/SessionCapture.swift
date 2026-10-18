@@ -7,6 +7,7 @@ public enum CaptureFailure: Error, Sendable, Equatable, LocalizedError {
     case image(String)
     case recording(String)
     case file(String)
+    case destinationExists(String)
     case timedOut
 
     public var errorDescription: String? {
@@ -16,6 +17,7 @@ public enum CaptureFailure: Error, Sendable, Equatable, LocalizedError {
         case .image(let message): "Screenshot failed: \(message)"
         case .recording(let message): "Recording failed: \(message)"
         case .file(let message): "Capture file failed: \(message)"
+        case .destinationExists(let path): "A file already exists at \(path)."
         case .timedOut: "The recording could not finish before the timeout."
         }
     }
@@ -26,10 +28,12 @@ public struct CaptureFrame: Sendable {
     public let pixels: Data
     public let size: DesktopSize
     public let arrival: TimeInterval
+    public let revision: Int
 
-    public init(copying frame: BorrowedFrame, arrival: TimeInterval = ProcessInfo.processInfo.systemUptime) {
+    public init(copying frame: BorrowedFrame, arrival: TimeInterval = ProcessInfo.processInfo.systemUptime, revision: Int = 0) {
         size = DesktopSize(width: frame.width, height: frame.height)
         self.arrival = arrival
+        self.revision = revision
         var data = Data(count: frame.width * frame.height * 4)
         data.withUnsafeMutableBytes { destination in
             for row in 0..<frame.height {
@@ -46,7 +50,8 @@ public protocol CaptureSource: AnyObject, Sendable {
     var size: DesktopSize? { get }
     func snapshot() throws -> CaptureFrame
     /// Installing an observer also announces the current frame, if available.
-    func setFrameObserver(_ observer: (@Sendable (TimeInterval) -> Void)?)
+    func addFrameObserver(_ observer: @escaping @Sendable (TimeInterval) -> Void) -> UUID
+    func removeFrameObserver(_ id: UUID)
 }
 
 public protocol CaptureMovie: AnyObject, Sendable {
@@ -57,6 +62,7 @@ public protocol CaptureMovie: AnyObject, Sendable {
 
 public protocol CaptureMedia: Sendable {
     func png(_ frame: CaptureFrame) throws -> Data
+    func png(_ frame: CaptureFrame, geometry: ScreenshotGeometry) throws -> Data
     func movie(at url: URL, source: any CaptureSource) throws -> any CaptureMovie
 }
 
@@ -80,10 +86,15 @@ public enum RecordingState: Sendable, Equatable {
 @MainActor @Observable
 public final class SessionCapture {
     @ObservationIgnored private var source: (any CaptureSource)?
+    @ObservationIgnored private var recordingObserver: UUID?
     @ObservationIgnored private var recordingSource: (any CaptureSource)?
-    public private(set) var recordingState: RecordingState = .idle
+    public private(set) var recordingState: RecordingState = .idle {
+        didSet { onRecordingStateChange?() }
+    }
     public private(set) var lastSavedURL: URL?
     public private(set) var recordingURL: URL?
+    public private(set) var lastRecordingResult: Result<URL, CaptureFailure>?
+    @ObservationIgnored public var onRecordingStateChange: (() -> Void)?
     @ObservationIgnored public var onRecordingActivityChange: ((Bool) -> Void)?
     @ObservationIgnored private let media: any CaptureMedia
     @ObservationIgnored private let destination: any CaptureDestination
@@ -98,13 +109,12 @@ public final class SessionCapture {
 
     isolated deinit {
         monitor?.cancel()
-        recordingSource?.setFrameObserver(nil)
+        if let recordingObserver { recordingSource?.removeFrameObserver(recordingObserver) }
         if let movie { Task { _ = await movie.finish() } }
     }
 
     /// The session attaches its renderer and retires it when the session ends.
     public func setSource(_ source: (any CaptureSource)?) {
-        if self.source !== source { self.source?.setFrameObserver(nil) }
         self.source = source
     }
 
@@ -115,12 +125,28 @@ public final class SessionCapture {
         return try await Task.detached { try media.png(source.snapshot()) }.value
     }
 
+    /// Pixels, geometry and revision all come from the same readback.
+    public func screenshot(region: ScreenshotRegion? = nil, maxSize: DesktopSize? = nil) async throws -> (Data, ScreenshotGeometry, Int) {
+        guard let source else { throw CaptureFailure.noFrame }
+        let media = media
+        return try await Task.detached {
+            let frame = try source.snapshot()
+            let geometry = try ScreenshotGeometry(desktop: frame.size, region: region, maxSize: maxSize)
+            return (try media.png(frame, geometry: geometry), geometry, frame.revision)
+        }.value
+    }
+
     @discardableResult
     public func saveScreenshot(connectionName: String) async throws -> URL {
         let png = try await screenshotPNG()
+        return try await saveScreenshot(png, connectionName: connectionName)
+    }
+
+    /// File captures share reservation and cleanup with the session's Screenshot action.
+    public func saveScreenshot(_ png: Data, connectionName: String, output: URL? = nil) async throws -> URL {
         let destination = destination
         let url = try await Task.detached {
-            let url = try destination.reserve(connectionName: connectionName, extension: "png")
+            let url = try output.map(ScreenshotDestination.reserve(at:)) ?? destination.reserve(connectionName: connectionName, extension: "png")
             do { try png.write(to: url); return url }
             catch {
                 var failure = CaptureFailure.file(error.localizedDescription)
@@ -133,15 +159,16 @@ public final class SessionCapture {
         return url
     }
 
-    public func startRecording(connectionName: String) throws {
+    public func startRecording(connectionName: String, output: URL? = nil) throws {
         guard movie == nil, finishTask == nil else { throw CaptureFailure.busy }
         guard let source, source.size != nil else { throw CaptureFailure.noFrame }
-        let url = try destination.reserve(connectionName: connectionName, extension: "mov")
+        let url = try output.map(ScreenshotDestination.reserve(at:)) ?? destination.reserve(connectionName: connectionName, extension: "mov")
+        lastRecordingResult = nil
         do {
             let startedAt = ProcessInfo.processInfo.systemUptime
             let movie = try media.movie(at: url, source: source)
             recordingSource = source
-            source.setFrameObserver { movie.submit(arrival: $0) }
+            recordingObserver = source.addFrameObserver { movie.submit(arrival: $0) }
             self.movie = movie
             recordingURL = url
             recordingState = .recording(startedAt: startedAt)
@@ -156,6 +183,7 @@ public final class SessionCapture {
             var failure = error as? CaptureFailure ?? .recording(error.localizedDescription)
             do { try FileManager.default.removeItem(at: url) }
             catch { failure = .file("\(failure.localizedDescription) Capture file remains at \(url.path): \(error.localizedDescription)") }
+            lastRecordingResult = .failure(failure)
             recordingState = .failed(failure)
             throw failure
         }
@@ -165,9 +193,10 @@ public final class SessionCapture {
     @discardableResult
     public func stopRecording() async -> Result<URL, CaptureFailure>? {
         if let finishTask { return await finishTask.value }
-        guard let movie else { return nil }
-        recordingSource?.setFrameObserver(nil)
+        guard let movie else { return lastRecordingResult }
+        if let recordingObserver { recordingSource?.removeFrameObserver(recordingObserver) }
         recordingSource = nil
+        recordingObserver = nil
         self.movie = nil
         monitor?.cancel()
         monitor = nil
@@ -178,6 +207,7 @@ public final class SessionCapture {
             // Publish completion before any concurrent stop caller resumes.
             finishTask = nil
             recordingURL = nil
+            lastRecordingResult = result
             switch result {
             case .success(let url): lastSavedURL = url; recordingState = .idle
             case .failure(let failure): recordingState = .failed(failure)

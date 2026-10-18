@@ -21,6 +21,14 @@ public struct ScreenshotDestination: CaptureDestination {
             ?? FileManager.default.homeDirectoryForCurrentUser.appending(path: "Desktop", directoryHint: .isDirectory)
     }
 
+    public static func reserve(at url: URL) throws -> URL {
+        let fd = open(url.path, O_WRONLY | O_CREAT | O_EXCL, S_IRUSR | S_IWUSR)
+        if fd < 0, errno == EEXIST { throw CaptureFailure.destinationExists(url.path) }
+        guard fd >= 0 else { throw CaptureFailure.file("\(url.path): \(String(cString: strerror(errno)))") }
+        Darwin.close(fd)
+        return url
+    }
+
     public func reserve(connectionName: String, extension suffix: String) throws -> URL {
         let directory = folder() ?? Self.screenshotLocation
         let formatter = DateFormatter()
@@ -43,9 +51,28 @@ public struct AppleCaptureMedia: CaptureMedia {
     public init() {}
 
     public func png(_ frame: CaptureFrame) throws -> Data {
+        try png(frame, geometry: ScreenshotGeometry(desktop: frame.size))
+    }
+
+    public func png(_ frame: CaptureFrame, geometry: ScreenshotGeometry) throws -> Data {
+        guard let desktop = Self.image(frame),
+              let cropped = desktop.cropping(to: CGRect(x: geometry.region.x, y: geometry.region.y,
+                    width: geometry.region.width, height: geometry.region.height)) else {
+            throw CaptureFailure.image("Could not crop the image.")
+        }
+        let image: CGImage
+        if geometry.encoded.width == cropped.width, geometry.encoded.height == cropped.height { image = cropped }
+        else {
+            guard let context = CGContext(data: nil, width: geometry.encoded.width, height: geometry.encoded.height,
+                bitsPerComponent: 8, bytesPerRow: 0, space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue) else { throw CaptureFailure.image("Could not scale the image.") }
+            context.interpolationQuality = .high
+            context.draw(cropped, in: CGRect(x: 0, y: 0, width: geometry.encoded.width, height: geometry.encoded.height))
+            guard let scaled = context.makeImage() else { throw CaptureFailure.image("Could not scale the image.") }
+            image = scaled
+        }
         let data = NSMutableData()
-        guard let destination = CGImageDestinationCreateWithData(data, UTType.png.identifier as CFString, 1, nil),
-              let image = Self.image(frame) else { throw CaptureFailure.image("Could not create the image.") }
+        guard let destination = CGImageDestinationCreateWithData(data, UTType.png.identifier as CFString, 1, nil) else { throw CaptureFailure.image("Could not create the image.") }
         CGImageDestinationAddImage(destination, image, nil)
         guard CGImageDestinationFinalize(destination) else { throw CaptureFailure.image("PNG encoding failed.") }
         return data as Data

@@ -93,7 +93,7 @@ private struct RecordingTestDestination: CaptureDestination {
     let result = await capture.stopRecording()
     #expect(try result?.get() == url)
     await concurrentStop?.value
-    #expect(await capture.stopRecording() == nil)
+    #expect(try await capture.stopRecording()?.get() == url)
 }
 
 @Test func hardwareMovieSurvivesResizeAndIncludesIdleTime() async throws {
@@ -105,7 +105,7 @@ private struct RecordingTestDestination: CaptureDestination {
     let frames = try MetalDesktop(device: #require(MTLCreateSystemDefaultDevice()))
     desktop(width: 320, height: 240, bgra: [20, 30, 240, 0], sink: frames)
     let movie = try AppleCaptureMedia().movie(at: url, source: frames)
-    frames.setFrameObserver { movie.submit(arrival: $0) }
+    let observer = frames.addFrameObserver { movie.submit(arrival: $0) }
     try await Task.sleep(for: .milliseconds(180))
     desktop(width: 160, height: 240, bgra: [30, 240, 20, 0], sink: frames)
     // Exercise latest-frame coalescing faster than the 60 fps limit.
@@ -122,7 +122,7 @@ private struct RecordingTestDestination: CaptureDestination {
         }
     }
     try await Task.sleep(for: .milliseconds(520))
-    frames.setFrameObserver(nil)
+    frames.removeFrameObserver(observer)
     let result = await movie.finish()
     _ = try result.get()
     let asset = AVURLAsset(url: url)
@@ -180,14 +180,14 @@ private struct RecordingTestDestination: CaptureDestination {
     desktop(width: 320, height: 240, bgra: [20, 30, 240, 0], sink: frames)
     let startedAt = ProcessInfo.processInfo.systemUptime
     let movie = try AppleCaptureMedia().movie(at: url, source: frames)
-    frames.setFrameObserver { movie.submit(arrival: $0) }
+    let observer = frames.addFrameObserver { movie.submit(arrival: $0) }
     for change in 0..<changes {
         try await Task.sleep(for: .milliseconds(100))
         desktop(width: 320, height: 240, bgra: [UInt8(40 + change), 30, 240, 0], sink: frames)
     }
     // No more source frames. Exceed the encoder's default last-sample duration.
     try await Task.sleep(for: .milliseconds(1350))
-    frames.setFrameObserver(nil)
+    frames.removeFrameObserver(observer)
     let elapsed = ProcessInfo.processInfo.systemUptime - startedAt
     _ = try await movie.finish().get()
     let asset = AVURLAsset(url: url)
