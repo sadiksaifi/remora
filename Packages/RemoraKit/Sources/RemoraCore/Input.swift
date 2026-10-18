@@ -3,10 +3,12 @@ import Foundation
 public struct KeyInput: Sendable, Equatable {
     public let keyCode: UInt16
     public let isDown: Bool
+    public let characters: String?
 
-    public init(keyCode: UInt16, isDown: Bool) {
+    public init(keyCode: UInt16, isDown: Bool, characters: String? = nil) {
         self.keyCode = keyCode
         self.isDown = isDown
+        self.characters = characters
     }
 }
 

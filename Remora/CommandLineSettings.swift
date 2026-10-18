@@ -46,6 +46,8 @@ extension SettingKey {
         switch self {
         case .captureSystemShortcuts: SystemShortcutCapture.enabledKey
         case .showAgentPointer: AppSettings.showAgentPointerKey
+        case .showPointerInRecordings: AppSettings.showPointerInRecordingsKey
+        case .showKeyPresses: AppSettings.showKeyPressesKey
         case .saveLocation: AppSettings.saveLocationKey
         }
     }
@@ -54,7 +56,7 @@ extension SettingKey {
 extension AppSettings {
     static func value(_ key: SettingKey) -> ControlValue {
         if key == .saveLocation { return .string(UserDefaults.standard.string(forKey: key.defaultsKey) ?? "") }
-        return .bool(UserDefaults.standard.object(forKey: key.defaultsKey) as? Bool ?? true)
+        return .bool(UserDefaults.standard.object(forKey: key.defaultsKey) as? Bool ?? (key != .showKeyPresses))
     }
 
     static func set(_ key: SettingKey, value: String) throws {

@@ -1,5 +1,5 @@
 public enum SettingKey: String, CaseIterable, Sendable {
-    case captureSystemShortcuts, showAgentPointer, saveLocation
+    case captureSystemShortcuts, showAgentPointer, showPointerInRecordings, showKeyPresses, saveLocation
 
     public var valueHelp: String {
         switch self {

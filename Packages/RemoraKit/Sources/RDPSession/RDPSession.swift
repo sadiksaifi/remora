@@ -16,10 +16,13 @@ public final class RDPSession: RemoteSession, @unchecked Sendable {
     private let frameSink: any FrameSink
     private let keyboardLayout: UInt32
     private let isoKeyboard: Bool
+    let inputFeedback: @Sendable (InputSource, SessionInputFeedback) -> Void
     private let state = StateBox()
 
     @MainActor
-    public init(configuration: SessionConfiguration, frameSink: any FrameSink) {
+    public init(configuration: SessionConfiguration, frameSink: any FrameSink,
+                inputFeedback: @escaping @Sendable (InputSource, SessionInputFeedback) -> Void = { _, _ in }) {
+        self.inputFeedback = inputFeedback
         self.configuration = configuration
         self.frameSink = frameSink
         keyboardLayout = KeyboardLayout.current()
@@ -87,11 +90,17 @@ public final class RDPSession: RemoteSession, @unchecked Sendable {
     }
 
     public func sendKey(_ key: KeyInput) {
-        enqueue { rm_rdp_key($0, key.keyCode, key.isDown) }
+        enqueue {
+            rm_rdp_key($0, key.keyCode, key.isDown)
+            inputFeedback(.human, .key(scancode: rm_rdp_scancode(key.keyCode, isoKeyboard), down: key.isDown, characters: key.characters))
+        }
     }
 
     public func sendPointer(position: RemotePoint, buttons: PointerButtons) {
-        enqueue { rm_rdp_pointer($0, position.x, position.y, buttons.rawValue) }
+        enqueue {
+            rm_rdp_pointer($0, position.x, position.y, buttons.rawValue)
+            inputFeedback(.human, .pointer(position, buttons))
+        }
     }
 
     public func sendWheel(_ wheel: WheelInput) {
@@ -108,7 +117,10 @@ public final class RDPSession: RemoteSession, @unchecked Sendable {
     }
 
     public func releaseHumanInput() {
-        enqueue { rm_rdp_release_human($0) }
+        enqueue {
+            rm_rdp_release_human($0)
+            inputFeedback(.human, .release)
+        }
     }
 
     public func setLocalClipboard(text: String) {
@@ -211,6 +223,8 @@ public final class RDPSession: RemoteSession, @unchecked Sendable {
         callbacks.reconnecting = { user, attempt in
             let owner = session(user)
             owner.state.lock.withLock { owner.state.connected = false }
+            owner.inputFeedback(.human, .release)
+            owner.inputFeedback(.agent, .release)
             owner.emit(.stateChanged(.reconnecting(attempt: Int(attempt))))
         }
         callbacks.disconnected = { user, reason, message in

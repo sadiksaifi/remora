@@ -132,22 +132,19 @@ final class RemoteDesktopView: NSView {
         updateDrawableSize()
     }
 
-    /// True while the agent has control. The Settings switch can still hide the pointer.
-    var showsAgentPointer = false {
-        didSet { agentPointer?.isShown = showsAgentPointer }
+    var overlayState: SessionOverlayState? {
+        didSet {
+            agentPointer?.removeFromSuperview()
+            agentPointer = nil
+            if let overlayState {
+                let pointer = AgentPointerView(state: overlayState, frame: bounds)
+                pointer.autoresizingMask = [.width, .height]
+                addSubview(pointer)
+                agentPointer = pointer
+            }
+        }
     }
     private var agentPointer: AgentPointerView?
-
-    func moveAgentPointer(to remotePoint: CGPoint, click: Bool) {
-        if agentPointer == nil {
-            let pointer = AgentPointerView(frame: bounds)
-            pointer.autoresizingMask = [.width, .height]
-            pointer.isShown = showsAgentPointer
-            addSubview(pointer)
-            agentPointer = pointer
-        }
-        agentPointer?.move(to: remotePoint, click: click)
-    }
 
     override func becomeFirstResponder() -> Bool {
         let accepted = super.becomeFirstResponder()
@@ -228,7 +225,7 @@ final class RemoteDesktopView: NSView {
         if let size = renderer.present(on: metalLayer, redraw: redrawNeeded) {
             if remoteSize != size {
                 remoteSize = size
-                agentPointer?.needsLayout = true
+                agentPointer?.needsDisplay = true
                 window?.invalidateCursorRects(for: self)
                 updateScreenElement()
                 NSAccessibility.post(element: screenElement, notification: .valueChanged)

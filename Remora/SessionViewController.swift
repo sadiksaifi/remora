@@ -130,10 +130,7 @@ final class SessionViewController: NSViewController {
     private(set) var control = SessionControl()
     static let controlDidChange = Notification.Name("SessionControlDidChange")
     private var controlFrameDemand = false
-    var activeAgentInput: AgentInputRequest? {
-        didSet { if activeAgentInput == nil { agentButtons = [] } }
-    }
-    private var agentButtons: PointerButtons = []
+    var activeAgentInput: AgentInputRequest?
     var agentInputCancellation: ControlFailure?
 
     /// Take Over and Stop can cancel even events detached by the C drain loop.
@@ -169,7 +166,9 @@ final class SessionViewController: NSViewController {
     private var statusView: NSHostingView<SessionStatusView>?
     private var closed = false
     private let display: SessionDisplay
-    let capture = SessionCapture(media: AppleCaptureMedia(), destination: ScreenshotDestination { AppSettings.saveFolder })
+    let inputOverlays = SessionOverlayState()
+    private var overlayScale = 1.0
+    lazy var capture = SessionCapture(media: AppleCaptureMedia(overlays: inputOverlays), destination: ScreenshotDestination { AppSettings.saveFolder })
 
     init(
         connection: Connection, credentialStore: CredentialStore,
@@ -191,6 +190,9 @@ final class SessionViewController: NSViewController {
         self.onRememberCredentials = onRememberCredentials
         display = SessionDisplay(view: container)
         super.init(nibName: nil, bundle: nil)
+        NotificationCenter.default.addObserver(self, selector: #selector(refreshOverlaySettings),
+            name: UserDefaults.didChangeNotification, object: nil)
+        refreshOverlaySettings()
         capture.onRecordingStateChange = { [weak self] in self?.onControlEvent?("recording.state", nil) }
         capture.onRecordingActivityChange = { [weak self] active in
             self?.display.setRecording(active)
@@ -379,6 +381,7 @@ final class SessionViewController: NSViewController {
     private func startSession() {
         guard !closed else { return }
         disconnect()
+        inputOverlays.reset()
         attemptID = UUID()
         attemptConnection = connection
         frameBaseline = 0
@@ -437,11 +440,17 @@ final class SessionViewController: NSViewController {
                 desktopSize: desktopSize, scaleFactor: scaleFactor, allowsDynamicResize: allowsDynamicResize
             )
             capture.setSource(renderer.desktop)
-            let session = RDPSession(configuration: configuration, frameSink: renderer)
+            let inputOverlays = inputOverlays
+            overlayScale = scaleFactor
+            refreshOverlaySettings()
+            let session = RDPSession(configuration: configuration, frameSink: renderer,
+                inputFeedback: { source, event in inputOverlays.receive(source, event) })
             let desktopView = RemoteDesktopView(renderer: renderer)
             desktopView.allowsHumanInput = control.allowsHumanInput
             desktopView.onHumanInput = { [weak self] kind in self?.control.record(kind) }
             desktopView.input = session
+            desktopView.overlayState = inputOverlays
+            updateOverlayCursor(.systemDefault)
             self.desktopView = desktopView
             overlays = SessionOverlays(
                 desktop: desktopView, computerName: connection.name, address: connection.displayAddress,
@@ -449,7 +458,7 @@ final class SessionViewController: NSViewController {
                 toggleControl: { [weak self] in self?.toggleAgentControl() }
             )
             overlays?.controlChanged(control, agent: agentName, showsStop: false)
-            desktopView.showsAgentPointer = control.state == .active
+            refreshOverlaySettings()
             self.session = session
             remoteClipboard = RemoteClipboard()
             clipboardSync = ClipboardSync(session: session, canSync: { [weak self] in self?.canSyncMacClipboard == true })
@@ -547,6 +556,7 @@ final class SessionViewController: NSViewController {
             if available { display.requestResize() }
         case .cursorChanged(let cursor):
             desktopView.apply(cursor: cursor)
+            updateOverlayCursor(cursor)
         case .credentialsChallenge(let challenge):
             dismissChallenge()
             credentialDraft = SessionCredentialDraft(challenge: challenge, password: credentials?.password ?? "")
@@ -829,11 +839,17 @@ extension SessionViewController {
         applyControl()
     }
 
-    /// Moves the ghost pointer to the agent's submitted point. A newly pressed button flashes the click ring.
-    func showAgentPointer(at point: RemotePoint, buttons: PointerButtons) {
-        let click = !buttons.subtracting(agentButtons).isEmpty
-        agentButtons = buttons
-        desktopView?.moveAgentPointer(to: CGPoint(x: Int(point.x), y: Int(point.y)), click: click)
+    @objc private func refreshOverlaySettings() {
+        inputOverlays.configure(showPointerInRecordings: AppSettings.showPointerInRecordings,
+            showKeyPresses: AppSettings.showKeyPresses,
+            showAgentPointer: control.state == .active && AppSettings.showAgentPointer,
+            scale: overlayScale)
+    }
+
+    private func updateOverlayCursor(_ cursor: RemoteCursor) {
+        if cursor == .hidden { inputOverlays.setCursor(nil, hotspot: .zero); return }
+        let native = cursor.cursor(pointsPerPixel: 1)
+        inputOverlays.setCursor(native.image.cgImage(forProposedRect: nil, context: nil, hints: nil), hotspot: native.hotSpot)
     }
 
     /// Take Over while the agent has control, or Resume while it is paused.
@@ -903,7 +919,7 @@ extension SessionViewController {
         }
         desktopView?.allowsHumanInput = control.allowsHumanInput
         overlays?.controlChanged(control, agent: agentName, showsStop: isConnected && !sessionEnded)
-        desktopView?.showsAgentPointer = control.state == .active
+        refreshOverlaySettings()
         if control.needsFrames != controlFrameDemand {
             controlFrameDemand = control.needsFrames
             if controlFrameDemand { addFrameDemand() } else { removeFrameDemand() }

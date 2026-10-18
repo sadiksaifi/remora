@@ -58,7 +58,6 @@ extension CommandLineController {
                 case .event(let event):
                     try await input.send(event, deadline: deadline)
                     submitted += 1
-                    if case .pointer(let point, let buttons) = event { session.showAgentPointer(at: point, buttons: buttons) }
                 case .delay(let milliseconds):
                     let until = min(deadline, ContinuousClock.now.advanced(by: .milliseconds(milliseconds)))
                     // Poll cancellation from Take Over while held in a delay.

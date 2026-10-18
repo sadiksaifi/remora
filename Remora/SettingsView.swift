@@ -3,10 +3,14 @@ import RemoraControl
 import RemoraCore
 import SwiftUI
 
-/// Remora's settings in user defaults. The command line names them captureSystemShortcuts, showAgentPointer
-/// and saveLocation; the first is SystemShortcutCapture.enabledKey.
+/// Remora's settings in user defaults, also exposed by the command line.
 enum AppSettings {
     static let showAgentPointerKey = "ShowAgentPointer"
+    static let showPointerInRecordingsKey = "ShowPointerInRecordings"
+    static let showKeyPressesKey = "ShowKeyPresses"
+    static var showAgentPointer: Bool { UserDefaults.standard.object(forKey: showAgentPointerKey) as? Bool ?? true }
+    static var showPointerInRecordings: Bool { UserDefaults.standard.object(forKey: showPointerInRecordingsKey) as? Bool ?? true }
+    static var showKeyPresses: Bool { UserDefaults.standard.bool(forKey: showKeyPressesKey) }
     /// A folder path. Empty means the macOS screenshot location.
     static let saveLocationKey = "SaveLocation"
 
