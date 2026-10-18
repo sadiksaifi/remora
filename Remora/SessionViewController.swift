@@ -547,12 +547,14 @@ final class SessionViewController: NSViewController {
     /// Replaces the tab's content with a status view, removing any desktop.
     @discardableResult
     private func showStatus(_ status: SessionStatus) -> NSView {
-        let rootView = SessionStatusView(
+        var rootView = SessionStatusView(
             status: status, computerName: connection.name, address: connection.displayAddress,
             onCancel: { [weak self] in self?.session?.disconnect() },
             onReconnect: { [weak self] in self?.startSession() },
             onClose: { [weak self] in self?.onClose() }
         )
+        // Leave the keyboard with the search field while the user types in it.
+        rootView.focusesClose = (view.window?.firstResponder as? NSTextView)?.isFieldEditor != true
         if let statusView, content === statusView {
             statusView.rootView = rootView
             return statusView

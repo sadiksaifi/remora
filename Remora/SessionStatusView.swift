@@ -19,9 +19,12 @@ struct SessionStatusView: View {
     let computerName: String
     let address: String
     var overDesktop = false
+    /// After a session ends, Close takes the keyboard when the status appears.
+    var focusesClose = false
     var onCancel: () -> Void = {}
     var onReconnect: () -> Void = {}
     var onClose: () -> Void = {}
+    @FocusState private var closeFocused: Bool
 
     var body: some View {
         if overDesktop {
@@ -93,11 +96,14 @@ struct SessionStatusView: View {
         case .disconnected:
             HStack(spacing: 12) {
                 Button("Close", action: onClose)
+                    .keyboardShortcut(.cancelAction)
+                    .focused($closeFocused)
                     .accessibilityIdentifier("sessionClose")
                 Button("Reconnect", action: onReconnect)
                     .keyboardShortcut(.defaultAction)
                     .accessibilityIdentifier("sessionReconnect")
             }
+            .onAppear { closeFocused = focusesClose }
         }
     }
 

@@ -108,8 +108,8 @@ A connected desktop is one element. The remote computer's apps are pixels, not a
 
 ### Session screens
 
-- Status screens use `sessionCancel` while connecting or reconnecting, and `sessionClose` and `sessionReconnect` after a session ends. These have no suffix: only the shown tab's page is in the window. Escape cancels a connection attempt and Return reconnects.
-- When a status screen replaces the desktop and no other view has the keyboard, the status screen takes it, so Tab moves from Close to Reconnect and Shift-Tab back. A hidden tab does this when it shows. A search field in use keeps the keyboard.
+- Status screens use `sessionCancel` while connecting or reconnecting, and `sessionClose` and `sessionReconnect` after a session ends. These have no suffix: only the shown tab's page is in the window. Escape cancels a connection attempt. After a session ends, Escape closes the tab and Return reconnects.
+- When a status screen replaces the desktop and no other view has the keyboard, the status screen takes it. After a session ends, Close has the keyboard focus when the screen appears, Tab moves to Reconnect, and Shift-Tab moves back. A hidden tab does this when it shows. A search field in use keeps the keyboard.
 - Remora posts an accessibility announcement when automatic reconnection starts (`Reconnecting to “Lab PC”, attempt 1 of 20`), when it succeeds (`Reconnected to “Lab PC”`), and when a session ends or fails to start, with the status screen's title, such as `Connection Timed Out`. Later attempts update only the desktop's value and the overlay text, so VoiceOver does not speak every attempt.
 - The credentials sheet uses `credentialsUsername`, `credentialsPassword`, `credentialsDomain`, `credentialsRemember`, `credentialsCancel`, and `credentialsConnect`. The permission banner uses `shortcutPermissionNotNow` and `shortcutPermissionOpenSettings`. The screenshot note is `captureConfirmation`.
 
