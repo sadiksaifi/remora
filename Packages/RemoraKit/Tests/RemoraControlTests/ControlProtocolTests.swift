@@ -30,3 +30,10 @@ import Testing
     #expect(error == ["code": "outcome-unknown", "message": "Reply lost.", "hint": "Inspect app status."])
     #expect(try JSONDecoder().decode(ControlResponse.self, from: JSONEncoder().encode(response)) == response)
 }
+
+@Test func passwordLineEndingIsRemovedExactlyOnce() throws {
+    #expect(try PasswordInput.decode(Data(" secret \r\n".utf8)) == " secret ")
+    #expect(try PasswordInput.decode(Data("a\n\n".utf8)) == "a\n")
+    #expect(throws: ControlFailure.self) { try PasswordInput.decode(Data([0])) }
+    #expect(throws: ControlFailure.self) { try PasswordInput.decode(Data([255])) }
+}

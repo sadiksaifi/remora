@@ -1,17 +1,23 @@
 import AppKit
 import RemoraControl
+import RemoraCore
 
 /// Maps wire commands to app operations. Future command families enter through handle(_:).
 @MainActor
 final class CommandLineController {
-    private let mainWindow: MainWindowController
-    private let sessions: SessionTabs
-    private let show: (String?) -> Void
+    let mainWindow: MainWindowController
+    let sessions: SessionTabs
+    let show: (String?) -> Void
     private let quit: () -> Void
     private var server: ControlServer?
+    let connectionStore: ConnectionStore
+    let credentialStore: CredentialStore
 
     init(mainWindow: MainWindowController, sessions: SessionTabs,
+         connectionStore: ConnectionStore, credentialStore: CredentialStore,
          show: @escaping (String?) -> Void, quit: @escaping () -> Void) {
+        self.connectionStore = connectionStore
+        self.credentialStore = credentialStore
         self.mainWindow = mainWindow
         self.sessions = sessions
         self.show = show
@@ -49,6 +55,13 @@ final class CommandLineController {
 
     private func handle(_ request: ControlRequest) async -> ControlReply {
         do {
+            if Task.isCancelled { throw ControlFailure(.cancelled, "The command was interrupted.") }
+            if request.command.hasPrefix("connection.") {
+                return ControlReply(.success(try handleConnection(request)))
+            }
+            if request.command == "connect" || request.command == "wait" || request.command.hasPrefix("session.") || request.command.hasPrefix("prompt.") {
+                return ControlReply(.success(try await handleSession(request)))
+            }
             let allowed: Set<String> = request.command == "app.show" ? ["page"] : []
             guard request.session == nil, Set(request.arguments.keys).isSubset(of: allowed) else {
                 throw ControlFailure(.invalidArgument, "This app command received unknown arguments.")

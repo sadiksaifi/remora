@@ -139,7 +139,12 @@ public actor ControlServer {
                 let request: ControlRequest
                 do { request = try JSONDecoder().decode(ControlRequest.self, from: line) }
                 catch { throw ControlFailure(.invalidArgument, "Invalid control request JSON or fields.") }
-                reply = await handler(request)
+                let operation = Task { await handler(request) }
+                // A waiter belongs to its socket. EOF or unexpected trailing data cancels it.
+                connection.receive(minimumIncompleteLength: 1, maximumLength: 1) { _, _, _, _ in
+                    operation.cancel()
+                }
+                reply = await operation.value
             } catch {
                 reply = ControlReply(.failure(error as? ControlFailure ?? ControlFailure(.ioFailed, error.localizedDescription)))
             }

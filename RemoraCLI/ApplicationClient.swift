@@ -35,7 +35,8 @@ struct ApplicationClient {
             if !wasRunning { try openApplication() }
             try await waitForReadiness(client)
         }
-        return try await client.request(request, timeout: timeout)
+        let readOnly = request.command.hasSuffix(".list") || request.command.hasSuffix(".get") || request.command == "wait"
+        return try await client.request(request, timeout: timeout, isMutation: !readOnly)
     }
 
     private func openApplication() throws {

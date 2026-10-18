@@ -1,6 +1,7 @@
 import AppKit
 import RDPSession
 import RemoraCore
+import RemoraControl
 import SwiftUI
 import os
 
@@ -11,11 +12,69 @@ private let sessionLog = Logger(subsystem: "dev.sadiksaifi.Remora", category: "S
 @MainActor
 final class SessionViewController: NSViewController {
     private(set) var connection: Connection
+    private(set) var attemptConnection: Connection
     private let credentialStore: CredentialStore
     private let onStateChange: (SessionState) -> Void
     private let onAttentionChange: (Bool) -> Void
     private let onKeyboardCaptureChange: (Bool) -> Void
     private let onClose: () -> Void
+    private let onPromptResolved: (UUID) -> Void
+    private let onRememberCredentials: (SessionCredentials) throws -> Void
+    private(set) var attemptID = UUID()
+    private(set) var startedBy = "Remora"
+    private(set) var attemptResolution: ConnectionResolution?
+    private var commandLine = false
+    private var renderer: FrameRenderer?
+    private(set) var desktopSize: DesktopSize?
+    var frameSize: DesktopSize? { renderer?.desktop.size }
+    var supportsDynamicResize: Bool { session?.supportsDynamicResize == true }
+    enum Prompt {
+        case credentials(UUID, CredentialsChallenge)
+        case certificate(UUID, TrustChallenge)
+        var id: UUID {
+            switch self { case .credentials(let id, _), .certificate(let id, _): id }
+        }
+    }
+    private(set) var pendingPrompt: Prompt?
+    private(set) var credentialDraft: SessionCredentialDraft?
+
+    func configureCommandLine(_ active: Bool, resolution: ConnectionResolution?) {
+        commandLine = active
+        startedBy = active ? "remora CLI" : "Remora"
+        attemptResolution = active ? resolution ?? (connection.resolution == .fitToWindow ? .fixed(width: 1920, height: 1080) : connection.resolution) : nil
+    }
+
+    func addFrameDemand() { display.addCommandLineDemand() }
+    func removeFrameDemand() { display.removeCommandLineDemand() }
+
+    func resize(_ resolution: ConnectionResolution) throws {
+        guard state == .connected else { throw ControlFailure(.notConnected, "The session is not connected.") }
+        guard supportsDynamicResize else { throw ControlFailure(.unsupported, "The server does not support dynamic resizing.") }
+        guard case .fixed(let width, let height) = resolution, resolution.isValid else { throw ControlFailure(.invalidArgument, "Resize requires fixed dimensions.") }
+        if let area = session?.maximumResizeArea, UInt64(width) * UInt64(height) > area {
+            throw ControlFailure(.unsupported, "The requested desktop exceeds the server's negotiated pixel area.", hint: "Choose a smaller resolution.")
+        }
+        attemptResolution = resolution
+        display.followsWindow = false
+        session?.requestResize(.init(width: width, height: height), scale: 1)
+    }
+
+    func respondToPrompt(_ id: UUID, credentials answer: SessionCredentials?, trust: Bool = false, remember: Bool = false) throws {
+        guard let prompt = pendingPrompt, prompt.id == id else { throw ControlFailure(.promptResolved, "This prompt was already resolved.") }
+        if case .credentials(_, let challenge) = prompt {
+            if let answer, remember { try onRememberCredentials(answer) }
+            credentials = answer
+            cancelChallenge = nil
+            dismissChallenge()
+            challenge.responder.respond(answer)
+        } else if case .certificate(_, let challenge) = prompt {
+            cancelChallenge = nil
+            dismissChallenge()
+            challenge.responder.respond(trust ? .trust : .reject)
+        }
+    }
+
+
     private var session: (any RemoteSession)?
     private var clipboardSync: ClipboardSync?
     private var overlays: SessionOverlays?
@@ -48,14 +107,19 @@ final class SessionViewController: NSViewController {
         onStateChange: @escaping (SessionState) -> Void,
         onAttentionChange: @escaping (Bool) -> Void,
         onKeyboardCaptureChange: @escaping (Bool) -> Void,
-        onClose: @escaping () -> Void
+        onClose: @escaping () -> Void,
+        onPromptResolved: @escaping (UUID) -> Void,
+        onRememberCredentials: @escaping (SessionCredentials) throws -> Void
     ) {
         self.connection = connection
+        self.attemptConnection = connection
         self.credentialStore = credentialStore
         self.onStateChange = onStateChange
         self.onAttentionChange = onAttentionChange
         self.onKeyboardCaptureChange = onKeyboardCaptureChange
         self.onClose = onClose
+        self.onPromptResolved = onPromptResolved
+        self.onRememberCredentials = onRememberCredentials
         display = SessionDisplay(view: container)
         super.init(nibName: nil, bundle: nil)
         capture.onRecordingActivityChange = { [weak self] active in
@@ -82,12 +146,13 @@ final class SessionViewController: NSViewController {
         view = container
     }
 
-    /// Starts the first session. Call after the tab shows, so Fit to Window can measure the content area.
+    /// Starts an attempt. Visible Fit to Window tabs measure their content area; hidden tabs use the fallback.
     func start() {
         startSession()
     }
 
     func reconnect() {
+        configureCommandLine(commandLine, resolution: nil)
         startSession()
     }
 
@@ -110,6 +175,7 @@ final class SessionViewController: NSViewController {
     func disconnect() {
         finishCapture()
         capture.setSource(nil)
+        renderer = nil
         state = .disconnected(nil)
         desktopView?.setSessionConnected(false)
         overlays = nil
@@ -241,6 +307,9 @@ final class SessionViewController: NSViewController {
     private func startSession() {
         guard !closed else { return }
         disconnect()
+        attemptID = UUID()
+        attemptConnection = connection
+        desktopSize = nil
         state = .connecting
         let connectingView = showStatus(.connecting)
         do {
@@ -263,24 +332,27 @@ final class SessionViewController: NSViewController {
                 credentials = currentCredentials
             }
             let renderer = try FrameRenderer()
+            self.renderer = renderer
             view.window?.contentView?.layoutSubtreeIfNeeded()
             let backingScale = view.window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2
             let points = connectingView.bounds.size
             let desktopSize: DesktopSize
             let scaleFactor: Double
             let allowsDynamicResize: Bool
-            switch connection.resolution {
+            let resolution = attemptResolution ?? connection.resolution
+            display.followsWindow = resolution == .fitToWindow
+            switch resolution {
             case .fitToWindow:
-                // A tab always shows before it starts. The fallback covers a content area that has no size yet.
-                desktopSize = points.width > 0 && points.height > 0
+                // Hidden tabs start at 1920x1080 until a visible window can supply its size.
+                desktopSize = view.window != nil && points.width > 0 && points.height > 0
                     ? DesktopSize(width: Int(points.width * backingScale), height: Int(points.height * backingScale))
                     : DesktopSize(width: 1920, height: 1080)
-                scaleFactor = backingScale
+                scaleFactor = view.window == nil ? 1 : backingScale
                 allowsDynamicResize = true
             case .fixed(let width, let height):
                 desktopSize = DesktopSize(width: width, height: height)
                 scaleFactor = 1
-                allowsDynamicResize = false
+                allowsDynamicResize = commandLine
             }
             sessionLog.info("Requested desktop: \(desktopSize.width)x\(desktopSize.height), scale=\(scaleFactor), dynamic=\(allowsDynamicResize)")
             let configuration = SessionConfiguration(
@@ -357,6 +429,8 @@ final class SessionViewController: NSViewController {
                 display.didConnect()
                 desktopView.setSessionConnected(true)
             case .reconnecting(let attempt):
+                // One recovery cycle keeps one ID through its attempts and any certificate prompt.
+                if previous == .connected { attemptID = UUID() }
                 desktopView.setSessionConnected(false)
                 if let window = view.window, window.firstResponder === desktopView {
                     window.makeFirstResponder(nil)
@@ -380,6 +454,7 @@ final class SessionViewController: NSViewController {
         case .remoteClipboardText(let text):
             clipboardSync?.receiveRemoteText(text)
         case .desktopSizeChanged(let size, _):
+            desktopSize = size
             // The window never resizes for a session. The renderer aspect-fits any desktop size.
             sessionLog.info("Desktop size: \(size.width)x\(size.height)")
         case .dynamicResizeChanged(let available):
@@ -388,10 +463,13 @@ final class SessionViewController: NSViewController {
             desktopView.apply(cursor: cursor)
         case .credentialsChallenge(let challenge):
             dismissChallenge()
+            credentialDraft = SessionCredentialDraft(challenge: challenge, password: credentials?.password ?? "")
+            pendingPrompt = .credentials(UUID(), challenge)
             cancelChallenge = { challenge.responder.respond(nil) }
             presentWhenShown { [weak self] window in self?.showCredentials(challenge, on: window) }
         case .trustChallenge(let challenge):
             dismissChallenge()
+            pendingPrompt = .certificate(UUID(), challenge)
             cancelChallenge = { challenge.responder.respond(.reject) }
             presentWhenShown { [weak self] window in self?.showTrust(challenge, on: window) }
         }
@@ -423,25 +501,23 @@ final class SessionViewController: NSViewController {
     }
 
     private func showCredentials(_ challenge: CredentialsChallenge, on window: NSWindow) {
+        let promptID = pendingPrompt?.id
+        guard let credentialDraft else { return }
         let form = SessionCredentialsView(
             challenge: challenge, computerName: connection.name, address: connection.displayAddress,
-            password: credentials?.password ?? "",
-            onCancel: { [weak self] in self?.dismissChallenge() },
+            draft: credentialDraft,
+            onCancel: { [weak self] in
+                guard let self, let promptID, pendingPrompt?.id == promptID else { return }
+                try? respondToPrompt(promptID, credentials: nil)
+            },
             onConnect: { [weak self] answer, remember in
                 guard let self else { challenge.responder.respond(nil); return }
-                if remember {
-                    do {
-                        try credentialStore.setPassword(answer.password, for: connection.id)
-                    } catch {
-                        NSApplication.shared.presentError(error, modalFor: self.sheet ?? window, delegate: nil,
-                                                          didPresent: nil, contextInfo: nil)
-                        return
-                    }
+                guard let promptID, pendingPrompt?.id == promptID else { return }
+                do { try respondToPrompt(promptID, credentials: answer, remember: remember) }
+                catch {
+                    NSApplication.shared.presentError(error, modalFor: self.sheet ?? window, delegate: nil,
+                                                      didPresent: nil, contextInfo: nil)
                 }
-                credentials = answer
-                cancelChallenge = nil
-                dismissChallenge()
-                challenge.responder.respond(answer)
             }
         )
         let controller = NSHostingController(rootView: form)
@@ -477,11 +553,10 @@ final class SessionViewController: NSViewController {
         alert.accessoryView = Self.certificateDetails(details)
         let certificateSheet = alert.window
         sheet = certificateSheet
-        alert.beginSheetModal(for: window) { [weak self, weak certificateSheet] response in
-            challenge.responder.respond(response == connectButton ? .trust : .reject)
-            guard let self, sheet === certificateSheet else { return }
-            cancelChallenge = nil
-            sheet = nil
+        let promptID = pendingPrompt?.id
+        alert.beginSheetModal(for: window) { [weak self] response in
+            guard let self, let promptID, pendingPrompt?.id == promptID else { return }
+            try? respondToPrompt(promptID, credentials: nil, trust: response == connectButton)
         }
     }
 
@@ -518,6 +593,11 @@ final class SessionViewController: NSViewController {
 
     /// Cancels a waiting or shown credentials or certificate request.
     private func dismissChallenge() {
+        if let prompt = pendingPrompt {
+            pendingPrompt = nil
+            credentialDraft = nil
+            onPromptResolved(prompt.id)
+        }
         let cancel = cancelChallenge
         cancelChallenge = nil
         cancel?()
@@ -550,7 +630,7 @@ final class SessionViewController: NSViewController {
         var rootView = SessionStatusView(
             status: status, computerName: connection.name, address: connection.displayAddress,
             onCancel: { [weak self] in self?.session?.disconnect() },
-            onReconnect: { [weak self] in self?.startSession() },
+            onReconnect: { [weak self] in self?.reconnect() },
             onClose: { [weak self] in self?.onClose() }
         )
         // Leave the keyboard with the search field while the user types in it.

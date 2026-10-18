@@ -8,7 +8,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var mainWindowController: MainWindowController?
     private let settings = NSHostingSceneRepresentation { Settings { SettingsView() } }
     private var statusMenu: StatusMenu?
-    private let sessionTabs = SessionTabs()
+    private var sessionTabs: SessionTabs?
     private var commandLineController: CommandLineController?
     private var terminationPending = false
     private var commandLineQuit = false
@@ -39,9 +39,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 return
             }
             #endif
+            let connectionStore = try ConnectionStore()
+            let credentialStore = CredentialStore()
+            let sessionTabs = SessionTabs(connectionStore: connectionStore, credentialStore: credentialStore)
+            self.sessionTabs = sessionTabs
             mainWindowController = MainWindowController(
-                connectionStore: try ConnectionStore(),
-                credentialStore: CredentialStore(),
+                connectionStore: connectionStore,
+                credentialStore: credentialStore,
                 sessionTabs: sessionTabs
             )
             configureMenu()
@@ -59,6 +63,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             )
             if let mainWindowController {
                 let controller = CommandLineController(mainWindow: mainWindowController, sessions: sessionTabs,
+                    connectionStore: connectionStore, credentialStore: credentialStore,
                     show: { [weak self] page in
                         switch page {
                         case "settings": self?.showSettings(nil)
@@ -92,6 +97,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        guard let sessionTabs else { return .terminateNow }
         guard !terminationPending else { return .terminateLater }
         guard commandLineQuit || confirmQuit() else { return .terminateCancel }
         terminationPending = true
@@ -120,6 +126,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     /// Asks before quitting ends live sessions. Returns true to quit.
     private func confirmQuit() -> Bool {
+        guard let sessionTabs else { return true }
         let live = sessionTabs.liveCount
         guard live > 0 else { return true }
         let alert = NSAlert()
