@@ -6,8 +6,11 @@ import os
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var mainWindowController: MainWindowController?
     private var settingsWindowController: SettingsWindowController?
+    private var statusMenu: StatusMenu?
     private let sessionTabs = SessionTabs()
     private var terminationPending = false
+    /// The command line launches Remora this way: no window and no Dock icon, only the menu bar icon.
+    private static let launchedInBackground = CommandLine.arguments.contains("--cli-background")
     #if DEBUG
     private var rendererDemo: RendererDemo?
     private var shortcutCaptureDemo: ShortcutCaptureDemo?
@@ -17,7 +20,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let application = NSApplication.shared
         let delegate = AppDelegate()
         application.delegate = delegate
-        application.setActivationPolicy(.regular)
+        application.setActivationPolicy(launchedInBackground ? .accessory : .regular)
         withExtendedLifetime(delegate) {
             application.run()
         }
@@ -38,7 +41,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 sessionTabs: sessionTabs
             )
             configureMenu()
-            showMainWindow()
+            statusMenu = StatusMenu(
+                sessionTabs: sessionTabs,
+                onOpen: { [weak self] in self?.showMainWindow() },
+                onShowTab: { [weak self] id in
+                    self?.showMainWindow()
+                    self?.mainWindowController?.select(id)
+                },
+                onShowSettings: { [weak self] in self?.showSettings(nil) }
+            )
+            NotificationCenter.default.addObserver(
+                self, selector: #selector(windowWillClose(_:)), name: NSWindow.willCloseNotification, object: nil
+            )
+            if !Self.launchedInBackground { showMainWindow() }
             #if DEBUG
             if UserDefaults.standard.bool(forKey: "RemoraRendererDemo") {
                 rendererDemo = RendererDemo(renderer: try FrameRenderer())
@@ -54,6 +69,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         guard !terminationPending else { return .terminateLater }
+        guard confirmQuit() else { return .terminateCancel }
         terminationPending = true
         sessionTabs.disconnectAll()
         Task { @MainActor in
@@ -76,6 +92,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
         return .terminateLater
+    }
+
+    /// Asks before quitting ends live sessions. Returns true to quit.
+    private func confirmQuit() -> Bool {
+        let live = sessionTabs.liveCount
+        guard live > 0 else { return true }
+        let alert = NSAlert()
+        alert.messageText = "Quit Remora and disconnect \(live) \(live == 1 ? "session" : "sessions")?"
+        if sessionTabs.isRecording { alert.informativeText = "Recordings in progress are saved." }
+        alert.addButton(withTitle: "Quit")
+        alert.addButton(withTitle: "Cancel")
+        // Quit Remora in the menu bar menu can run with no window open.
+        NSApplication.shared.activate()
+        return alert.runModal() == .alertFirstButtonReturn
     }
 
     func applicationWillTerminate(_ notification: Notification) {
@@ -103,6 +133,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         settingsWindowController = controller
         controller.showWindow(sender)
         controller.window?.makeKeyAndOrderFront(sender)
+        updateActivationPolicy()
+        NSApplication.shared.activate()
     }
 
     @objc private func showHelp(_ sender: Any?) {
@@ -135,7 +167,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func showMainWindow() {
         mainWindowController?.showWindow(nil)
         mainWindowController?.window?.makeKeyAndOrderFront(nil)
+        updateActivationPolicy()
         NSApplication.shared.activate()
+    }
+
+    /// The Dock icon shows while the main window or Settings is open, including minimized.
+    private func updateActivationPolicy() {
+        let windowOpen = [mainWindowController?.window, settingsWindowController?.window].contains {
+            guard let window = $0 else { return false }
+            return window.isVisible || window.isMiniaturized
+        }
+        NSApplication.shared.setActivationPolicy(windowOpen ? .regular : .accessory)
+    }
+
+    /// A closing window is still visible here, so the policy updates once it has closed.
+    @objc private func windowWillClose(_ notification: Notification) {
+        Task { @MainActor in updateActivationPolicy() }
     }
 
     private func configureMenu() {

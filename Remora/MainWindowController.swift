@@ -156,7 +156,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
         window?.attachedSheet == nil
     }
 
-    private func select(_ id: UUID?) {
+    func select(_ id: UUID?) {
         guard canChangeTabs else { return }
         sessionTabs.select(id)
     }
@@ -456,29 +456,6 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
 
     func windowDidBecomeKey(_ notification: Notification) {
         connectionsViewController.refreshDates()
-    }
-
-    /// Closing the window disconnects every session, after asking while any is live.
-    func windowShouldClose(_ sender: NSWindow) -> Bool {
-        let live = sessionTabs.liveCount
-        guard live > 0 else {
-            sessionTabs.closeAll()
-            return true
-        }
-        let alert = NSAlert()
-        alert.messageText = live == 1 ? "Disconnect 1 Session?" : "Disconnect \(live) Sessions?"
-        alert.informativeText = "Closing the window ends every session in it."
-        if sessionTabs.isRecording { alert.informativeText += " Recordings in progress are saved." }
-        alert.addButton(withTitle: "Disconnect")
-        alert.addButton(withTitle: "Cancel")
-        alert.beginSheetModal(for: sender) { [weak self, weak sender] response in
-            guard response == .alertFirstButtonReturn else { return }
-            self?.sessionTabs.closeAll()
-            // AppKit disables toolbar items during a sheet and enables them again after this handler
-            // returns. Closing the window first leaves the search item disabled for good.
-            Task { @MainActor in sender?.close() }
-        }
-        return false
     }
 
     /// The toolbar hides in full screen and slides in when the pointer reaches the top of the screen.

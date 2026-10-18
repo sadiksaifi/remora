@@ -120,11 +120,6 @@ final class SessionTabs {
         tabs.remove(at: index)
     }
 
-    func closeAll() {
-        select(nil)
-        for tab in tabs { close(tab.id) }
-    }
-
     /// Ends the connection's session the way Session > Disconnect does. The tab stays open.
     func disconnect(_ id: UUID) {
         sessions[id]?.disconnectSession()
