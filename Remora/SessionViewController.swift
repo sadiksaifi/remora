@@ -24,8 +24,12 @@ final class SessionViewController: NSViewController {
     private(set) var startedBy = "Remora"
     private(set) var attemptResolution: ConnectionResolution?
     private var commandLine = false
-    /// Control ownership can change independently of who opened the tab.
-    var allowsMacClipboardSync = true
+    /// Follows human control ownership, independently of who opened the tab.
+    var allowsMacClipboardSync = true {
+        didSet {
+            if allowsMacClipboardSync { clipboardSync?.focusGained() }
+        }
+    }
     private(set) var remoteClipboard = RemoteClipboard()
 
     private var canSyncMacClipboard: Bool {
@@ -55,7 +59,6 @@ final class SessionViewController: NSViewController {
 
     func configureCommandLine(_ active: Bool, resolution: ConnectionResolution?) {
         commandLine = active
-        allowsMacClipboardSync = !active
         startedBy = active ? "remora CLI" : "Remora"
         attemptResolution = active ? resolution ?? (connection.resolution == .fitToWindow ? .fixed(width: 1920, height: 1080) : connection.resolution) : nil
     }

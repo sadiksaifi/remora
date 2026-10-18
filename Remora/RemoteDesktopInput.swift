@@ -92,8 +92,11 @@ final class RemoteDesktopInput: NSObject {
         guard connected, input != nil, view?.window?.isKeyWindow == true, NSApp.isActive else { return }
         shortcutCapture.start()
         // AppKit can call becomeFirstResponder before assigning window.firstResponder.
-        Task { @MainActor [weak self] in self?.shortcutCapture.start() }
-        view?.onFocus?()
+        Task { @MainActor [weak self] in
+            guard let self, hasFocus else { return }
+            shortcutCapture.start()
+            view?.onFocus?()
+        }
         resetKeyboard()
         input?.synchronize(locks: NSEvent.modifierFlags.contains(.capsLock) ? [.capsLock] : [])
     }
