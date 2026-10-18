@@ -146,6 +146,8 @@ enum Output {
             print("Remora is running. Main window: \(visible ? "open" : "closed"). App: \(hidden ? "hidden" : "shown").")
         } else if case .object(let fields) = value, case .array(let commands) = fields["commands"] {
             for case .string(let command) in commands { print(command) }
+        } else if value == .object([:]) || value == .object(["quitting": .bool(true)]) {
+            print("Done.")
         } else {
             let encoder = JSONEncoder()
             encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]

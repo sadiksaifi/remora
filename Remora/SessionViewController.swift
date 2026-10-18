@@ -429,7 +429,8 @@ final class SessionViewController: NSViewController {
                 display.didConnect()
                 desktopView.setSessionConnected(true)
             case .reconnecting(let attempt):
-                if case .reconnecting = previous {} else { attemptID = UUID() }
+                // One recovery cycle keeps one ID through its attempts and any certificate prompt.
+                if previous == .connected { attemptID = UUID() }
                 desktopView.setSessionConnected(false)
                 if let window = view.window, window.firstResponder === desktopView {
                     window.makeFirstResponder(nil)
