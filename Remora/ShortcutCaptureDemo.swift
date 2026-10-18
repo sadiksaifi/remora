@@ -65,6 +65,7 @@ final class ShortcutCaptureDemo: NSWindowController, NSWindowDelegate {
 private final class LoggingSession: RemoteSession, Sendable {
     let events = AsyncStream<SessionEvent> { $0.finish() }
     var supportsDynamicResize: Bool { false }
+    var maximumResizeArea: UInt64? { nil }
     func requestResize(_ size: DesktopSize, scale: Double) {}
     func setDisplayUpdatesEnabled(_ enabled: Bool) {}
     func connect() {}

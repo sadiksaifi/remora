@@ -63,6 +63,14 @@ public final class RDPSession: RemoteSession, @unchecked Sendable {
         configuration.allowsDynamicResize && state.lock.withLock { state.connected && state.supportsDynamicResize && !state.cancelled }
     }
 
+    public var maximumResizeArea: UInt64? {
+        state.lock.withLock {
+            guard state.connected, !state.cancelled, let handle = state.handle else { return nil }
+            let area = rm_rdp_max_resize_area(handle)
+            return area > 0 ? area : nil
+        }
+    }
+
     public func requestResize(_ size: DesktopSize, scale: Double) {
         guard configuration.allowsDynamicResize,
               let width = UInt32(exactly: size.width), let height = UInt32(exactly: size.height) else { return }

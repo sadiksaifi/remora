@@ -1,6 +1,7 @@
 import AppKit
 import Observation
 import RemoraCore
+import RemoraControl
 
 /// The open session tabs of the main window, at most one per connection, and which page the window shows:
 /// the connections list (home) or one tab. Views observe it; the main window shows the selected page.
@@ -24,7 +25,14 @@ final class SessionTabs {
     @ObservationIgnored var onSelectionChange: ((_ old: UUID?, _ new: UUID?) -> Void)?
     @ObservationIgnored private var sessions: [UUID: SessionViewController] = [:]
     @ObservationIgnored private var closingCaptures: [UUID: SessionCapture] = [:]
-    @ObservationIgnored private let credentialStore = CredentialStore()
+    @ObservationIgnored private let connectionStore: ConnectionStore
+    @ObservationIgnored private(set) var resolvedPrompts: [UUID] = []
+    @ObservationIgnored private let credentialStore: CredentialStore
+
+    init(connectionStore: ConnectionStore, credentialStore: CredentialStore) {
+        self.connectionStore = connectionStore
+        self.credentialStore = credentialStore
+    }
 
     /// The session state of each open tab, keyed by connection ID. A connection without a tab has no entry.
     var states: [UUID: SessionState] {
@@ -43,15 +51,17 @@ final class SessionTabs {
         sessions[id]
     }
 
-    /// Shows the connection's tab, opening one if needed. A tab whose session ended reconnects in place.
+    /// Opens or reuses a tab. Background callers leave selection unchanged. Ended tabs reconnect in place.
     /// Returns true when it started a new session.
     @discardableResult
-    func open(_ connection: Connection) -> Bool {
+    func open(_ connection: Connection, select shouldSelect: Bool = true, commandLine: Bool = false, resolution: ConnectionResolution? = nil) -> Bool {
         let id = connection.id
         if let existing = sessions[id] {
-            select(id)
+            if shouldSelect { select(id) }
             guard !existing.state.isLive else { return false }
-            existing.reconnect()
+            existing.update(connection)
+            existing.configureCommandLine(commandLine, resolution: resolution)
+            existing.start()
             return true
         }
         let session = SessionViewController(
@@ -59,11 +69,31 @@ final class SessionTabs {
             onStateChange: { [weak self] state in self?.update(id) { $0.state = state } },
             onAttentionChange: { [weak self] attention in self?.update(id) { $0.needsAttention = attention } },
             onKeyboardCaptureChange: { [weak self] captured in self?.update(id) { $0.isKeyboardCaptured = captured } },
-            onClose: { [weak self] in self?.close(id) }
+            onClose: { [weak self] in self?.close(id) },
+            onPromptResolved: { [weak self] prompt in
+                guard let self else { return }
+                resolvedPrompts.append(prompt)
+                if resolvedPrompts.count > 64 { resolvedPrompts.removeFirst() }
+            },
+            onRememberCredentials: { [weak self] credentials in
+                guard let self,
+                      let current = connectionStore.connections.first(where: { $0.id == id }) else {
+                    throw ControlFailure(.notFound, "The saved connection was deleted.")
+                }
+                let updated = try ConnectionPatch(username: credentials.username, domain: credentials.domain).applying(to: current)
+                do { try connectionStore.update(updated) }
+                catch { throw ControlFailure(.storeFailed, "Could not save account metadata.") }
+                self.update(updated)
+                do {
+                    if credentials.password.isEmpty { try credentialStore.removePassword(for: id) }
+                    else { try credentialStore.setPassword(credentials.password, for: id) }
+                } catch { throw ControlFailure(.credentialFailed, "Account metadata was saved, but the password operation failed.", details: .object(["recordSaved": .bool(true)])) }
+            }
         )
         sessions[id] = session
         tabs.append(Tab(id: id, title: connection.name, state: session.state))
-        select(id)
+        if shouldSelect { select(id) }
+        session.configureCommandLine(commandLine, resolution: resolution)
         session.start()
         return true
     }

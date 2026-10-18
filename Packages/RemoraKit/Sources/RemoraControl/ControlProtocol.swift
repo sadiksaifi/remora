@@ -34,21 +34,28 @@ public enum ControlValue: Codable, Sendable, Equatable {
 public struct ControlRequest: Codable, Sendable {
     public let command: String
     public let session: String?
+    public let timeout: Double?
     public let arguments: [String: ControlValue]
 
-    public init(command: String, session: String? = nil, arguments: [String: ControlValue] = [:]) {
+    public init(command: String, session: String? = nil, timeout: Double? = nil, arguments: [String: ControlValue] = [:]) {
         self.command = command
         self.session = session
+        self.timeout = timeout
         self.arguments = arguments
     }
 
     public init(from decoder: any Decoder) throws {
         let fields = try [String: ControlValue](from: decoder)
-        guard Set(fields.keys).isSubset(of: ["command", "session", "arguments"]),
+        guard Set(fields.keys).isSubset(of: ["command", "session", "timeout", "arguments"]),
               case .string(let command) = fields["command"], !command.isEmpty else {
             throw ControlFailure(.invalidArgument, "A request needs a command and only known fields.")
         }
         self.command = command
+        switch fields["timeout"] {
+        case nil, .null: timeout = nil
+        case .number(let seconds) where seconds.isFinite && seconds >= 0 && seconds <= 86_400: timeout = seconds
+        default: throw ControlFailure(.invalidArgument, "Invalid command timeout.")
+        }
         switch fields["session"] {
         case nil, .null: session = nil
         case .string(let value): session = value
@@ -71,14 +78,16 @@ public struct ControlFailure: Error, Codable, Sendable, Equatable, LocalizedErro
         case unsupported, sessionRequired = "session-required", sessionEnded = "session-ended"
         case notConnected = "not-connected", promptRequired = "prompt-required", userActive = "user-active"
         case inputBusy = "input-busy", observationRequired = "observation-required"
+        case backendFailed = "backend-failed", connectionDeleted = "connection-deleted", sessionExists = "session-exists"
+        case storeFailed = "store-failed", credentialFailed = "credential-failed", promptResolved = "prompt-resolved"
         case timeout, cancelled
 
         public var exitCode: Int32 {
             switch self {
-            case .internal, .captureFailed, .ioFailed, .outcomeUnknown: 1
+            case .internal, .captureFailed, .ioFailed, .outcomeUnknown, .storeFailed, .credentialFailed, .backendFailed: 1
             case .invalidArgument, .unknownCommand: 2
-            case .appUnavailable, .notFound, .ambiguousTarget, .unsupported, .sessionRequired, .sessionEnded: 3
-            case .notConnected, .promptRequired, .userActive, .inputBusy, .observationRequired: 4
+            case .appUnavailable, .notFound, .ambiguousTarget, .unsupported, .sessionRequired, .sessionEnded, .promptResolved, .connectionDeleted: 3
+            case .notConnected, .promptRequired, .userActive, .inputBusy, .observationRequired, .sessionExists: 4
             case .timeout: 5
             case .cancelled: 130
             }
@@ -88,9 +97,11 @@ public struct ControlFailure: Error, Codable, Sendable, Equatable, LocalizedErro
     public let code: Code
     public let message: String
     public let hint: String
+    public let details: ControlValue?
     public var errorDescription: String? { message }
 
-    public init(_ code: Code, _ message: String, hint: String = "") {
+    public init(_ code: Code, _ message: String, hint: String = "", details: ControlValue? = nil) {
+        self.details = details
         self.code = code
         self.message = message
         self.hint = hint

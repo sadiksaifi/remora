@@ -1,6 +1,7 @@
 import AppKit
 import Observation
 import RemoraCore
+import RemoraControl
 import SwiftUI
 
 /// The list of saved connections and every action on them: connect, disconnect, add, edit, duplicate, delete.
@@ -380,17 +381,22 @@ final class ConnectionsViewController: NSViewController, NSTableViewDataSource, 
     }
 
     /// Saves the connection, then its password. Safe to retry after a partial failure.
-    private func save(_ connection: Connection, password: String) {
+    private func save(_ draft: Connection, password: String, original: Connection, originalPassword: String, isNew: Bool) {
+        var connection = draft
         do {
-            if connectionStore.connections.contains(where: { $0.id == connection.id }) {
+            if let current = connectionStore.connections.first(where: { $0.id == connection.id }) {
+                connection = try ConnectionPatch(from: original, to: draft).applying(to: current)
                 try connectionStore.update(connection)
             } else {
+                guard isNew else { throw ControlFailure(.connectionDeleted, "The saved connection was deleted.") }
                 try connectionStore.add(connection)
             }
-            if password.isEmpty {
-                try credentialStore.removePassword(for: connection.id)
-            } else {
-                try credentialStore.setPassword(password, for: connection.id)
+            if password != originalPassword || isNew {
+                if password.isEmpty {
+                    try credentialStore.removePassword(for: connection.id)
+                } else {
+                    try credentialStore.setPassword(password, for: connection.id)
+                }
             }
         } catch {
             showAlert("Couldn’t Save Connection", error: error, on: editorController?.view.window ?? hostWindow)
@@ -416,12 +422,15 @@ final class ConnectionsViewController: NSViewController, NSTableViewDataSource, 
 
     private func presentEditor(title: String, for connection: Connection, password: String) {
         guard editorController == nil else { return }
+        let isNew = !connectionStore.connections.contains { $0.id == connection.id }
         let editor = ConnectionEditor(
             title: title,
             connection: connection,
             password: password,
             onCancel: { [weak self] in self?.dismissEditor() },
-            onSave: { [weak self] connection, password in self?.save(connection, password: password) }
+            onSave: { [weak self] draft, editedPassword in
+                self?.save(draft, password: editedPassword, original: connection, originalPassword: password, isNew: isNew)
+            }
         )
         let controller = NSHostingController(rootView: editor)
         controller.sizingOptions = .preferredContentSize

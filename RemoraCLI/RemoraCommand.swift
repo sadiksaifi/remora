@@ -56,18 +56,20 @@ struct RemoraCommand: AsyncParsableCommand {
         commandName: "remora",
         abstract: "Control the Remora desktop app.",
         discussion: "Run 'remora help agent' for the agent guide. Durations accept ms, s or m; bare numbers are seconds.",
-        subcommands: [Capabilities.self, AppCommand.self])
+        subcommands: [Capabilities.self, AppCommand.self, ConnectionCommand.self, ConnectCommand.self, SessionCommand.self, PromptCommand.self, WaitCommand.self])
     @OptionGroup var options: CommonOptions
 }
 
 struct CommonOptions: ParsableArguments {
     @Flag(help: "Print one JSON result or error envelope.") var json = false
-    @Option(name: .long, help: "Command deadline, separate from the 10-second startup deadline.") var timeout = "10s"
+    @Option(name: .long, help: "Command deadline, separate from the 10-second startup deadline.") var timeout: String?
 
-    mutating func validate() throws { _ = try CommandTimeout(timeout) }
+    mutating func validate() throws { if let timeout { _ = try CommandTimeout(timeout) } }
 
-    @MainActor func execute(_ request: ControlRequest, launch: Bool = true) async throws {
-        let result = try await ApplicationClient().request(request, launch: launch, timeout: CommandTimeout(timeout).seconds)
+    @MainActor func execute(_ request: ControlRequest, launch: Bool = true, defaultTimeout: String = "10s") async throws {
+        let seconds = try CommandTimeout(timeout ?? defaultTimeout).seconds
+        let bounded = ControlRequest(command: request.command, session: request.session, timeout: seconds, arguments: request.arguments)
+        let result = try await ApplicationClient().request(bounded, launch: launch, timeout: seconds + 1)
         switch result {
         case .success: Output.write(result, json: json)
         case .failure(let failure): throw failure
@@ -81,7 +83,7 @@ struct Capabilities: ParsableCommand {
 
     func run() throws {
         Output.write(.success(.object([
-            "commands": .array(["help", "help agent", "capabilities", "app status", "app show", "app hide", "app close", "app quit"].map(ControlValue.string)),
+            "commands": .array(["help", "help agent", "capabilities", "app status", "app show", "app hide", "app close", "app quit", "connection list", "connection get", "connection create", "connection update", "connection duplicate", "connection delete", "connection password set", "connection password clear", "connect", "session list", "session get", "session show", "session disconnect", "session reconnect", "session close", "session resize", "prompt list", "prompt get", "prompt respond", "wait"].map(ControlValue.string)),
             "protocols": .array([.string("rdp")])
         ])), json: options.json)
     }
@@ -144,6 +146,10 @@ enum Output {
             print("Remora is running. Main window: \(visible ? "open" : "closed"). App: \(hidden ? "hidden" : "shown").")
         } else if case .object(let fields) = value, case .array(let commands) = fields["commands"] {
             for case .string(let command) in commands { print(command) }
-        } else { print("Done.") }
+        } else {
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
+            if let data = try? encoder.encode(value), let text = String(data: data, encoding: .utf8) { print(text) }
+        }
     }
 }

@@ -78,6 +78,7 @@ void rm_rdp_run(RMRDPSession *session);
 void rm_rdp_abort(RMRDPSession *session);
 void rm_rdp_free(RMRDPSession *session);
 /* Thread-safe enqueue only. The caller excludes free until the call returns. */
+uint64_t rm_rdp_max_resize_area(RMRDPSession *session);
 void rm_rdp_request_resize(RMRDPSession *session, uint32_t width, uint32_t height, double scale);
 /* Thread-safe enqueue. Sends Suppress Output (MS-RDPBCGR 2.2.11.3) when the server supports it;
  * enabling again also requests a refresh of the whole desktop. Survives automatic reconnection. */

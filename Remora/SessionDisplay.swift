@@ -13,10 +13,22 @@ final class SessionDisplay {
     private var transitioning = false
     private var visible = false
     private var recording = false
+    private var commandLineDemand = 0
+    var followsWindow = true
+
+    func addCommandLineDemand() {
+        commandLineDemand += 1
+        session?.setDisplayUpdatesEnabled(visible || recording || commandLineDemand > 0)
+    }
+
+    func removeCommandLineDemand() {
+        commandLineDemand = max(0, commandLineDemand - 1)
+        session?.setDisplayUpdatesEnabled(visible || recording || commandLineDemand > 0)
+    }
 
     func setRecording(_ active: Bool) {
         recording = active
-        session?.setDisplayUpdatesEnabled(visible || recording)
+        session?.setDisplayUpdatesEnabled(visible || recording || commandLineDemand > 0)
     }
 
     init(view: NSView) {
@@ -27,7 +39,7 @@ final class SessionDisplay {
         self.session = session
         connected = false
         visible = isVisible
-        session.setDisplayUpdatesEnabled(visible || recording)
+        session.setDisplayUpdatesEnabled(visible || recording || commandLineDemand > 0)
     }
 
     /// Call when the view joins or leaves a window, or the window's occlusion changes.
@@ -35,7 +47,7 @@ final class SessionDisplay {
         let visible = isVisible
         guard visible != self.visible else { return }
         self.visible = visible
-        session?.setDisplayUpdatesEnabled(visible || recording)
+        session?.setDisplayUpdatesEnabled(visible || recording || commandLineDemand > 0)
     }
 
     private var isVisible: Bool {
@@ -62,7 +74,7 @@ final class SessionDisplay {
 
     /// Requests the content area's size in backing pixels. A hidden tab has no window and requests nothing.
     func requestResize() {
-        guard connected, !transitioning, let session, session.supportsDynamicResize,
+        guard followsWindow, connected, !transitioning, let session, session.supportsDynamicResize,
               let view, let window = view.window, !window.inLiveResize else { return }
         let pixels: NSSize
         if window.styleMask.contains(.fullScreen), let screen = window.screen {

@@ -176,6 +176,8 @@ public protocol RemoteSession: AnyObject, Sendable {
     var events: AsyncStream<SessionEvent> { get }
     /// True after the server negotiates dynamic resizing, until that capability is lost.
     var supportsDynamicResize: Bool { get }
+    /// Negotiated total pixel area for one resize, or nil when unavailable.
+    var maximumResizeArea: UInt64? { get }
     /// Requests backing pixels and pixels per point. Ignored until resizing is supported.
     /// Only desktopSizeChanged confirms the resulting size.
     func requestResize(_ size: DesktopSize, scale: Double)

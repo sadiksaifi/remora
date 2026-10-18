@@ -1,5 +1,23 @@
+import Observation
 import RemoraCore
 import SwiftUI
+
+/// The UI and command line answer the same pending credential draft.
+@MainActor @Observable
+final class SessionCredentialDraft {
+    var username: String
+    var domain: String
+    var password: String
+    var remember = true
+
+    init(challenge: CredentialsChallenge, password: String) {
+        username = challenge.username
+        domain = challenge.domain
+        self.password = password
+    }
+
+    var credentials: SessionCredentials { .init(username: username, domain: domain, password: password) }
+}
 
 /// Asks for the account to use when the server needs credentials or rejected the saved ones.
 struct SessionCredentialsView: View {
@@ -8,10 +26,7 @@ struct SessionCredentialsView: View {
     let address: String
     let onCancel: () -> Void
     let onConnect: (SessionCredentials, Bool) -> Void
-    @State private var username: String
-    @State private var password: String
-    @State private var domain: String
-    @State private var remember = true
+    @Bindable var draft: SessionCredentialDraft
     @FocusState private var focusedField: Field?
 
     private enum Field {
@@ -19,16 +34,14 @@ struct SessionCredentialsView: View {
         case password
     }
 
-    init(challenge: CredentialsChallenge, computerName: String, address: String, password: String,
+    init(challenge: CredentialsChallenge, computerName: String, address: String, draft: SessionCredentialDraft,
          onCancel: @escaping () -> Void, onConnect: @escaping (SessionCredentials, Bool) -> Void) {
         self.challenge = challenge
         self.computerName = computerName
         self.address = address
         self.onCancel = onCancel
         self.onConnect = onConnect
-        _username = State(initialValue: challenge.username)
-        _password = State(initialValue: password)
-        _domain = State(initialValue: challenge.domain)
+        self.draft = draft
     }
 
     var body: some View {
@@ -52,19 +65,19 @@ struct SessionCredentialsView: View {
 
             Form {
                 Section {
-                    TextField("Username", text: $username)
+                    TextField("Username", text: $draft.username)
                         .focused($focusedField, equals: .username)
                         .autocorrectionDisabled()
                         .accessibilityIdentifier("credentialsUsername")
-                    KeychainPasswordField(title: "Password", text: $password, prompt: "Required")
+                    KeychainPasswordField(title: "Password", text: $draft.password, prompt: "Required")
                         .focused($focusedField, equals: .password)
                         .accessibilityIdentifier("credentialsPassword")
-                    TextField("Domain", text: $domain, prompt: Text("Optional"))
+                    TextField("Domain", text: $draft.domain, prompt: Text("Optional"))
                         .autocorrectionDisabled()
                         .accessibilityIdentifier("credentialsDomain")
                 }
                 Section {
-                    Toggle("Remember this password in my keychain", isOn: $remember)
+                    Toggle("Remember this password in my keychain", isOn: $draft.remember)
                         .accessibilityIdentifier("credentialsRemember")
                 }
             }
@@ -78,7 +91,7 @@ struct SessionCredentialsView: View {
                     .keyboardShortcut(.cancelAction)
                     .accessibilityIdentifier("credentialsCancel")
                 Button("Connect") {
-                    onConnect(SessionCredentials(username: username, domain: domain, password: password), remember)
+                    onConnect(draft.credentials, draft.remember)
                 }
                 .keyboardShortcut(.defaultAction)
                 .accessibilityIdentifier("credentialsConnect")

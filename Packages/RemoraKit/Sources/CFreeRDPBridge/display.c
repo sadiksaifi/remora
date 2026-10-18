@@ -107,6 +107,14 @@ void rm_display_free(RMDisplay *d) {
 
 HANDLE rm_display_event(RMDisplay *d) { return d->wake; }
 
+uint64_t rm_rdp_max_resize_area(RMRDPSession *session) {
+    RMDisplay *d = rm_rdp_display(session);
+    pthread_mutex_lock(&d->lock);
+    const uint64_t area = d->available ? d->max_area : 0;
+    pthread_mutex_unlock(&d->lock);
+    return area;
+}
+
 void rm_rdp_request_resize(RMRDPSession *session, uint32_t width, uint32_t height, double scale) {
     if (!width || !height || !isfinite(scale) || scale < 1 || scale > 5)
         return;
