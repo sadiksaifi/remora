@@ -45,7 +45,7 @@ struct RMRDPSession {
     rdpClientContext client; /* Must remain first: client-common requires this prefix. */
     RMRDPCallbacks callbacks;
     void *user;
-    atomic_bool aborted;
+    atomic_bool aborted, input_active;
     RMInput *input;
     RMClipboard *clipboard;
     RMDisplay *display;
@@ -405,6 +405,7 @@ RMRDPSession *rm_rdp_create(const RMRDPConfiguration *config, const RMRDPCallbac
     s->callbacks = *callbacks;
     s->user = user;
     atomic_init(&s->aborted, false);
+    atomic_init(&s->input_active, false);
     s->input = rm_input_new(context, callbacks, user, config->iso_keyboard);
     s->clipboard = rm_clipboard_new(callbacks, user);
     s->display = rm_display_new(context, callbacks, user);
@@ -518,6 +519,7 @@ void rm_rdp_run(RMRDPSession *s) {
     }
     bool loop_failed = false;
     if (connected) {
+        atomic_store(&s->input_active, true);
         if (s->callbacks.connected)
             s->callbacks.connected(s->user);
         while (!atomic_load(&s->aborted)) {
@@ -527,14 +529,20 @@ void rm_rdp_run(RMRDPSession *s) {
             handles[count] = rm_input_event(s->input);
             handles[count + 1] = rm_clipboard_event(s->clipboard);
             handles[count + 2] = rm_display_event(s->display);
+            const DWORD wait = count ? WaitForMultipleObjects(count + 3, handles, FALSE, resize_timeout) : WAIT_FAILED;
+            /* Stop before draining more input when disconnect wakes the wait. */
+            if (atomic_load(&s->aborted))
+                break;
             if (freerdp_shall_disconnect_context(context) || !count ||
-                WaitForMultipleObjects(count + 3, handles, FALSE, resize_timeout) == WAIT_FAILED ||
+                wait == WAIT_FAILED ||
                 !freerdp_check_event_handles(context) || !rm_input_drain(s->input) ||
                 !rm_clipboard_drain(s->clipboard)) {
+                atomic_store(&s->input_active, false);
                 s->reconnecting = true;
                 const BOOL recovered = rm_reconnect(instance, s->input, &s->callbacks, s->user, &s->aborted);
                 s->reconnecting = false;
                 if (recovered) {
+                    atomic_store(&s->input_active, true);
                     rm_rdp_release_all(s);
                     rm_display_reconnected(s->display);
                     if (s->callbacks.connected)
@@ -573,15 +581,26 @@ void rm_rdp_run(RMRDPSession *s) {
         message = freerdp_get_error_info_string(info);
     } else if (error != FREERDP_ERROR_SUCCESS || !connected || loop_failed)
         reason = RMRDP_DISCONNECT_PROTOCOL_ERROR;
-    if (connected)
+    if (connected) {
+        /* Queued cleanup cannot run after abort. Release on the owner thread
+         * before closing the transport, without draining pending input. */
+        (void)rm_input_release_all(s->input);
+        atomic_store(&s->input_active, false);
         (void)freerdp_disconnect(instance);
+    }
     if (s->callbacks.disconnected)
         s->callbacks.disconnected(s->user, reason, message);
 }
 
 void rm_rdp_abort(RMRDPSession *s) {
     atomic_store(&s->aborted, true);
-    (void)freerdp_abort_connect_context(context_of(s));
+    rm_input_discard_pending(s->input);
+    /* FreeRDP refuses input after its abort event is set. A live session must
+     * send releases first; connecting/reconnecting still needs immediate abort. */
+    if (atomic_load(&s->input_active))
+        SetEvent(rm_input_event(s->input));
+    else
+        (void)freerdp_abort_connect_context(context_of(s));
 }
 
 void rm_rdp_free(RMRDPSession *s) {

@@ -231,6 +231,11 @@ static BOOL release_source(RMInput *q, unsigned source) {
     return source_pointer(q, source, q->x, q->y, 0) && ok;
 }
 
+BOOL rm_input_release_all(RMInput *q) {
+    const BOOL ok = release_source(q, 0);
+    return release_source(q, 1) && ok;
+}
+
 uint8_t rm_rdp_input_capabilities(RMRDPSession *s) {
     RMInput *q = rm_rdp_input(s);
     pthread_mutex_lock(&q->lock);
@@ -339,8 +344,7 @@ BOOL rm_input_drain(RMInput *q) {
                     break;
                 }
                 case COMMAND_RELEASE:
-                    ok = release_source(q, 0);
-                    if (command->down) ok = release_source(q, 1) && ok;
+                    ok = command->down ? rm_input_release_all(q) : release_source(q, 0);
                     break;
                 case COMMAND_AGENT: ok = send_agent(q, command->agent, command->request); break;
             }
