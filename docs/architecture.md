@@ -78,7 +78,11 @@ Mac clipboard synchronization follows human ownership, independently of who open
 
 `SessionDisplay` enables desktop updates while the desktop is visible, recording runs, or CLI frame demand is nonzero. Active and paused control retain background frame demand. Stop drops that demand. Connect, reconnect, resize, screenshot, frame waits and recording start hold temporary demand while waiting for frames. When no consumer needs frames, Remora requests RDP Suppress Output. A server without suppression support keeps sending updates. Re-enabling updates requests a full refresh. These demands do not start the hidden view's display link. An idle app with no sessions has no polling timer or drawing work.
 
-The capsule, tab marker and ghost pointer from #34 will be documented here after that UI merges and the end-to-end run verifies it.
+A 38-point glass capsule at the top center of the desktop shows "<agent> is in control" with Take Over, or "You're in control. <agent> is paused." with Resume. Stop Agent Control shows "<agent> can no longer control this session." without a button for four seconds, then fades the capsule. The tab replaces its status dot with `pointer.arrow.motionlines`, blue while active and gray while paused or stopped. The marker has no action. A recording marker follows it when both apply.
+
+The ghost pointer is a blue arrow with a white outline at the agent's last remote point. A blue ring flashes for half a second on each click. The Command Line settings pane can hide the pointer. The pointer and capsule are views above the remote frame, so screenshots and recordings exclude them.
+
+The tab actions menu, tab context menu and Session menu offer Take Over or Resume, Stop Agent Control and Stop All Agent Control. Tab menus hide actions that do not apply; the Session menu disables them. The menu bar status item lists each session with its state and "Started by <name>", plus a submenu with Show, applicable control actions and Disconnect for a live session. Its app actions are Open Remora, Stop All Agent Control, Settings… and Quit Remora. Stop All Agent Control is disabled when no agent can be stopped. The agent name is a display-only label from the CLI's nearest non-shell ancestor process, falling back to "remora CLI". The session's starter is recorded separately from the program that last attached control.
 
 ## CLI lifecycle
 
