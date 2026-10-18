@@ -253,7 +253,7 @@ private struct AgentSkillSection: View {
                     switch states[folder] {
                     case .notInstalled: Button("Install") { perform(link.install) }
                     case .installed, .broken: Button("Remove") { perform(link.uninstall) }
-                    case .conflict: Button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting([link.link]) }
+                    case .conflict: Button("Install") {}.disabled(true)
                     case nil: EmptyView()
                     }
                 } label: {
