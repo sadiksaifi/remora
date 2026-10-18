@@ -15,6 +15,15 @@ Remora is a remote desktop client for the Mac.
 - An Apple silicon Mac with macOS 26 or later.
 - Xcode, CMake and [XcodeGen](https://github.com/yonaskolb/XcodeGen) to build it.
 
+## Tested remote desktops
+
+Remora has been tested with RDP connections to:
+
+- Windows 11.
+- Debian 13 with GNOME 48 on Wayland.
+
+KDE Plasma has not been tested, so compatibility is unverified.
+
 ## Build
 
 ```sh
