@@ -21,11 +21,13 @@ final class SessionViewController: NSViewController {
     private let onPromptResolved: (UUID) -> Void
     private let onRememberCredentials: (SessionCredentials) throws -> Void
     var onControlEvent: ((String, ControlValue?) -> Void)?
+    var inputGeometryRevision = 0
     private var frameBaseline = 0
     private var retiredFrameRevision = 0
     var frameRevision: Int { renderer.map { max(0, $0.desktop.revision - frameBaseline) } ?? retiredFrameRevision }
     private(set) var attemptID = UUID() {
         didSet {
+            inputGeometryRevision += 1
             frameBaseline = renderer?.desktop.revision ?? 0
             refreshAfterFrame = 0
             retiredFrameRevision = 0
@@ -115,6 +117,18 @@ final class SessionViewController: NSViewController {
         }
     }
 
+
+    var inputBackend: RDPSession? { session as? RDPSession }
+    var activeAgentInput: AgentInputRequest?
+    var agentInputCancellation: ControlFailure?
+
+    /// Take Over and Stop can cancel even events detached by the C drain loop.
+    /// The executor keeps admission until the source's releases are submitted.
+    func cancelAgentInput(_ failure: ControlFailure) {
+        guard let activeAgentInput else { return }
+        agentInputCancellation = failure
+        activeAgentInput.cancel()
+    }
 
     private var session: (any RemoteSession)?
     private var clipboardSync: ClipboardSync?
@@ -503,6 +517,7 @@ final class SessionViewController: NSViewController {
                 clipboardSync?.receiveRemoteText(text)
             }
         case .desktopSizeChanged(let size, _):
+            if desktopSize != size { inputGeometryRevision += 1 }
             desktopSize = size
             // The window never resizes for a session. The renderer aspect-fits any desktop size.
             sessionLog.info("Desktop size: \(size.width)x\(size.height)")

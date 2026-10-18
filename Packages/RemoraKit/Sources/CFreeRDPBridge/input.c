@@ -9,10 +9,12 @@
 #include <stdlib.h>
 
 /* All FreeRDP input calls and pressed state belong to the session thread.
- * The mutex covers only queue links and the manual-reset wake event. */
-typedef enum { COMMAND_KEY, COMMAND_POINTER, COMMAND_WHEEL, COMMAND_SYNCHRONIZE, COMMAND_RELEASE } CommandType;
+ * The mutex covers queue links, request cancellation/receipts and capabilities. */
+typedef enum { COMMAND_KEY, COMMAND_POINTER, COMMAND_WHEEL, COMMAND_SYNCHRONIZE, COMMAND_RELEASE, COMMAND_AGENT } CommandType;
 typedef struct Command {
     CommandType type;
+    uint64_t request, sequence;
+    RMRDPAgentEvent agent;
     uint16_t key, x, y;
     uint8_t buttons, locks;
     bool down, movement;
@@ -27,7 +29,10 @@ struct RMInput {
     pthread_mutex_t lock;
     HANDLE wake;
     Command *head, *tail;
-    bool keys[256];
+    bool keys[2][512];
+    uint8_t source_buttons[2], capabilities;
+    uint64_t request, queued, submitted;
+    bool cancelled, failed;
     bool iso_keyboard;
     uint8_t buttons, queued_buttons;
     uint16_t x, y;
@@ -106,9 +111,17 @@ void rm_input_free(RMInput *q) {
 
 HANDLE rm_input_event(RMInput *q) { return q->wake; }
 
-static void enqueue(RMRDPSession *session, Command command) {
+static bool enqueue(RMRDPSession *session, Command command) {
     RMInput *q = rm_rdp_input(session);
     pthread_mutex_lock(&q->lock);
+    if (command.type == COMMAND_AGENT) {
+        if (command.request != q->request || (q->cancelled && command.agent.kind != RMRDP_AGENT_RELEASE)) {
+            pthread_mutex_unlock(&q->lock);
+            return false;
+        }
+        command.sequence = ++q->queued;
+    }
+    bool allocated = true;
     if (command.type == COMMAND_POINTER) {
         command.movement = command.buttons == q->queued_buttons;
         q->queued_buttons = command.buttons;
@@ -128,10 +141,14 @@ static void enqueue(RMRDPSession *session, Command command) {
             if (q->tail) q->tail->next = copy;
             else q->head = copy;
             q->tail = copy;
+        } else {
+            allocated = false;
+            if (command.request) q->failed = true;
         }
     }
     SetEvent(q->wake);
     pthread_mutex_unlock(&q->lock);
+    return allocated;
 }
 
 void rm_rdp_key(RMRDPSession *s, uint16_t key, bool down) {
@@ -146,15 +163,21 @@ void rm_rdp_wheel(RMRDPSession *s, int32_t vertical, int32_t horizontal) {
 void rm_rdp_synchronize(RMRDPSession *s, uint8_t locks) {
     enqueue(s, (Command){ .type = COMMAND_SYNCHRONIZE, .locks = locks });
 }
-void rm_rdp_release_all(RMRDPSession *s) { enqueue(s, (Command){ .type = COMMAND_RELEASE }); }
+void rm_rdp_release_all(RMRDPSession *s) { enqueue(s, (Command){ .type = COMMAND_RELEASE, .down = true }); }
+void rm_rdp_release_human(RMRDPSession *s) { enqueue(s, (Command){ .type = COMMAND_RELEASE }); }
+
+static BOOL send_scan(RMInput *q, unsigned source, UINT32 scan, bool down) {
+    if (!scan || scan >= 512) return TRUE;
+    const bool previous = q->keys[0][scan] || q->keys[1][scan];
+    const bool repeat = down && q->keys[source][scan];
+    q->keys[source][scan] = down;
+    const bool current = q->keys[0][scan] || q->keys[1][scan];
+    if (previous == current && !repeat) return TRUE;
+    return freerdp_input_send_keyboard_event_ex(q->context->input, current, repeat, scan);
+}
 
 static BOOL send_key(RMInput *q, uint16_t key, bool down) {
-    const UINT32 scan = rm_rdp_scancode(key, q->iso_keyboard);
-    if (!scan)
-        return TRUE;
-    const bool repeat = down && q->keys[key];
-    q->keys[key] = down;
-    return freerdp_input_send_keyboard_event_ex(q->context->input, down, repeat, scan);
+    return send_scan(q, 0, rm_rdp_scancode(key, q->iso_keyboard), down);
 }
 
 static BOOL send_pointer(RMInput *q, uint16_t x, uint16_t y, uint8_t buttons) {
@@ -178,10 +201,16 @@ static BOOL send_pointer(RMInput *q, uint16_t x, uint16_t y, uint8_t buttons) {
     return freerdp_input_send_mouse_event(q->context->input, PTR_FLAGS_MOVE, x, y);
 }
 
-static BOOL send_wheel(RMInput *q, UINT16 flags, int64_t value) {
+static BOOL send_wheel(RMInput *q, UINT16 flags, int64_t value, uint64_t request) {
     /* SDL3 convention: positive vertical is up, positive horizontal is right.
      * Each negative chunk is encoded as a signed nine-bit two's complement. */
     while (value != 0) {
+        if (request) {
+            pthread_mutex_lock(&q->lock);
+            const bool cancelled = q->request != request || q->cancelled;
+            pthread_mutex_unlock(&q->lock);
+            if (cancelled) return TRUE;
+        }
         const int32_t chunk = value > 255 ? 255 : value < -255 ? -255 : (int32_t)value;
         if (!freerdp_input_send_mouse_event(q->context->input, flags | (chunk & 0x1FF), 0, 0))
             return FALSE;
@@ -190,11 +219,87 @@ static BOOL send_wheel(RMInput *q, UINT16 flags, int64_t value) {
     return TRUE;
 }
 
+static BOOL source_pointer(RMInput *q, unsigned source, uint16_t x, uint16_t y, uint8_t buttons) {
+    q->source_buttons[source] = buttons;
+    return send_pointer(q, x, y, q->source_buttons[0] | q->source_buttons[1]);
+}
+
+static BOOL release_source(RMInput *q, unsigned source) {
+    BOOL ok = TRUE;
+    for (unsigned scan = 1; scan < 512; scan++)
+        if (q->keys[source][scan]) ok = send_scan(q, source, scan, false) && ok;
+    return source_pointer(q, source, q->x, q->y, 0) && ok;
+}
+
+uint8_t rm_rdp_input_capabilities(RMRDPSession *s) {
+    RMInput *q = rm_rdp_input(s);
+    pthread_mutex_lock(&q->lock);
+    const uint8_t result = q->capabilities;
+    pthread_mutex_unlock(&q->lock);
+    return result;
+}
+
+uint64_t rm_rdp_agent_begin(RMRDPSession *s) {
+    RMInput *q = rm_rdp_input(s);
+    pthread_mutex_lock(&q->lock);
+    const uint64_t request = ++q->request;
+    q->queued = q->submitted = 0;
+    q->cancelled = q->failed = false;
+    pthread_mutex_unlock(&q->lock);
+    return request;
+}
+
+uint64_t rm_rdp_agent_send(RMRDPSession *s, uint64_t request, RMRDPAgentEvent event) {
+    if (!enqueue(s, (Command){ .type = COMMAND_AGENT, .request = request, .agent = event })) return 0;
+    RMInput *q = rm_rdp_input(s);
+    pthread_mutex_lock(&q->lock);
+    const uint64_t sequence = q->queued;
+    pthread_mutex_unlock(&q->lock);
+    return sequence;
+}
+
+void rm_rdp_agent_cancel(RMRDPSession *s, uint64_t request) {
+    RMInput *q = rm_rdp_input(s);
+    pthread_mutex_lock(&q->lock);
+    if (request == q->request) q->cancelled = true;
+    pthread_mutex_unlock(&q->lock);
+    (void)rm_rdp_agent_send(s, request, (RMRDPAgentEvent){ .kind = RMRDP_AGENT_RELEASE });
+}
+
+int rm_rdp_agent_status(RMRDPSession *s, uint64_t request, uint64_t sequence, bool cleanup) {
+    RMInput *q = rm_rdp_input(s);
+    pthread_mutex_lock(&q->lock);
+    const int result = request != q->request ? -1 : q->failed ? -2 :
+                       (!cleanup && q->cancelled) ? -1 : q->submitted >= sequence ? 1 : 0;
+    pthread_mutex_unlock(&q->lock);
+    return result;
+}
+
+static BOOL send_agent(RMInput *q, RMRDPAgentEvent event, uint64_t request) {
+    switch (event.kind) {
+        case RMRDP_AGENT_SCAN: return send_scan(q, 1, event.scancode, event.down);
+        case RMRDP_AGENT_POINTER: return source_pointer(q, 1, event.x, event.y, event.buttons);
+        case RMRDP_AGENT_WHEEL:
+            return send_wheel(q, PTR_FLAGS_WHEEL, event.vertical, request) && send_wheel(q, PTR_FLAGS_HWHEEL, event.horizontal, request);
+        case RMRDP_AGENT_UNICODE:
+            /* One scalar is indivisible for cancellation, including both surrogate units. */
+            for (unsigned i = 0; i < event.units && i < 2; i++) {
+                if (!freerdp_input_send_unicode_keyboard_event(q->context->input, 0, event.utf16[i]) ||
+                    !freerdp_input_send_unicode_keyboard_event(q->context->input, KBD_FLAGS_RELEASE, event.utf16[i])) return FALSE;
+            }
+            return TRUE;
+        case RMRDP_AGENT_PAUSE: return freerdp_input_send_keyboard_pause_event(q->context->input);
+        case RMRDP_AGENT_RELEASE: return release_source(q, 1);
+    }
+    return FALSE;
+}
+
 void rm_input_discard_pending(RMInput *q) {
     pthread_mutex_lock(&q->lock);
     Command *command = q->head;
     q->head = q->tail = NULL;
     q->queued_buttons = 0;
+    q->cancelled = true;
     ResetEvent(q->wake);
     pthread_mutex_unlock(&q->lock);
     while (command) {
@@ -214,13 +319,17 @@ BOOL rm_input_drain(RMInput *q) {
     BOOL ok = TRUE;
     while (command) {
         Command *next = command->next;
-        if (ok) {
+        pthread_mutex_lock(&q->lock);
+        const bool skip = command->request && (command->request != q->request ||
+            (q->cancelled && command->agent.kind != RMRDP_AGENT_RELEASE));
+        pthread_mutex_unlock(&q->lock);
+        if (ok && !skip) {
             switch (command->type) {
                 case COMMAND_KEY: ok = send_key(q, command->key, command->down); break;
-                case COMMAND_POINTER: ok = send_pointer(q, command->x, command->y, command->buttons); break;
+                case COMMAND_POINTER: ok = source_pointer(q, 0, command->x, command->y, command->buttons); break;
                 case COMMAND_WHEEL:
-                    ok = send_wheel(q, PTR_FLAGS_WHEEL, command->vertical) &&
-                         send_wheel(q, PTR_FLAGS_HWHEEL, command->horizontal);
+                    ok = send_wheel(q, PTR_FLAGS_WHEEL, command->vertical, 0) &&
+                         send_wheel(q, PTR_FLAGS_HWHEEL, command->horizontal, 0);
                     break;
                 case COMMAND_SYNCHRONIZE: {
                     const UINT32 locks = ((command->locks & 1) ? KBD_SYNC_CAPS_LOCK : 0) |
@@ -230,11 +339,19 @@ BOOL rm_input_drain(RMInput *q) {
                     break;
                 }
                 case COMMAND_RELEASE:
-                    for (unsigned key = 0; key < 256 && ok; key++)
-                        if (q->keys[key]) ok = send_key(q, key, false);
-                    if (ok && q->buttons) ok = send_pointer(q, q->x, q->y, 0);
+                    ok = release_source(q, 0);
+                    if (command->down) ok = release_source(q, 1) && ok;
                     break;
+                case COMMAND_AGENT: ok = send_agent(q, command->agent, command->request); break;
             }
+        }
+        if (command->request) {
+            pthread_mutex_lock(&q->lock);
+            if (command->request == q->request) {
+                if (!ok) q->failed = true;
+                if (!skip && ok) q->submitted = command->sequence;
+            }
+            pthread_mutex_unlock(&q->lock);
         }
         free(command);
         command = next;
@@ -278,6 +395,11 @@ static BOOL pointer_default(rdpContext *c) { return emit_cursor(c, RMRDP_CURSOR_
 static BOOL pointer_position(rdpContext *c, UINT32 x, UINT32 y) { (void)c; (void)x; (void)y; return TRUE; }
 
 void rm_input_register_pointer(RMInput *q) {
+    pthread_mutex_lock(&q->lock);
+    q->capabilities = (freerdp_settings_get_bool(q->context->settings, FreeRDP_UnicodeInput) ? 1 : 0) |
+        (freerdp_settings_get_bool(q->context->settings, FreeRDP_HasExtendedMouseEvent) ? 2 : 0) |
+        (freerdp_settings_get_bool(q->context->settings, FreeRDP_HasHorizontalWheel) ? 4 : 0);
+    pthread_mutex_unlock(&q->lock);
     rdpPointer prototype = { 0 };
     prototype.size = sizeof(RemotePointer);
     prototype.New = pointer_new;

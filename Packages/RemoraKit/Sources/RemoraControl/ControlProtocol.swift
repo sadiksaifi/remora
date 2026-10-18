@@ -81,14 +81,14 @@ public struct ControlFailure: Error, Codable, Sendable, Equatable, LocalizedErro
         case backendFailed = "backend-failed", connectionDeleted = "connection-deleted", sessionExists = "session-exists"
         case storeFailed = "store-failed", credentialFailed = "credential-failed", promptResolved = "prompt-resolved"
         case destinationExists = "destination-exists", frameTimeout = "frame-timeout"
-        case streamOverflow = "stream-overflow"
+        case streamOverflow = "stream-overflow", imageExpired = "image-expired"
         case timeout, cancelled
 
         public var exitCode: Int32 {
             switch self {
             case .internal, .captureFailed, .ioFailed, .outcomeUnknown, .storeFailed, .credentialFailed, .backendFailed: 1
             case .invalidArgument, .unknownCommand: 2
-            case .appUnavailable, .notFound, .ambiguousTarget, .unsupported, .sessionRequired, .sessionEnded, .promptResolved, .connectionDeleted, .streamOverflow: 3
+            case .appUnavailable, .notFound, .ambiguousTarget, .unsupported, .sessionRequired, .sessionEnded, .promptResolved, .connectionDeleted, .streamOverflow, .imageExpired: 3
             case .notConnected, .promptRequired, .userActive, .inputBusy, .observationRequired, .sessionExists, .noFrame, .recordingBusy, .destinationExists: 4
             case .timeout, .frameTimeout: 5
             case .cancelled: 130

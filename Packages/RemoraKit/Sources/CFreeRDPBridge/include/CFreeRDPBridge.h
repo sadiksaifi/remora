@@ -97,7 +97,29 @@ void rm_rdp_key(RMRDPSession *session, uint16_t key, bool down);
 void rm_rdp_pointer(RMRDPSession *session, uint16_t x, uint16_t y, uint8_t buttons);
 void rm_rdp_wheel(RMRDPSession *session, int32_t vertical, int32_t horizontal);
 void rm_rdp_synchronize(RMRDPSession *session, uint8_t locks);
+/* Transport recovery releases both sources. Focus changes release only human input. */
 void rm_rdp_release_all(RMRDPSession *session);
+void rm_rdp_release_human(RMRDPSession *session);
+/* Agent input has one request owner per session. IDs and acknowledgments are local
+ * protocol submission receipts, not acknowledgments from the remote application.
+ * Cancellation is checked for every event, including an already detached drain list. */
+typedef enum { RMRDP_AGENT_SCAN, RMRDP_AGENT_POINTER, RMRDP_AGENT_WHEEL,
+               RMRDP_AGENT_UNICODE, RMRDP_AGENT_PAUSE, RMRDP_AGENT_RELEASE } RMRDPAgentEventKind;
+typedef struct {
+    RMRDPAgentEventKind kind;
+    uint32_t scancode;
+    bool down;
+    uint16_t x, y, utf16[2];
+    uint8_t buttons, units;
+    int32_t vertical, horizontal;
+} RMRDPAgentEvent;
+/* Capability bits: Unicode 1, extended buttons 2, horizontal wheel 4. */
+uint8_t rm_rdp_input_capabilities(RMRDPSession *session);
+uint64_t rm_rdp_agent_begin(RMRDPSession *session);
+uint64_t rm_rdp_agent_send(RMRDPSession *session, uint64_t request, RMRDPAgentEvent event);
+void rm_rdp_agent_cancel(RMRDPSession *session, uint64_t request);
+/* 0 pending, 1 submitted, -1 cancelled/replaced, -2 protocol submission failed. */
+int rm_rdp_agent_status(RMRDPSession *session, uint64_t request, uint64_t sequence, bool cleanup);
 /* Copies NUL-terminated UTF-8 text and wakes the session thread. */
 void rm_rdp_set_local_clipboard(RMRDPSession *session, const char *text);
 /* Zero means unsupported. Uses WinPR's Apple table plus documented corrections. */

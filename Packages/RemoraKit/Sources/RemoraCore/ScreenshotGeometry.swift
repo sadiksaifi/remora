@@ -48,8 +48,9 @@ public struct ScreenshotReceipt: Sendable {
     public let session: UUID
     public let geometry: ScreenshotGeometry
     public let frame: Int
+    public let geometryRevision: Int
 
-    public init(id: UUID = UUID(), session: UUID, geometry: ScreenshotGeometry, frame: Int) {
-        self.id = id; self.session = session; self.geometry = geometry; self.frame = frame
+    public init(id: UUID = UUID(), session: UUID, geometry: ScreenshotGeometry, frame: Int, geometryRevision: Int = 0) {
+        self.id = id; self.session = session; self.geometry = geometry; self.frame = frame; self.geometryRevision = geometryRevision
     }
 }
