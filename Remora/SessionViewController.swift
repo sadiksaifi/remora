@@ -55,6 +55,7 @@ final class SessionViewController: NSViewController {
     func offerClipboardText(_ text: String) throws {
         guard state == .connected, let session else { throw ControlFailure(.notConnected, "The session is not connected.") }
         guard !text.utf8.contains(0) else { throw ControlFailure(.invalidArgument, "Clipboard text cannot contain NUL bytes.") }
+        try attachAgentControl()
         session.setLocalClipboard(text: text)
     }
     private var renderer: FrameRenderer?

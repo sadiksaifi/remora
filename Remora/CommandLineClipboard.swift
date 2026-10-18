@@ -18,6 +18,7 @@ extension CommandLineController {
                 throw ControlFailure(.promptRequired, "The session requires prompt \(prompt.id).", hint: "Inspect prompt list.")
             }
             guard session.isConnected else { throw ControlFailure(.notConnected, "The session is not connected.") }
+            if text != nil { try session.checkAgentInput() }
             if let text, session.remoteClipboard.status != .notReady {
                 try session.offerClipboardText(text)
                 return .object(["session": .string(id.uuidString), "offered": .bool(true)])
