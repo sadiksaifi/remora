@@ -207,42 +207,37 @@ private struct CommandLinePane: View {
     }
 }
 
-/// Links the bundled agent skill into each detected agent's skills folder.
+/// Links the bundled agent skill into the shared Agent Skills folder and Claude Code's skills folder.
 private struct AgentSkillSection: View {
-    @State private var states: [AgentSkill.Agent: CommandLineTool.State] = [:]
+    @State private var states: [AgentSkill.Folder: CommandLineTool.State] = [:]
     private let skill = AgentSkill(app: Bundle.main.bundleURL)
-
-    private var agents: [AgentSkill.Agent] { AgentSkill.Agent.allCases.filter { states[$0] != nil } }
-    private var installable: [AgentSkill.Agent] { agents.filter { states[$0] != .installed && states[$0] != .conflict } }
 
     var body: some View {
         Section {
-            LabeledContent {
-                Button("Install for All") { perform { for agent in installable { try skill.link(for: agent).install() } } }
-                    .disabled(installable.isEmpty)
-                    .accessibilityIdentifier("installAgentSkillForAll")
-            } label: {
+            LabeledContent {} label: {
                 Text("Agent skill")
-                Text(agents.isEmpty ? "No supported AI agents were found on this Mac." : "Teaches AI agents to use the remora command.")
+                Text("Teaches AI agents to use the remora command.")
             }
-            ForEach(agents, id: \.self) { agent in
-                let link = skill.link(for: agent)
+            ForEach(AgentSkill.Folder.allCases, id: \.self) { folder in
+                let link = skill.link(in: folder)
                 LabeledContent {
-                    switch states[agent] {
+                    switch states[folder] {
                     case .notInstalled: Button("Install") { perform(link.install) }
                     case .installed, .broken: Button("Remove") { perform(link.uninstall) }
                     case .conflict: Button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting([link.link]) }
                     case nil: EmptyView()
                     }
                 } label: {
-                    Text(agent.name)
-                    switch states[agent] {
-                    case .installed, .broken: StatusLabel(text: "Installed at \(link.displayPath)", ok: true)
+                    Text(folder.name)
+                    if folder == .agents { Text("The shared folder that Codex, OpenCode, pi, Muse, Antigravity, Cursor, FX and other agents read.") }
+                    let path = (folder.url.path as NSString).abbreviatingWithTildeInPath
+                    switch states[folder] {
+                    case .installed, .broken: StatusLabel(text: "Installed in \(path)", ok: true)
                     case .conflict: StatusLabel(text: "Another skill is in use at \(link.displayPath).", ok: false)
-                    case .notInstalled, nil: Text("Not installed")
+                    case .notInstalled, nil: Text("Not installed in \(path)")
                     }
                 }
-                .accessibilityIdentifier("agentSkill-\(agent.rawValue)")
+                .accessibilityIdentifier("agentSkill-\(folder.rawValue)")
             }
             VStack(alignment: .leading, spacing: 7) {
                 Text("For other agents, link this folder into their skills folder.")
@@ -250,12 +245,12 @@ private struct AgentSkillSection: View {
             }
         }
         .onAppear(perform: refresh)
-        // The user may install an agent or change its skills folder while Remora is in the background.
+        // The user may change a skills folder while Remora is in the background.
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in refresh() }
     }
 
     private func refresh() {
-        states = Dictionary(uniqueKeysWithValues: AgentSkill.Agent.allCases.filter(\.isDetected).map { ($0, skill.link(for: $0).state) })
+        states = Dictionary(uniqueKeysWithValues: AgentSkill.Folder.allCases.map { ($0, skill.link(in: $0).state) })
     }
 
     private func perform(_ action: () throws -> Void) {
