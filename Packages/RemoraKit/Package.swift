@@ -6,6 +6,7 @@ let package = Package(
     platforms: [.macOS("26.0")],
     products: [
         .library(name: "RemoraCore", targets: ["RemoraCore"]),
+        .library(name: "RemoraControl", targets: ["RemoraControl"]),
         .library(name: "RDPSession", targets: ["RDPSession"])
     ],
     dependencies: [
@@ -27,6 +28,8 @@ let package = Package(
                 .linkedFramework("CoreVideo")
             ]
         ),
+        .target(name: "RemoraControl"),
+        .testTarget(name: "RemoraControlTests", dependencies: ["RemoraControl"]),
         .target(
             name: "RDPSession",
             dependencies: ["RemoraCore", "CFreeRDPBridge"]

@@ -1,0 +1,149 @@
+import AppKit
+import ArgumentParser
+import RemoraControl
+
+@main
+enum RemoraEntry {
+    static func main() async {
+        let arguments = Array(CommandLine.arguments.dropFirst())
+        if arguments == ["help", "agent"] {
+            print("""
+                Use remora capabilities to discover the commands in this build.
+                Use remora app status --json to inspect Remora without launching it.
+                Commands that need Remora launch it in the background. app show opens its window.
+                Use --json for structured results and --timeout 10s to bound a command.
+                After a timeout or lost reply, inspect current state before repeating a mutation.
+                Session observation, input and takeover guidance will ship with those commands.
+                """)
+            return
+        }
+        let task = Task { () -> Int32 in
+            do {
+                var command = try RemoraCommand.parseAsRoot(arguments)
+                if var command = command as? any AsyncParsableCommand { try await command.run() }
+                else { try command.run() }
+                return 0
+            } catch let failure as ControlFailure {
+                return report(failure, json: arguments.contains("--json"))
+            } catch {
+                let code = RemoraCommand.exitCode(for: error)
+                if code == .success { RemoraCommand.exit(withError: error) }
+                return report(ControlFailure(.invalidArgument, RemoraCommand.fullMessage(for: error)),
+                              json: arguments.contains("--json"))
+            }
+        }
+        signal(SIGINT, SIG_IGN)
+        let interrupt = DispatchSource.makeSignalSource(signal: SIGINT, queue: .main)
+        interrupt.setEventHandler { task.cancel() }
+        interrupt.resume()
+        let code = await task.value
+        interrupt.cancel()
+        Darwin.exit(code)
+    }
+
+    private static func report(_ failure: ControlFailure, json: Bool) -> Int32 {
+        if json { Output.write(.failure(failure)) }
+        else {
+            let hint = failure.hint.isEmpty ? "" : "\n\(failure.hint)"
+            FileHandle.standardError.write(Data("\(failure.message)\(hint)\n".utf8))
+        }
+        return failure.code.exitCode
+    }
+}
+
+struct RemoraCommand: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "remora",
+        abstract: "Control the Remora desktop app.",
+        discussion: "Run 'remora help agent' for the agent guide. Durations accept ms, s or m; bare numbers are seconds.",
+        subcommands: [Capabilities.self, AppCommand.self])
+    @OptionGroup var options: CommonOptions
+}
+
+struct CommonOptions: ParsableArguments {
+    @Flag(help: "Print one JSON result or error envelope.") var json = false
+    @Option(name: .long, help: "Command deadline, separate from the 10-second startup deadline.") var timeout = "10s"
+
+    mutating func validate() throws { _ = try CommandTimeout(timeout) }
+
+    @MainActor func execute(_ request: ControlRequest, launch: Bool = true) async throws {
+        let result = try await ApplicationClient().request(request, launch: launch, timeout: CommandTimeout(timeout).seconds)
+        switch result {
+        case .success: Output.write(result, json: json)
+        case .failure(let failure): throw failure
+        }
+    }
+}
+
+struct Capabilities: ParsableCommand {
+    static let configuration = CommandConfiguration(abstract: "List this build's implemented commands without launching Remora.")
+    @OptionGroup var options: CommonOptions
+
+    func run() throws {
+        Output.write(.success(.object([
+            "commands": .array(["help", "help agent", "capabilities", "app status", "app show", "app hide", "app close", "app quit"].map(ControlValue.string)),
+            "protocols": .array([.string("rdp")])
+        ])), json: options.json)
+    }
+}
+
+struct AppCommand: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(commandName: "app", abstract: "Inspect or control the app.",
+        subcommands: [Status.self, Show.self, Hide.self, Close.self, Quit.self])
+    @OptionGroup var options: CommonOptions
+
+    struct Status: AsyncParsableCommand {
+        static let configuration = CommandConfiguration(abstract: "Report app status without launching it.")
+        @OptionGroup var options: CommonOptions
+        @MainActor func run() async throws { try await options.execute(ControlRequest(command: "app.status"), launch: false) }
+    }
+    struct Show: AsyncParsableCommand {
+        enum Page: String, ExpressibleByArgument { case connections, settings }
+        static let configuration = CommandConfiguration(abstract: "Show and activate Remora.")
+        @OptionGroup var options: CommonOptions
+        @Option(help: "Open connections or settings.") var page: Page?
+        @MainActor func run() async throws {
+            try await options.execute(ControlRequest(command: "app.show", arguments: page.map { ["page": .string($0.rawValue)] } ?? [:]))
+        }
+    }
+    struct Hide: AsyncParsableCommand {
+        static let configuration = CommandConfiguration(abstract: "Hide Remora and preserve its sessions.")
+        @OptionGroup var options: CommonOptions
+        @MainActor func run() async throws { try await options.execute(ControlRequest(command: "app.hide")) }
+    }
+    struct Close: AsyncParsableCommand {
+        static let configuration = CommandConfiguration(abstract: "Close the main window and preserve its sessions.")
+        @OptionGroup var options: CommonOptions
+        @MainActor func run() async throws { try await options.execute(ControlRequest(command: "app.close")) }
+    }
+    struct Quit: AsyncParsableCommand {
+        static let configuration = CommandConfiguration(abstract: "Quit without confirmation, disconnecting sessions and finishing recordings.")
+        @OptionGroup var options: CommonOptions
+        @MainActor func run() async throws { try await options.execute(ControlRequest(command: "app.quit")) }
+    }
+}
+
+enum Output {
+    static func write(_ response: ControlResponse, json: Bool = true) {
+        if json {
+            do {
+                let encoder = JSONEncoder()
+                encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
+                FileHandle.standardOutput.write(try encoder.encode(response) + Data([10]))
+            } catch {
+                FileHandle.standardError.write(Data("Could not encode the command result.\n".utf8))
+                Darwin.exit(1)
+            }
+            return
+        }
+        guard case .success(let value) = response else { return }
+        if case .object(let fields) = value, case .bool(let running) = fields["running"] {
+            guard running else { print("Remora is not running."); return }
+            let hidden = fields["hidden"] == .bool(true)
+            let visible = fields["windowVisible"] == .bool(true)
+            print("Remora is running. Main window: \(visible ? "open" : "closed"). App: \(hidden ? "hidden" : "shown").")
+        } else if case .object(let fields) = value, case .array(let commands) = fields["commands"] {
+            for case .string(let command) in commands { print(command) }
+        } else { print("Done.") }
+    }
+}
