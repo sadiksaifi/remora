@@ -47,7 +47,7 @@ final class CommandLineController {
         )))
     }
 
-    private func handle(_ request: ControlRequest) -> ControlReply {
+    private func handle(_ request: ControlRequest) async -> ControlReply {
         do {
             let allowed: Set<String> = request.command == "app.show" ? ["page"] : []
             guard request.session == nil, Set(request.arguments.keys).isSubset(of: allowed) else {
@@ -74,7 +74,11 @@ final class CommandLineController {
             case "app.hide": NSApplication.shared.hide(nil)
             case "app.close": mainWindow.window?.close()
             case "app.quit":
-                return ControlReply(.success(.object(["quitting": .bool(true)]))) { [weak self] in
+                let failures = await sessions.prepareToQuit()
+                let response: ControlResponse = failures.isEmpty
+                    ? .success(.object(["quitting": .bool(true)]))
+                    : .failure(ControlFailure(.captureFailed, failures.map(\.localizedDescription).joined(separator: "\n")))
+                return ControlReply(response) { [weak self] in
                     await self?.finishQuit()
                 }
             default:

@@ -89,9 +89,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard !terminationPending else { return .terminateLater }
         guard confirmQuit() else { return .terminateCancel }
         terminationPending = true
-        sessionTabs.disconnectAll()
         Task { @MainActor in
-            await sessionTabs.finishCaptures()
+            await sessionTabs.prepareToQuit()
             await commandLineController?.stop()
             if terminationPending {
                 terminationPending = false

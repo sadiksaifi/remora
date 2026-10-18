@@ -125,10 +125,6 @@ final class SessionTabs {
         sessions[id]?.disconnectSession()
     }
 
-    func disconnectAll() {
-        for session in sessions.values { session.disconnect() }
-    }
-
     /// True while any open tab records or finishes a recording.
     var isRecording: Bool {
         sessions.values.contains {
@@ -143,11 +139,27 @@ final class SessionTabs {
         (sessions.values.map(\.capture) + Array(closingCaptures.values)).compactMap(\.recordingURL)
     }
 
-    /// Includes already closed tabs whose writers are still finishing.
-    func finishCaptures() async {
-        let captures = sessions.values.map(\.capture) + Array(closingCaptures.values)
-        await withTaskGroup(of: Void.self) { group in
-            for capture in captures { group.addTask { await capture.stopRecording() } }
+    /// Disconnects sessions and finishes recordings, including those from closed tabs.
+    @discardableResult
+    func prepareToQuit() async -> [CaptureFailure] {
+        let captures = (sessions.values.map(\.capture) + Array(closingCaptures.values)).filter {
+            switch $0.recordingState {
+            case .recording, .finishing: true
+            case .idle, .failed: false
+            }
+        }
+        for session in sessions.values { session.disconnect() }
+        return await withTaskGroup(of: CaptureFailure?.self) { group in
+            for capture in captures {
+                group.addTask {
+                    _ = await capture.stopRecording()
+                    if case .failed(let failure) = await capture.recordingState { return failure }
+                    return nil
+                }
+            }
+            var failures: [CaptureFailure] = []
+            for await failure in group { if let failure { failures.append(failure) } }
+            return failures
         }
     }
 

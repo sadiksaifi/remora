@@ -64,6 +64,7 @@ public struct ControlRequest: Codable, Sendable {
 
 public struct ControlFailure: Error, Codable, Sendable, Equatable, LocalizedError {
     public enum Code: String, Codable, Sendable, CaseIterable {
+        case captureFailed = "capture-failed"
         case `internal`, ioFailed = "io-failed", outcomeUnknown = "outcome-unknown"
         case invalidArgument = "invalid-argument", unknownCommand = "unknown-command"
         case appUnavailable = "app-unavailable", notFound = "not-found", ambiguousTarget = "ambiguous-target"
@@ -74,7 +75,7 @@ public struct ControlFailure: Error, Codable, Sendable, Equatable, LocalizedErro
 
         public var exitCode: Int32 {
             switch self {
-            case .internal, .ioFailed, .outcomeUnknown: 1
+            case .internal, .captureFailed, .ioFailed, .outcomeUnknown: 1
             case .invalidArgument, .unknownCommand: 2
             case .appUnavailable, .notFound, .ambiguousTarget, .unsupported, .sessionRequired, .sessionEnded: 3
             case .notConnected, .promptRequired, .userActive, .inputBusy, .observationRequired: 4
