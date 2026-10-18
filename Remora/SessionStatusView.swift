@@ -222,3 +222,57 @@ struct CaptureConfirmation: View {
             .accessibilityIdentifier("captureConfirmation")
     }
 }
+
+/// The glass capsule at the top of a desktop while a command-line program controls it, is paused,
+/// or has just been stopped. Take Over and Resume share one button.
+struct AgentControlCapsule: View {
+    let state: SessionControl.State
+    let agent: String
+    let action: () -> Void
+
+    var message: String {
+        switch state {
+        case .paused: "You're in control. \(agent) is paused."
+        default: state.agentStatus(agent) ?? ""
+        }
+    }
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: state == .active ? "pointer.arrow.motionlines" : state == .paused ? "hand.raised.fill" : "stop.circle")
+                .font(.system(size: 14))
+                .foregroundStyle(state == .active ? AnyShapeStyle(Color(nsColor: .systemBlue)) : AnyShapeStyle(.secondary))
+                .accessibilityHidden(true)
+            Text(message)
+                .font(.system(size: 13, weight: .semibold))
+                .lineLimit(1)
+            if state != .stopped {
+                Button(state == .active ? "Take Over" : "Resume", action: action)
+                    .buttonStyle(.borderedProminent)
+                    .buttonBorderShape(.capsule)
+                    .controlSize(.large)
+                    .tint(Color(nsColor: .systemBlue))
+                    .accessibilityIdentifier("agentControlButton")
+            }
+        }
+        .padding(.leading, 14)
+        .padding(.trailing, state == .stopped ? 16 : 5)
+        .frame(height: 38)
+        .glassEffect(.regular, in: .capsule)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel(message)
+        .accessibilityIdentifier("agentControlCapsule")
+    }
+}
+
+extension SessionControl.State {
+    /// The tab's help and accessibility text, or nil while no program has controlled the session.
+    func agentStatus(_ agent: String) -> String? {
+        switch self {
+        case .idle: nil
+        case .active: "\(agent) is in control"
+        case .paused: "\(agent) is paused"
+        case .stopped: "\(agent) can no longer control this session."
+        }
+    }
+}

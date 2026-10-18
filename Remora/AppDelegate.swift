@@ -43,14 +43,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let credentialStore = CredentialStore()
             let sessionTabs = SessionTabs(connectionStore: connectionStore, credentialStore: credentialStore)
             self.sessionTabs = sessionTabs
-            mainWindowController = MainWindowController(
+            let windowController = MainWindowController(
                 connectionStore: connectionStore,
                 credentialStore: credentialStore,
                 sessionTabs: sessionTabs
             )
+            mainWindowController = windowController
             configureMenu()
             statusMenu = StatusMenu(
                 sessionTabs: sessionTabs,
+                windowController: windowController,
                 onOpen: { [weak self] in self?.showMainWindow() },
                 onShowTab: { [weak self] id in
                     self?.showMainWindow()
@@ -271,14 +273,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         sessionMenu.addItem(withTitle: "Disconnect", action: #selector(MainWindowController.disconnectSession(_:)), keyEquivalent: "")
         sessionMenu.addItem(withTitle: "Reconnect", action: #selector(MainWindowController.reconnectSession(_:)), keyEquivalent: "r")
         sessionMenu.addItem(.separator())
-        sessionMenu.addItem(withTitle: "Take Over", action: #selector(MainWindowController.takeOverAgentControl(_:)), keyEquivalent: "")
-        sessionMenu.addItem(withTitle: "Resume", action: #selector(MainWindowController.resumeAgentControl(_:)), keyEquivalent: "")
-        sessionMenu.addItem(withTitle: "Stop Agent Control", action: #selector(MainWindowController.stopAgentControl(_:)), keyEquivalent: "")
-        sessionMenu.addItem(withTitle: "Stop All Agent Control", action: #selector(MainWindowController.stopAllAgentControl(_:)), keyEquivalent: "")
-        sessionMenu.addItem(.separator())
         sessionMenu.addItem(withTitle: "Send Ctrl-Alt-Delete", action: #selector(MainWindowController.sendCtrlAltDelete(_:)), keyEquivalent: "")
         sessionMenu.addItem(.separator())
         for item in MainWindowController.makeCaptureItems() { sessionMenu.addItem(item) }
+        sessionMenu.addItem(.separator())
+        sessionMenu.addItem(withTitle: "Take Over", action: #selector(MainWindowController.toggleAgentControl(_:)), keyEquivalent: "")
+        sessionMenu.addItem(withTitle: "Stop Agent Control", action: #selector(MainWindowController.stopAgentControl(_:)), keyEquivalent: "")
+        sessionMenu.addItem(withTitle: "Stop All Agent Control", action: #selector(MainWindowController.stopAllAgentControl(_:)), keyEquivalent: "")
         sessionMenu.addItem(.separator())
         sessionMenu.addItem(
             withTitle: "Release Keyboard Capture",

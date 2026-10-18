@@ -20,7 +20,7 @@ extension CommandLineController {
             guard session.isConnected else { throw ControlFailure(.notConnected, "The session is not connected.") }
             if text != nil { try session.checkAgentInput() }
             if let text, session.remoteClipboard.status != .notReady {
-                try session.offerClipboardText(text)
+                try session.offerClipboardText(text, agent: request.agent)
                 return .object(["session": .string(id.uuidString), "offered": .bool(true)])
             }
             switch session.remoteClipboard.status {

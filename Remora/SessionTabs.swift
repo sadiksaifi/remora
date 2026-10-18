@@ -16,6 +16,9 @@ final class SessionTabs {
         var needsAttention = false
         /// The tab's desktop has the keyboard of the active key window.
         var isKeyboardCaptured = false
+        var control = SessionControl.State.idle
+        /// The command-line program that last took control.
+        var agentName = ""
     }
 
     @ObservationIgnored var onControlEvent: ((String, SessionViewController, ControlValue?) -> Void)?
@@ -33,6 +36,16 @@ final class SessionTabs {
     init(connectionStore: ConnectionStore, credentialStore: CredentialStore) {
         self.connectionStore = connectionStore
         self.credentialStore = credentialStore
+        // Agent commands post on every input, so the tab changes only when its control state or agent does.
+        NotificationCenter.default.addObserver(forName: SessionViewController.controlDidChange, object: nil, queue: nil) {
+            [weak self] notification in
+            let session = notification.object as? SessionViewController
+            MainActor.assumeIsolated {
+                guard let self, let session, let tab = self.tabs.first(where: { $0.id == session.connection.id }),
+                      tab.control != session.control.state || tab.agentName != session.agentName else { return }
+                self.update(tab.id) { $0.control = session.control.state; $0.agentName = session.agentName }
+            }
+        }
     }
 
     /// The session state of each open tab, keyed by connection ID. A connection without a tab has no entry.
@@ -53,15 +66,15 @@ final class SessionTabs {
     }
 
     /// Opens or reuses a tab. Background callers leave selection unchanged. Ended tabs reconnect in place.
-    /// Returns true when it started a new session.
+    /// The command line passes its program's label as `agent`. Returns true when it started a new session.
     @discardableResult
-    func open(_ connection: Connection, select shouldSelect: Bool = true, commandLine: Bool = false, resolution: ConnectionResolution? = nil) -> Bool {
+    func open(_ connection: Connection, select shouldSelect: Bool = true, agent: String? = nil, resolution: ConnectionResolution? = nil) -> Bool {
         let id = connection.id
         if let existing = sessions[id] {
             if shouldSelect { select(id) }
             guard !existing.state.isLive else { return false }
             existing.update(connection)
-            existing.configureCommandLine(commandLine, resolution: resolution)
+            existing.configureCommandLine(agent: agent, resolution: resolution)
             existing.start()
             return true
         }
@@ -94,7 +107,7 @@ final class SessionTabs {
         sessions[id] = session
         tabs.append(Tab(id: id, title: connection.name, state: session.state))
         if shouldSelect { select(id) }
-        session.configureCommandLine(commandLine, resolution: resolution)
+        session.configureCommandLine(agent: agent, resolution: resolution)
         session.start()
         session.onControlEvent = { [weak self, weak session] type, data in
             guard let session else { return }
