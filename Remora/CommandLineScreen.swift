@@ -32,6 +32,7 @@ extension CommandLineController {
         let session = try resolveSession(request.session)
         let id = session.attemptID
         let timeout = request.timeout ?? 10
+        let deadline = ProcessInfo.processInfo.systemUptime + timeout
         do {
             switch request.command {
             case "screenshot":
@@ -50,9 +51,7 @@ extension CommandLineController {
                 }
                 session.addFrameDemand()
                 defer { session.removeFrameDemand() }
-                try await waitFor(session, id: id, timeout: timeout) {
-                    session.state == .connected && session.hasFreshFrame
-                }
+                try await waitForSettledFrame(session, id: id, deadline: deadline)
                 if let size = session.frameSize {
                     do { _ = try ScreenshotGeometry(desktop: size, region: region, maxSize: maxSize) }
                     catch { throw ControlFailure(.invalidArgument, error.localizedDescription) }
@@ -95,9 +94,7 @@ extension CommandLineController {
                 let output = try request.string("output").map { URL(fileURLWithPath: $0) }
                 session.addFrameDemand()
                 defer { session.removeFrameDemand() }
-                try await waitFor(session, id: id, timeout: timeout) {
-                    session.state == .connected && session.hasFreshFrame
-                }
+                try await waitForSettledFrame(session, id: id, deadline: deadline)
                 try session.capture.startRecording(connectionName: session.connection.name, output: output)
             case "recording.stop":
                 if case .failure(let failure) = await session.stopRecording() { throw failure }
