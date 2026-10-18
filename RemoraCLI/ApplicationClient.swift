@@ -62,11 +62,15 @@ struct ApplicationClient {
         var delay = 0.025
         while ContinuousClock.now < deadline {
             do {
-                let response = try await client.request(ControlRequest(command: "app.status"), timeout: 0.5, isMutation: false)
+                let remaining = ContinuousClock.now.duration(to: deadline).components
+                let seconds = max(0, Double(remaining.seconds) + Double(remaining.attoseconds) / 1e18)
+                let response = try await client.request(ControlRequest(command: "app.status"), timeout: min(0.5, seconds), isMutation: false)
                 if case .success = response { return }
             } catch let failure as ControlFailure where failure.code == .cancelled { throw failure }
             catch { }
-            do { try await Task.sleep(for: .seconds(delay)) }
+            do {
+                try await Task.sleep(until: min(deadline, ContinuousClock.now.advanced(by: .seconds(delay))), clock: .continuous)
+            }
             catch { throw ControlFailure(.cancelled, "The command was interrupted.") }
             delay = min(delay * 2, 0.25)
         }
