@@ -36,6 +36,7 @@ enum RemoraEntry {
                 Stop Agent Control is a soft stop. Your next input command reattaches.
                 To leave control with the human, stop issuing input.
                 Input success acknowledges protocol submission. Verify the remote result with a screenshot.
+                Remote servers may drop Unicode characters their keymap does not support. Check the screenshot.
                 After a timeout or lost reply, inspect state and screenshot before repeating an action.
                 Use --json for result and error envelopes. Use remora COMMAND --help for command details.
                 """)
