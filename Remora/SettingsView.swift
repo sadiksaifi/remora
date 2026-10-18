@@ -229,19 +229,24 @@ private struct AgentSkillSection: View {
                     }
                 } label: {
                     Text(folder.name)
-                    if folder == .agents { Text("The shared folder that Codex, OpenCode, pi, Muse, Antigravity, Cursor, FX and other agents read.") }
-                    let path = (folder.url.path as NSString).abbreviatingWithTildeInPath
-                    switch states[folder] {
-                    case .installed, .broken: StatusLabel(text: "Installed in \(path)", ok: true)
-                    case .conflict: StatusLabel(text: "Another skill is in use at \(link.displayPath).", ok: false)
-                    case .notInstalled, nil: Text("Not installed in \(path)")
+                    // One subtitle view, so the status line has the same style in both rows.
+                    VStack(alignment: .leading, spacing: 2) {
+                        if folder == .agents { Text("The shared folder that Codex, OpenCode, pi, Muse, Antigravity, Cursor, FX and other agents read.") }
+                        let path = (folder.url.path as NSString).abbreviatingWithTildeInPath
+                        switch states[folder] {
+                        case .installed, .broken: StatusLabel(text: "Installed in \(path)", ok: true)
+                        case .conflict: StatusLabel(text: "Another skill is in use at \(link.displayPath).", ok: false)
+                        case .notInstalled, nil: Text("Not installed in \(path)")
+                        }
                     }
                 }
                 .accessibilityIdentifier("agentSkill-\(folder.rawValue)")
             }
-            VStack(alignment: .leading, spacing: 7) {
-                Text("For other agents, link this folder into their skills folder.")
-                CopyableText(text: skill.folder.path)
+            DisclosureGroup("Other agents") {
+                VStack(alignment: .leading, spacing: 7) {
+                    Text("Link this folder into the agent's skills folder.")
+                    CopyableText(text: skill.folder.path)
+                }
             }
         }
         .onAppear(perform: refresh)
