@@ -93,3 +93,10 @@ func foreignLinksAreNeverReplacedOrRemoved(destination: String) throws {
     try settingsLink.uninstall()
     #expect(cliLink.state == .notInstalled)
 }
+
+@Test func shellAnswerIgnoresOutputAroundTheMarkers() {
+    // A zsh config with starship prints a cursor escape on the same line as the answer.
+    #expect(CommandLineTool.shellAnswer(in: "\u{1B}[5 q\u{1E}/Users/me/.local/bin/remora\u{1E}") == "/Users/me/.local/bin/remora")
+    #expect(CommandLineTool.shellAnswer(in: "welcome\n\u{1E}\u{1E}\u{1B}]7;file://mac\u{07}") == "")
+    #expect(CommandLineTool.shellAnswer(in: "printf: command not found\n") == nil)
+}

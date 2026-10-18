@@ -73,13 +73,14 @@ public struct CommandLineTool: Sendable {
         }
     }
 
-    /// Whether a new Terminal shell runs `remora` from this link, or nil when the shell fails or takes over 3 seconds.
+    /// Whether a new Terminal shell runs `remora` from this link, or nil when the shell fails, takes over 3 seconds or never prints an answer.
     /// A GUI app's PATH lacks what shell config adds, so this asks the user's login shell in a clean environment.
     public func isOnShellPath() async -> Bool? {
         let shell = getpwuid(getuid()).flatMap { String(validatingCString: $0.pointee.pw_shell) } ?? "/bin/zsh"
         let process = Process(), output = Pipe()
         process.executableURL = URL(fileURLWithPath: shell)
-        process.arguments = ["-l", "-i", "-c", "command -v remora"]
+        // Record separators mark the answer, because shell config can print escapes on the same line.
+        process.arguments = ["-l", "-i", "-c", #"printf '\036%s\036' "$(command -v remora)""#]
         process.environment = ["HOME": FileManager.default.homeDirectoryForCurrentUser.path, "USER": NSUserName(), "SHELL": shell, "TERM": "dumb"]
         (process.standardInput, process.standardOutput, process.standardError) = (FileHandle.nullDevice, output, FileHandle.nullDevice)
         return await withCheckedContinuation { continuation in
@@ -89,12 +90,19 @@ public struct CommandLineTool: Sendable {
                 DispatchQueue.global().asyncAfter(deadline: .now() + 3) { if process.isRunning { kill(process.processIdentifier, SIGKILL) } }
                 let data = output.fileHandleForReading.readDataToEndOfFile()
                 process.waitUntilExit()
-                // Shell config may print other output, such as terminal escapes, before the answer.
-                let found = String(decoding: data, as: UTF8.self).split(whereSeparator: \.isNewline).last.map(String.init)
+                let answer = Self.shellAnswer(in: String(decoding: data, as: UTF8.self))
                 let answered = process.terminationReason == .exit && [0, 1].contains(process.terminationStatus)
-                continuation.resume(returning: answered ? found == link.path : nil)
+                // Compare resolved paths, because a dotfiles setup can link ~/.local or put another link to this helper first.
+                let runsHelper = answer.map { URL(fileURLWithPath: $0).resolvingSymlinksInPath() == link.resolvingSymlinksInPath() }
+                continuation.resume(returning: answered ? runsHelper : nil)
             }
         }
+    }
+
+    /// The text between the last pair of record separators, or nil when the shell never printed the answer.
+    static func shellAnswer(in output: String) -> String? {
+        let parts = output.components(separatedBy: "\u{1E}")
+        return parts.count >= 3 ? parts[parts.count - 2] : nil
     }
 
     /// A symbolic link to the target, or with `adoptsOtherCopies` to a Remora helper in a moved or deleted copy of Remora.
