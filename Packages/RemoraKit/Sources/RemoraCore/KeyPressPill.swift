@@ -50,6 +50,13 @@ public struct KeyPressPill: Equatable, Sendable {
         self.scale = scale
     }
 
+    private init(_ pill: KeyPressPill, pointsPerPixel: CGFloat) {
+        let transform = CGAffineTransform(scaleX: pointsPerPixel, y: pointsPerPixel)
+        items = pill.items.map { Item(text: $0.text, kind: $0.kind, frame: $0.frame.applying(transform)) }
+        size = pill.size.applying(transform)
+        scale = pill.scale * pointsPerPixel
+    }
+
     public static func fontSize(_ kind: Kind) -> CGFloat { kind == .text ? 22 : 16 }
 
     /// SF Pro Semibold, as SwiftUI's `.system(size:weight: .semibold)`.
@@ -66,15 +73,17 @@ public struct KeyPressPill: Equatable, Sendable {
         return ceil(CGFloat(CTLineGetTypographicBounds(line, nil, nil, nil)))
     }
 
-    /// The pill at the bottom center, in view points on screen or desktop pixels in recordings.
-    /// Recorded points use the connection scale, or at least the desktop height over 1080.
+    /// Lay out in desktop pixels, then scale the entire layout into the screen's view points if supplied.
+    /// One point uses the connection's backing scale, or at least the desktop height over 1080.
     /// The pill's bottom sits 64 points up, clear of a taskbar or dock.
-    public static func placed(_ state: SessionOverlayState.Snapshot, desktop: CGSize, recording: Bool = true) -> (pill: KeyPressPill, frame: CGRect)? {
-        let unit = recording ? max(CGFloat(state.scale), desktop.height / 1080) : 1
+    public static func placed(_ state: SessionOverlayState.Snapshot, desktop: CGSize, pointsPerPixel: CGFloat = 1) -> (pill: KeyPressPill, frame: CGRect)? {
+        let unit = max(CGFloat(state.scale), desktop.height / 1080)
         guard let standard = KeyPressPill(text: state.keyText, isText: state.keyIsText, scale: unit * state.keySize) else { return nil }
         let fit = min(1, max(0.1, (desktop.width - 16 * unit) / standard.size.width))
         let pill = fit < 1 ? KeyPressPill(text: state.keyText, isText: state.keyIsText, scale: standard.scale * fit)! : standard
-        return (pill, CGRect(x: ((desktop.width - pill.size.width) / 2).rounded(),
-            y: max(0, desktop.height - pill.size.height - 64 * unit).rounded(), width: pill.size.width, height: pill.size.height))
+        let frame = CGRect(x: ((desktop.width - pill.size.width) / 2).rounded(),
+            y: max(0, desktop.height - pill.size.height - 64 * unit).rounded(), width: pill.size.width, height: pill.size.height)
+        return (KeyPressPill(pill, pointsPerPixel: pointsPerPixel),
+            frame.applying(CGAffineTransform(scaleX: pointsPerPixel, y: pointsPerPixel)))
     }
 }

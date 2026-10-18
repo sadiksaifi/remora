@@ -45,7 +45,9 @@ final class AgentPointerView: NSView {
         guard let desktop = superview as? RemoteDesktopView, desktop.remoteSize.width > 0 else { return }
         let snapshot = state.snapshot()
         let screen = desktop.screenRect
-        if let (pill, frame) = KeyPressPill.placed(snapshot, desktop: screen.size, recording: false) {
+        let scale = screen.width / desktop.remoteSize.width
+        guard scale > 0 else { return }
+        if let (pill, frame) = KeyPressPill.placed(snapshot, desktop: desktop.remoteSize, pointsPerPixel: scale) {
             if keyPress.rootView.pill != pill { keyPress.rootView = KeyPressCapsule(pill: pill) }
             keyPress.frame = frame.offsetBy(dx: screen.minX, dy: screen.minY)
         }

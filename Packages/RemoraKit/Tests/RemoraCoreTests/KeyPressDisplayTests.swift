@@ -67,7 +67,7 @@ import RemoraCore
     #expect(large.size.height == 2 * chord.size.height && abs(large.size.width / chord.size.width - 2) < 0.1)
 }
 
-@Test(arguments: [1.0, 2.0]) func screenFeedbackKeepsPointSizes(connectionScale: Double) throws {
+@Test(arguments: [1.0, 2.0]) func screenPointerKeepsPointSizes(connectionScale: Double) throws {
     let overlays = SessionOverlayState()
     overlays.configure(showPointerInRecordings: true, showKeyPresses: true, showAgentPointer: true,
         scale: connectionScale, keyPressSize: 1.5)
@@ -85,9 +85,38 @@ import RemoraCore
     }
     let recorded = try #require(drawing.sprites(state, recording: true).last)
     #expect(recorded.rect.height == 27 * CGFloat(connectionScale))
-    let screen = try #require(KeyPressPill.placed(state, desktop: CGSize(width: 960, height: 540), recording: false))
-    #expect(screen.pill.size.height == 66 && screen.pill.scale == 1.5)
-    #expect(screen.frame.midX == 480 && screen.frame.maxY == 476)
-    let movie = try #require(KeyPressPill.placed(state, desktop: CGSize(width: 3840, height: 2160)))
-    #expect(movie.pill.size.height == 132)
+}
+
+@Test(arguments: [1.0, 2.0], [0.75, 1.0, 1.5, 2.0])
+func screenPillScalesWithRecordedDesktop(connectionScale: Double, keySize: Double) throws {
+    let overlays = SessionOverlayState()
+    overlays.configure(showPointerInRecordings: true, showKeyPresses: true, showAgentPointer: true,
+        scale: connectionScale, keyPressSize: keySize)
+    overlays.receive(.agent, .text("hello"))
+    let state = overlays.snapshot()
+    let desktop = CGSize(width: 3840, height: 2160)
+    let movie = try #require(KeyPressPill.placed(state, desktop: desktop))
+    let recorded = try #require(SessionOverlayDrawing().keyPress(state, desktop: desktop))
+    #expect(movie.frame == recorded.frame)
+    #expect(movie.pill.size.height == 88 * keySize && desktop.height - movie.frame.maxY == 128)
+    for pointsPerPixel: CGFloat in [0.25, 0.5, 1, 2] {
+        let screen = try #require(KeyPressPill.placed(state, desktop: desktop, pointsPerPixel: pointsPerPixel))
+        let transform = CGAffineTransform(scaleX: pointsPerPixel, y: pointsPerPixel)
+        #expect(screen.frame == recorded.frame.applying(transform))
+        #expect(screen.pill.size == movie.pill.size.applying(transform))
+        #expect(screen.pill.scale == movie.pill.scale * pointsPerPixel)
+        #expect(screen.pill.items.map(\.frame) == movie.pill.items.map { $0.frame.applying(transform) })
+    }
+    let screen = try #require(KeyPressPill.placed(state, desktop: desktop, pointsPerPixel: 0.25))
+    #expect(screen.pill.size.height == 22 * keySize && 540 - screen.frame.maxY == 32)
+}
+
+@Test func fitToWindowRetinaPillKeepsStandardPointSize() throws {
+    let overlays = SessionOverlayState()
+    overlays.configure(showPointerInRecordings: true, showKeyPresses: true, showAgentPointer: true, scale: 2)
+    overlays.receive(.agent, .text("hello"))
+    let screen = try #require(KeyPressPill.placed(overlays.snapshot(),
+        desktop: CGSize(width: 1920, height: 1080), pointsPerPixel: 0.5))
+    #expect(screen.pill.size.height == 44 && screen.pill.scale == 1)
+    #expect(540 - screen.frame.maxY == 64)
 }
