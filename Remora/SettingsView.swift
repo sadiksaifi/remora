@@ -151,6 +151,8 @@ private struct CommandLinePane: View {
     @AppStorage(AppSettings.showAgentPointerKey) private var showAgentPointer = true
     @State private var state: CommandLineTool.State?
     @State private var showsPathAdvice = false
+    @State private var isOnPath: Bool?
+    @State private var opensPathAdvice = false
     private let tool = CommandLineTool(target: Bundle.main.bundleURL.appending(path: "Contents/Helpers/remora"))
     private static let pointerTitle = "Show pointer while the command line controls a session"
 
@@ -162,7 +164,7 @@ private struct CommandLinePane: View {
                     case .notInstalled:
                         Button("Install") {
                             perform(tool.install)
-                            showsPathAdvice = state == .installed
+                            opensPathAdvice = state == .installed
                         }
                     case .installed:
                         HStack {
@@ -187,7 +189,12 @@ private struct CommandLinePane: View {
                 } label: {
                     Text("Command-line tool")
                     switch state {
-                    case .installed: StatusLabel(text: "Installed at \(tool.displayPath)", ok: true)
+                    case .installed:
+                        // One subtitle view, so the warning has the same style as the status line.
+                        VStack(alignment: .leading, spacing: 2) {
+                            StatusLabel(text: "Installed at \(tool.displayPath)", ok: true)
+                            if isOnPath == false { StatusLabel(text: "~/.local/bin isn't on your PATH, so remora won't run in Terminal.", ok: false) }
+                        }
                     case .broken:
                         StatusLabel(text: "The link at \(tool.displayPath) points to a copy of Remora that was moved or deleted.", ok: false)
                     case .conflict:
@@ -196,6 +203,13 @@ private struct CommandLinePane: View {
                     }
                 }
                 .accessibilityIdentifier("commandLineTool")
+                .task(id: state) {
+                    isOnPath = nil
+                    guard state == .installed else { return }
+                    isOnPath = await tool.isOnShellPath()
+                    if isOnPath == false, opensPathAdvice { showsPathAdvice = true }
+                    opensPathAdvice = false
+                }
             }
             AgentSkillSection()
             Section {
