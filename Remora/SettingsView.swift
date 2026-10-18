@@ -210,6 +210,7 @@ private struct CommandLinePane: View {
 /// Links the bundled agent skill into the shared Agent Skills folder and Claude Code's skills folder.
 private struct AgentSkillSection: View {
     @State private var states: [AgentSkill.Folder: CommandLineTool.State] = [:]
+    @State private var otherAgentsExpanded = false
     private let skill = AgentSkill(app: Bundle.main.bundleURL)
 
     var body: some View {
@@ -242,12 +243,13 @@ private struct AgentSkillSection: View {
                 }
                 .accessibilityIdentifier("agentSkill-\(folder.rawValue)")
             }
-            DisclosureGroup("Other agents") {
+            DisclosureGroup("Other agents", isExpanded: $otherAgentsExpanded) {
                 VStack(alignment: .leading, spacing: 7) {
                     Text("Link this folder into the agent's skills folder.")
                     CopyableText(text: skill.folder.path)
                 }
             }
+            .accessibilityAction { otherAgentsExpanded.toggle() }
         }
         .onAppear(perform: refresh)
         // The user may change a skills folder while Remora is in the background.
