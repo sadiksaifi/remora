@@ -7,13 +7,22 @@ import VideoToolbox
 import Metal
 
 public struct ScreenshotDestination: CaptureDestination {
-    public init() {}
+    private let folder: @Sendable () -> URL?
+
+    /// `folder` runs for each capture and returns nil to use the macOS screenshot location.
+    public init(folder: @escaping @Sendable () -> URL? = { nil }) {
+        self.folder = folder
+    }
+
+    /// The folder macOS saves screenshots to: Desktop unless the user changed it.
+    public static var screenshotLocation: URL {
+        let configured = UserDefaults(suiteName: "com.apple.screencapture")?.string(forKey: "location")
+        return configured.map { URL(fileURLWithPath: ($0 as NSString).expandingTildeInPath, isDirectory: true) }
+            ?? FileManager.default.homeDirectoryForCurrentUser.appending(path: "Desktop", directoryHint: .isDirectory)
+    }
 
     public func reserve(connectionName: String, extension suffix: String) throws -> URL {
-        let manager = FileManager.default
-        let configured = UserDefaults(suiteName: "com.apple.screencapture")?.string(forKey: "location")
-        let directory = configured.map { URL(fileURLWithPath: ($0 as NSString).expandingTildeInPath) }
-            ?? manager.homeDirectoryForCurrentUser.appending(path: "Desktop", directoryHint: .isDirectory)
+        let directory = folder() ?? Self.screenshotLocation
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
         formatter.dateFormat = "yyyy-MM-dd 'at' HH.mm.ss"
