@@ -59,6 +59,43 @@ private func desktop(width: Int, height: Int, bgra: [UInt8], sink: MetalDesktop)
     #expect(Array(idle.pixels.prefix(4)) == [21, 87, 231, 0])
 }
 
+private struct RecordingTestDestination: CaptureDestination {
+    let url: URL
+    func reserve(connectionName: String, extension suffix: String) throws -> URL {
+        guard FileManager.default.createFile(atPath: url.path, contents: Data()) else {
+            throw CaptureFailure.file("Could not reserve test movie")
+        }
+        return url
+    }
+}
+
+@Test @MainActor func concurrentRecordingStopsObservePublishedCompletion() async throws {
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let url = directory.appendingPathComponent("concurrent.mov")
+    let frames = try MetalDesktop(device: #require(MTLCreateSystemDefaultDevice()))
+    desktop(width: 320, height: 240, bgra: [20, 30, 240, 0], sink: frames)
+    let capture = SessionCapture(media: AppleCaptureMedia(), destination: RecordingTestDestination(url: url))
+    capture.setSource(frames)
+    var concurrentStop: Task<Void, Never>?
+    capture.onRecordingActivityChange = { active in
+        guard !active else { return }
+        concurrentStop = Task {
+            let result = await capture.stopRecording()
+            #expect((try? result?.get()) == url)
+            #expect(capture.recordingState == .idle)
+            #expect(capture.recordingURL == nil)
+            #expect(capture.lastSavedURL == url)
+        }
+    }
+    try capture.startRecording(connectionName: "Test")
+    let result = await capture.stopRecording()
+    #expect(try result?.get() == url)
+    await concurrentStop?.value
+    #expect(await capture.stopRecording() == nil)
+}
+
 @Test func hardwareMovieSurvivesResizeAndIncludesIdleTime() async throws {
     let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
