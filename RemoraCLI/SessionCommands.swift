@@ -89,12 +89,12 @@ struct SessionCommand: AsyncParsableCommand {
 
 struct WaitCommand: AsyncParsableCommand {
     static let configuration = CommandConfiguration(commandName: "wait", abstract: "Wait for a session state, frame, or completed recording.")
-    enum State: String, ExpressibleByArgument { case connected, disconnected, frame, resumed
+    enum State: String, CaseIterable, ExpressibleByArgument { case connected, disconnected, frame, resumed
         case recordingFinished = "recording-finished"
     }
     @OptionGroup var options: CommonOptions
     @OptionGroup var target: SessionOptions
-    @Option(name: .customLong("for")) var state: State
+    @Option(name: .customLong("for"), help: "The state to wait for.") var state: State
     @Option(help: "Wait for a frame strictly newer than this revision. Requires --for frame.") var after: Int?
     mutating func validate() throws {
         if let after, after < 0 || state != .frame { throw ValidationError("--after requires --for frame and a nonnegative revision.") }

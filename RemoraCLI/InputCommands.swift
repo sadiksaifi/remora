@@ -106,11 +106,28 @@ struct KeyCommand: AsyncParsableCommand {
 }
 
 struct InputCommand: AsyncParsableCommand {
-    static let configuration = CommandConfiguration(commandName: "input", abstract: "Run up to 256 ordered JSON actions within 60 seconds.", discussion: "Each object has action plus its named arguments. Points use [x,y]; durations use durationMs. Raw key-down/key-up and button-down/button-up holds are released on every exit. Example: [{\"action\":\"key-down\",\"key\":\"ShiftLeft\"},{\"action\":\"click\",\"x\":100,\"y\":100}].")
+    static let configuration = CommandConfiguration(commandName: "input", abstract: "Run up to 256 ordered JSON actions within 60 seconds.", discussion: """
+        Stdin holds a JSON array, such as [{"action":"click","x":100,"y":200}]. Points are pixels from the top-left, or [x,y] pairs for from, to and at.
+
+        ACTION       FIELDS
+        move         x, y
+        click        x, y, button, count 1-3, modifiers
+        drag         from, to, button, modifiers, durationMs 1-10000 (default 500)
+        scroll       at, dx, dy (notches, positive is right or down)
+        type         text
+        key          key (a chord), repeat 1-100
+        delay        durationMs 0-60000
+        key-down     key (one physical key)
+        key-up       key
+        button-down  x, y, button
+        button-up    x, y, button
+
+        Buttons are left, right, middle, back and forward. key-up and button-up need a matching down earlier in the batch. Anything still held is released when the batch ends.
+        """)
     @OptionGroup var options: CommonOptions
     @OptionGroup var target: SessionOptions
     @OptionGroup var basis: ImageOptions
-    @Flag(name: .customLong("stdin")) var readStdin = false
+    @Flag(name: .customLong("stdin"), help: "Read the JSON action array from stdin. Required.") var readStdin = false
     @MainActor func run() async throws {
         guard readStdin else { throw ControlFailure(.invalidArgument, "Use input --stdin with a JSON action array.") }
         let actions: ControlValue

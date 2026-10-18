@@ -21,7 +21,7 @@ extension CommandLineController {
             return .object(["accessibility": .string(SystemShortcutCapture.isTrusted ? "allowed" : "notAllowed"), "opened": .bool(open)])
         case "settings.cli.get", "settings.cli.repair", "settings.cli.uninstall":
             try request.validateArguments([])
-            let tool = CommandLineTool(helper: Bundle.main.bundleURL.appending(path: "Contents/Helpers/remora"))
+            let tool = CommandLineTool(target: Bundle.main.bundleURL.appending(path: "Contents/Helpers/remora"))
             do {
                 if request.command == "settings.cli.repair" { try tool.repair() }
                 if request.command == "settings.cli.uninstall" { try tool.uninstall() }

@@ -8,17 +8,17 @@ import Testing
     let helper = root.appending(path: "Remora.app/Contents/Helpers/remora")
     try FileManager.default.createDirectory(at: helper.deletingLastPathComponent(), withIntermediateDirectories: true)
     try Data().write(to: helper)
-    let tool = CommandLineTool(helper: helper, link: root.appending(path: "bin/remora"))
+    let tool = CommandLineTool(target: helper, link: root.appending(path: "bin/remora"))
 
     #expect(tool.state == .notInstalled)
     try tool.install()
     #expect(tool.state == .installed)
 
-    let moved = CommandLineTool(helper: root.appending(path: "Moved.app/Contents/Helpers/remora"), link: tool.link)
+    let moved = CommandLineTool(target: root.appending(path: "Moved.app/Contents/Helpers/remora"), link: tool.link)
     try FileManager.default.removeItem(at: helper)
     #expect(tool.state == .broken)
-    try FileManager.default.createDirectory(at: moved.helper.deletingLastPathComponent(), withIntermediateDirectories: true)
-    try Data().write(to: moved.helper)
+    try FileManager.default.createDirectory(at: moved.target.deletingLastPathComponent(), withIntermediateDirectories: true)
+    try Data().write(to: moved.target)
     try moved.repair()
     #expect(moved.state == .installed)
     try moved.uninstall()
@@ -38,7 +38,7 @@ func foreignLinksAreNeverReplacedOrRemoved(destination: String) throws {
     try manager.createDirectory(at: root, withIntermediateDirectories: true)
     defer { try? manager.removeItem(at: root) }
     let target = root.appending(path: destination)
-    let tool = CommandLineTool(helper: root.appending(path: "Remora.app/Contents/Helpers/remora"),
+    let tool = CommandLineTool(target: root.appending(path: "Remora.app/Contents/Helpers/remora"),
                                link: root.appending(path: "remora"))
     try manager.createSymbolicLink(at: tool.link, withDestinationURL: target)
 
@@ -55,4 +55,22 @@ func foreignLinksAreNeverReplacedOrRemoved(destination: String) throws {
         #expect(try manager.destinationOfSymbolicLink(atPath: tool.link.path) == target.path)
         if exists { #expect(try String(contentsOf: target, encoding: .utf8) == "foreign") }
     }
+}
+
+@Test func skillLinkBelongsOnlyToItsOwnCopyOfRemora() throws {
+    let manager = FileManager.default
+    let root = manager.temporaryDirectory.appending(path: UUID().uuidString)
+    defer { try? manager.removeItem(at: root) }
+    let skill = AgentSkill(app: root.appending(path: "Remora.app"))
+    try manager.createDirectory(at: skill.folder, withIntermediateDirectories: true)
+    let link = skill.link(in: root.appending(path: "skills"))
+
+    try link.install()
+    #expect(link.state == .installed)
+    let other = AgentSkill(app: root.appending(path: "Other/Remora.app")).link(in: root.appending(path: "skills"))
+    #expect(other.state == .conflict)
+    #expect(throws: CommandLineTool.Failure.self) { try other.uninstall() }
+    #expect(link.state == .installed)
+    try link.uninstall()
+    #expect(link.state == .notInstalled)
 }

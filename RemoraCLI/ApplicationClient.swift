@@ -4,7 +4,7 @@ import RemoraControl
 /// Launch Services owns app identity and startup. Only read-only probes are retried.
 @MainActor
 struct ApplicationClient {
-    var bundleURL: URL {
+    nonisolated static var bundleURL: URL {
         (Bundle.main.executableURL ?? URL(fileURLWithPath: CommandLine.arguments[0])).resolvingSymlinksInPath()
             .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
     }
@@ -13,7 +13,7 @@ struct ApplicationClient {
         let developmentSocket = ProcessInfo.processInfo.environment["REMORA_SOCKET"] != nil
         return NSWorkspace.shared.runningApplications.contains {
             !$0.isTerminated && (developmentSocket
-                ? $0.bundleURL?.resolvingSymlinksInPath() == bundleURL
+                ? $0.bundleURL?.resolvingSymlinksInPath() == Self.bundleURL
                 : $0.bundleIdentifier == "dev.sadiksaifi.Remora")
         }
     }
@@ -45,7 +45,7 @@ struct ApplicationClient {
     }
 
     private func openApplication() throws {
-        guard Bundle(url: bundleURL)?.bundleIdentifier == "dev.sadiksaifi.Remora" else {
+        guard Bundle(url: Self.bundleURL)?.bundleIdentifier == "dev.sadiksaifi.Remora" else {
             throw ControlFailure(.appUnavailable, "The helper could not find its containing Remora.app.")
         }
         let configuration = NSWorkspace.OpenConfiguration()
@@ -60,7 +60,7 @@ struct ApplicationClient {
         configuration.appleEvent = NSAppleEventDescriptor(eventClass: AEEventClass(kCoreEventClass),
             eventID: AEEventID(kAEOpenApplication), targetDescriptor: nil,
             returnID: AEReturnID(kAutoGenerateReturnID), transactionID: AETransactionID(kAnyTransactionID))
-        NSWorkspace.shared.openApplication(at: bundleURL, configuration: configuration, completionHandler: nil)
+        NSWorkspace.shared.openApplication(at: Self.bundleURL, configuration: configuration, completionHandler: nil)
     }
 
     private func waitForReadiness(_ client: ControlClient) async throws {
