@@ -311,3 +311,94 @@ private func movieMediaDuration(_ data: Data, range: Range<Int>? = nil) -> Doubl
     #expect(try rgb(#require(disabled), x: 98, y: 96).allSatisfy { abs($0 - 80) < 8 })
     #expect(count > 30)
 }
+
+@Test(arguments: [1.0, 2.0]) func recordingAgentCursorMovesAndPressesWithoutAScreenObserver(unit: Double) async throws {
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let url = directory.appendingPathComponent("agent-cursor.mov")
+    #expect(FileManager.default.createFile(atPath: url.path, contents: Data()))
+    let frames = try MetalDesktop(device: #require(MTLCreateSystemDefaultDevice()))
+    desktop(width: 640, height: 360, bgra: [80, 80, 80, 0], sink: frames)
+    let state = SessionOverlayState()
+    state.configure(showPointerInRecordings: true, showKeyPresses: false, showAgentPointer: false, scale: unit)
+    state.setDesktopSize(CGSize(width: 640, height: 360))
+    state.setAgentCursorVisible(true)
+    state.setAgentCursorBusy(true)
+    state.moveAgentCursor(to: CGPoint(x: 80, y: 180), animated: false)
+    let media = AppleCaptureMedia(overlays: state)
+    let png = try media.png(frames.snapshot())
+    let started = ProcessInfo.processInfo.systemUptime
+    let movie = try media.movie(at: url, source: frames)
+    try await Task.sleep(for: .milliseconds(350))
+    let moveAt = ProcessInfo.processInfo.systemUptime - started
+    let arrival = state.moveAgentCursor(to: CGPoint(x: 500, y: 140), animated: true)
+    try await Task.sleep(for: .seconds(arrival + 0.4))
+    let pressAt = ProcessInfo.processInfo.systemUptime - started
+    state.pressAgentCursor(depth: CursorTuning.clickDepth, animated: true)
+    state.receive(.agent, .pointer(.init(x: 500, y: 140), .left))
+    try await Task.sleep(for: .milliseconds(130))
+    state.releaseAgentCursor()
+    try await Task.sleep(for: .milliseconds(450))
+    let humanAt = ProcessInfo.processInfo.systemUptime - started
+    state.receive(.human, .pointer(.init(x: 200, y: 100), .left))
+    try await Task.sleep(for: .milliseconds(150))
+    _ = try await movie.finish().get()
+    #expect(try media.png(frames.snapshot()) == png)
+    #expect(state.snapshot().clicks.allSatisfy { $0.source == .human })
+
+    let asset = AVURLAsset(url: url)
+    let reader = try AVAssetReader(asset: asset)
+    let track = try #require(try await asset.loadTracks(withMediaType: .video).first)
+    let output = AVAssetReaderTrackOutput(track: track,
+        outputSettings: [kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA])
+    reader.add(output)
+    #expect(reader.startReading())
+    var resting: CVPixelBuffer?, pressed: CVPixelBuffer?, human: CVPixelBuffer?
+    var centers: [Double] = []
+    var count = 0
+    func rgb(_ buffer: CVPixelBuffer, _ x: Int, _ y: Int) -> [Int] {
+        CVPixelBufferLockBaseAddress(buffer, .readOnly)
+        defer { CVPixelBufferUnlockBaseAddress(buffer, .readOnly) }
+        let bytes = CVPixelBufferGetBaseAddress(buffer)!.assumingMemoryBound(to: UInt8.self)
+            + y * CVPixelBufferGetBytesPerRow(buffer) + x * 4
+        return [Int(bytes[2]), Int(bytes[1]), Int(bytes[0])]
+    }
+    while let sample = output.copyNextSampleBuffer() {
+        let time = CMSampleBufferGetPresentationTimeStamp(sample).seconds
+        let buffer = try #require(CMSampleBufferGetImageBuffer(sample))
+        count += 1
+        if time > moveAt + 0.02 && time < moveAt + arrival {
+            CVPixelBufferLockBaseAddress(buffer, .readOnly)
+            let bytes = CVPixelBufferGetBaseAddress(buffer)!.assumingMemoryBound(to: UInt8.self)
+            let stride = CVPixelBufferGetBytesPerRow(buffer)
+            var sum = 0.0, pixels = 0.0
+            for y in 60..<230 {
+                for x in 40..<550 where bytes[y * stride + x * 4 + 2] > 145 {
+                    sum += Double(x); pixels += 1
+                }
+            }
+            if pixels > 0 { centers.append(sum / pixels) }
+            CVPixelBufferUnlockBaseAddress(buffer, .readOnly)
+        }
+        if time > moveAt + arrival + 0.2 && time < pressAt { resting = buffer }
+        if time > pressAt + 0.08 && time < pressAt + 0.13 { pressed = buffer }
+        if time > humanAt + 0.03 { human = buffer }
+    }
+    #expect(count > 30)
+    #expect(centers.count > 5)
+    #expect((centers.max() ?? 0) - (centers.min() ?? 0) > 200)
+    let rest = try #require(resting), press = try #require(pressed)
+    // The stroke covers the target tip. The fill is the specified premultiplied slate mixture.
+    #expect(rgb(rest, 500, 140).allSatisfy { $0 > 145 })
+    let fill = rgb(rest, 500 + Int(6 * unit), 140 + Int(6 * unit))
+    for (actual, expected) in zip(fill, [90, 105, 124]) { #expect(abs(actual - expected) < 18) }
+    // Halo at 12 points right of its center: F over gray, followed by the white lift.
+    let halo = rgb(rest, 500 + Int(15 * unit), 140 + Int(4 * unit))
+    for (actual, expected) in zip(halo, [68, 79, 90]) { #expect(abs(actual - expected) < 12) }
+    // No agent click ring at radius 14; pressing shrinks the glyph about the same target tip.
+    #expect(rgb(press, 500 + Int(14 * unit), 140)[2] < 135)
+    #expect(rgb(press, 500, 140).allSatisfy { $0 > 125 })
+    // The user's ring still appears, away from the agent sprite.
+    #expect(try rgb(#require(human), 200 + Int(14 * unit), 100)[2] > 150)
+}

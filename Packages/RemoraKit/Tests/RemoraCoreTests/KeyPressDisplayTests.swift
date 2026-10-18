@@ -72,24 +72,19 @@ import RemoraCore
     #expect(large.size.height == 2 * chord.size.height && abs(large.size.width / chord.size.width - 2) < 0.1)
 }
 
-@Test(arguments: [1.0, 2.0]) func screenPointerKeepsPointSizes(connectionScale: Double) throws {
+@Test(arguments: [1.0, 2.0]) func agentCursorSnapshotUsesSharedOverlayUnits(connectionScale: Double) throws {
     let overlays = SessionOverlayState()
-    overlays.configure(showPointerInRecordings: true, showKeyPresses: true, showAgentPointer: true,
-        scale: connectionScale, keyPressSize: 1.5)
+    overlays.configure(showPointerInRecordings: true, showKeyPresses: false, showAgentPointer: true, scale: connectionScale)
+    overlays.setDesktopSize(CGSize(width: 1920, height: 1080))
+    overlays.setAgentCursorVisible(true)
+    overlays.moveAgentCursor(to: CGPoint(x: 400, y: 200), animated: false)
     overlays.receive(.agent, .pointer(.init(x: 400, y: 200), .left))
-    overlays.receive(.agent, .text("hello"))
     let state = overlays.snapshot()
-    let drawing = SessionOverlayDrawing()
-    for pointsPerPixel: CGFloat in [0.25, 0.5, 1, 2] {
-        let sprites = drawing.sprites(state, recording: false, pointsPerPixel: pointsPerPixel)
-        let ring = try #require(sprites.first)
-        let arrow = try #require(sprites.last)
-        #expect(ring.rect.width * pointsPerPixel == 32)
-        #expect(arrow.rect.width * pointsPerPixel == 24 && arrow.rect.height * pointsPerPixel == 27)
-        #expect((arrow.rect.minX + 4 / pointsPerPixel) * pointsPerPixel == 400.5 * pointsPerPixel)
-    }
-    let recorded = try #require(drawing.sprites(state, recording: true).last)
-    #expect(recorded.rect.height == 27 * CGFloat(connectionScale))
+    let frame = try #require(state.agentCursor)
+    #expect(frame.unit == connectionScale)
+    #expect(frame.pose.hotspot == CGPoint(x: 400, y: 200))
+    #expect(state.clicks.isEmpty)
+    #expect(SessionOverlayDrawing().sprites(state, recording: false).isEmpty)
 }
 
 @Test(arguments: [1.0, 2.0], [0.75, 1.0, 1.5, 2.0])

@@ -10,6 +10,11 @@ public final class SessionOverlayDrawing {
         public let image: CGImage
         public let rect: CGRect
         public let opacity: Double
+        public let blurRadius: Double
+
+        public init(image: CGImage, rect: CGRect, opacity: Double, blurRadius: Double = 0) {
+            self.image = image; self.rect = rect; self.opacity = opacity; self.blurRadius = blurRadius
+        }
     }
     /// The recorder's key press glass: the capsule's frame, and its shadow, rim, keycaps and text
     /// in `image` over `imageRect`. The compositor blurs and tints the desktop inside the capsule.
@@ -21,18 +26,7 @@ public final class SessionOverlayDrawing {
         public let dark: Bool
     }
     private var glass: (pill: KeyPressPill, dark: Bool, image: CGImage)?
-    private lazy var arrow = Self.image(width: 24, height: 27) { context in
-        context.translateBy(x: 4, y: 4)
-        let points: [(CGFloat, CGFloat)] = [(0, 0), (0, 15.2), (3.9, 11.5), (6.5, 17.6), (9.2, 16.4), (6.6, 10.5), (12, 10.5)]
-        context.addLines(between: points.map { CGPoint(x: $0.0 * 13 / 15, y: $0.1 * 13 / 15) })
-        context.closePath()
-        context.setShadow(offset: CGSize(width: 0, height: 1), blur: 1.5, color: CGColor(gray: 0, alpha: 0.3))
-        context.setFillColor(Self.blue)
-        context.setStrokeColor(CGColor(gray: 1, alpha: 1))
-        context.setLineWidth(1.5)
-        context.setLineJoin(.round)
-        context.drawPath(using: .fillStroke)
-    }
+    private let glyph = CursorGlyph.path()
     private lazy var ring = Self.image(width: 32, height: 32) { context in
         for (inset, width, color): (CGFloat, CGFloat, CGColor) in [
             (1.5, 1, CGColor(gray: 1, alpha: 0.85)), (3, 2, Self.blue), (4.5, 1, CGColor(gray: 1, alpha: 0.6))
@@ -46,29 +40,52 @@ public final class SessionOverlayDrawing {
 
     public init() {}
 
-    /// Screen consumers supply their view points per desktop pixel; recordings use the connection scale.
+    /// Screen cursor layers read `Snapshot.agentCursor` directly. Only movies use raster sprites.
     public func sprites(_ state: SessionOverlayState.Snapshot, recording: Bool, pointsPerPixel: CGFloat = 1) -> [Sprite] {
+        guard recording, state.showPointerInRecordings else { return [] }
         var result: [Sprite] = []
-        let scale = recording ? state.scale : 1 / pointsPerPixel
-        let pointerVisible = recording ? state.showPointerInRecordings : state.showAgentPointer
-        if pointerVisible {
-            for click in state.clicks where recording || click.source == .agent {
-                result.append(Sprite(image: ring,
-                    rect: CGRect(x: click.point.x + 0.5 - 16 * scale, y: click.point.y + 0.5 - 16 * scale,
-                                 width: 32 * scale, height: 32 * scale),
-                    opacity: 0.85 * pow(max(0, 1 - (state.time - click.time) / 0.5), 2)))
-            }
-            if let point = state.point {
-                if state.owner == .agent {
-                    result.append(Sprite(image: arrow, rect: CGRect(x: point.x + 0.5 - 4 * scale,
-                        y: point.y + 0.5 - 4 * scale, width: 24 * scale, height: 27 * scale), opacity: 1))
-                } else if recording, let image = state.cursor {
-                    result.append(Sprite(image: image, rect: CGRect(x: point.x - state.hotspot.x,
-                        y: point.y - state.hotspot.y, width: CGFloat(image.width), height: CGFloat(image.height)), opacity: 1))
-                }
-            }
+        for click in state.clicks where click.source == .human {
+            result.append(Sprite(image: ring,
+                rect: CGRect(x: click.point.x + 0.5 - 16 * state.scale, y: click.point.y + 0.5 - 16 * state.scale,
+                             width: 32 * state.scale, height: 32 * state.scale),
+                opacity: 0.85 * pow(max(0, 1 - (state.time - click.time) / 0.5), 2)))
         }
+        if state.owner == .human, let point = state.point, let image = state.cursor {
+            result.append(Sprite(image: image, rect: CGRect(x: point.x - state.hotspot.x,
+                y: point.y - state.hotspot.y, width: CGFloat(image.width), height: CGFloat(image.height)), opacity: 1))
+        }
+        if let frame = state.agentCursor, frame.pose.opacity > 0.0001 { result.append(agentCursor(frame)) }
         return result
+    }
+
+    /// One y-down desktop-pixel sprite: slate halo, white lift, then transformed glyph.
+    public func agentCursor(_ frame: AgentCursorFrame) -> Sprite {
+        let pose = frame.pose, unit = frame.unit
+        let radius = max(CursorStyle.haloRadius * pose.haloScale, 20) * unit
+        let rect = CGRect(x: floor(pose.haloCenter.x - radius), y: floor(pose.haloCenter.y - radius),
+            width: ceil(radius * 2) + 2, height: ceil(radius * 2) + 2)
+        let image = Self.image(width: Int(rect.width), height: Int(rect.height)) { context in
+            context.translateBy(x: -rect.minX, y: -rect.minY)
+            func halo(_ color: CGColor, _ stops: [(radius: Double, alpha: Double)]) {
+                let colors = stops.map { color.copy(alpha: $0.alpha)! }
+                let gradient = CGGradient(colorsSpace: CGColorSpace(name: CGColorSpace.sRGB),
+                    colors: colors as CFArray, locations: stops.map { $0.radius / stops.last!.radius })!
+                context.drawRadialGradient(gradient, startCenter: pose.haloCenter, startRadius: 0,
+                    endCenter: pose.haloCenter, endRadius: stops.last!.radius * unit * pose.haloScale, options: [])
+            }
+            halo(CursorStyle.fog, CursorStyle.fogStops)
+            halo(CGColor(gray: 1, alpha: 1), CursorStyle.liftStops)
+            context.translateBy(x: pose.center.x, y: pose.center.y)
+            context.rotate(by: pose.rotation)
+            context.scaleBy(x: unit * pose.scaleAcross, y: unit * pose.scaleAlong)
+            context.addPath(glyph)
+            context.setFillColor(frame.fill)
+            context.setStrokeColor(CursorStyle.stroke)
+            context.setLineWidth(CursorStyle.strokeWidth)
+            context.setLineJoin(.round)
+            context.drawPath(using: .fillStroke)
+        }
+        return Sprite(image: image, rect: rect, opacity: pose.opacity, blurRadius: pose.blurRadius)
     }
 
     public func keyPress(_ state: SessionOverlayState.Snapshot, desktop: CGSize) -> Glass? {
