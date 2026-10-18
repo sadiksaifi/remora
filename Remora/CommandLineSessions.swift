@@ -43,7 +43,9 @@ extension CommandLineController {
             "port": .number(Double(session.attemptConnection.port)), "state": .string(state), "reason": reason,
             "startedBy": .string(session.startedBy), "dynamicResize": .bool(session.supportsDynamicResize),
             "desktop": size.map { .array([.number(Double($0.width)), .number(Double($0.height))]) } ?? .null,
-            "hasFrame": .bool(session.frameSize != nil),
+            "hasFrame": .bool(session.frameSize != nil && session.frameRevision > 0),
+            "frame": .number(Double(session.frameRevision)),
+            "recording": recordingInfo(session),
             "sizing": .string((session.attemptResolution ?? session.attemptConnection.resolution) == .fitToWindow ? "fit" : "fixed"),
             "prompt": session.pendingPrompt.map { .string($0.id.uuidString) } ?? .null
         ])
@@ -83,14 +85,14 @@ extension CommandLineController {
         throw ControlFailure(.notFound, "Prompt not found.", hint: "Inspect prompt list.")
     }
 
-    private func promptRequired(_ session: SessionViewController) throws {
+    func promptRequired(_ session: SessionViewController) throws {
         if let prompt = session.pendingPrompt {
             throw ControlFailure(.promptRequired, "Session \(session.attemptID) requires prompt \(prompt.id).", hint: "Run remora prompt get \(prompt.id) and remora prompt respond \(prompt.id) connect|cancel.", details: .object(["prompt": .string(prompt.id.uuidString), "session": .string(session.attemptID.uuidString)]))
         }
     }
 
     /// Only command waiters poll. An idle app has no timer or frame demand from this adapter.
-    private func waitFor(_ session: SessionViewController, id: UUID, timeout: Double,
+    func waitFor(_ session: SessionViewController, id: UUID, timeout: Double,
                          disconnected: Bool = false, predicate: () -> Bool) async throws {
         let deadline = ContinuousClock.now.advanced(by: .seconds(timeout))
         while true {

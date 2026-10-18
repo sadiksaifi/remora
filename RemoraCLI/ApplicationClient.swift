@@ -27,6 +27,13 @@ struct ApplicationClient {
                 return .success(try .encoding(AppStatus(running: false)))
             }
         }
+        try await prepare(client)
+        let readOnly = request.command.hasSuffix(".list") || request.command.hasSuffix(".get") || request.command == "wait"
+        return try await client.request(request, timeout: timeout, isMutation: !readOnly)
+    }
+
+    func prepare(_ client: ControlClient) async throws {
+        let wasRunning = running
         do {
             _ = try await client.request(ControlRequest(command: "app.status"), timeout: 1, isMutation: false)
         } catch let failure as ControlFailure where failure.code == .cancelled {
@@ -35,8 +42,6 @@ struct ApplicationClient {
             if !wasRunning { try openApplication() }
             try await waitForReadiness(client)
         }
-        let readOnly = request.command.hasSuffix(".list") || request.command.hasSuffix(".get") || request.command == "wait"
-        return try await client.request(request, timeout: timeout, isMutation: !readOnly)
     }
 
     private func openApplication() throws {

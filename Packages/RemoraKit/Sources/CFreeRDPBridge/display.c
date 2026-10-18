@@ -28,7 +28,7 @@ struct RMDisplay {
     uint32_t observed_width, observed_height;
     bool observed_requested;
     /* What the client wants and what the server was last told. Servers start with updates on. */
-    bool updates_wanted, updates_sent;
+    bool updates_wanted, updates_sent, refresh_pending;
 };
 
 static UINT display_caps(DispClientContext *channel, UINT32 monitors, UINT32 a, UINT32 b) {
@@ -159,6 +159,9 @@ void rm_rdp_set_display_updates(RMRDPSession *session, bool enabled) {
     pthread_mutex_lock(&d->lock);
     if (d->updates_wanted != enabled) {
         d->updates_wanted = enabled;
+        /* A brief suppression can be coalesced before process runs. Keep the refresh
+         * owed to the next observer even when the server never saw the off state. */
+        if (enabled) d->refresh_pending = true;
         SetEvent(d->wake);
     }
     pthread_mutex_unlock(&d->lock);
@@ -192,7 +195,8 @@ static void send_display_updates(RMDisplay *d, bool allow) {
 DWORD rm_display_process(RMDisplay *d) {
     pthread_mutex_lock(&d->lock);
     ResetEvent(d->wake);
-    const bool updates_changed = d->updates_wanted != d->updates_sent;
+    const bool updates_changed = d->updates_wanted != d->updates_sent || (d->updates_wanted && d->refresh_pending);
+    d->refresh_pending = false;
     const bool updates = d->updates_wanted;
     d->updates_sent = updates;
     const bool changed = d->available != d->reported_available;
