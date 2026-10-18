@@ -42,8 +42,8 @@ struct SettingsCommand: AsyncParsableCommand {
         struct Get: AsyncParsableCommand {
             @OptionGroup var options: CommonOptions
             @MainActor func run() async throws {
-                let helper = ApplicationClient().bundleURL.appending(path: "Contents/Helpers/remora")
-                Output.write(.success(CommandLineTool(helper: helper).status), json: options.json)
+                let helper = ApplicationClient.bundleURL.appending(path: "Contents/Helpers/remora")
+                Output.write(.success(CommandLineTool(target: helper).status), json: options.json)
             }
         }
         struct Repair: AsyncParsableCommand {

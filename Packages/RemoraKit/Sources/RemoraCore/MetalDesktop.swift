@@ -20,6 +20,7 @@ public final class MetalDesktop: CaptureSource, Sendable {
 
     public var size: DesktopSize? { state.withLock { $0.storage?.size } }
     public var revision: Int { state.withLock { $0.revision } }
+    public var lastFrameArrival: TimeInterval? { state.withLock { $0.storage == nil ? nil : $0.arrival } }
 
     public func needsSubmission(redraw: Bool) -> Bool {
         state.withLock { $0.pending != nil || (redraw && $0.storage?.hasSubmitted == true) }

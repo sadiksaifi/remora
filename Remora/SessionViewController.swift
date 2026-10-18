@@ -94,6 +94,7 @@ final class SessionViewController: NSViewController {
     }
     private var refreshAfterFrame = 0
     var hasFreshFrame: Bool { frameRevision > refreshAfterFrame && frameSize == desktopSize }
+    var lastFrameArrival: TimeInterval? { renderer?.desktop.lastFrameArrival }
     var captureFrameBaseline: Int { frameBaseline }
     func removeFrameDemand() { display.removeCommandLineDemand() }
 

@@ -122,10 +122,35 @@ private struct KeyboardPane: View {
     }
 }
 
+/// Monospaced, selectable text in a field-like box with a Copy button.
+private struct CopyableText: View {
+    let text: String
+
+    var body: some View {
+        HStack {
+            Text(text)
+                .font(.callout.monospaced())
+                .textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            Button("Copy", systemImage: "doc.on.doc") {
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(text, forType: .string)
+            }
+            .labelStyle(.iconOnly)
+            .buttonStyle(.borderless)
+            .help("Copy")
+        }
+        .padding(.vertical, 5)
+        .padding(.horizontal, 8)
+        .background(Color(nsColor: .textBackgroundColor), in: .rect(cornerRadius: 7))
+        .overlay(RoundedRectangle(cornerRadius: 7).strokeBorder(.separator))
+    }
+}
+
 private struct CommandLinePane: View {
     @AppStorage(AppSettings.showAgentPointerKey) private var showAgentPointer = true
     @State private var state: CommandLineTool.State?
-    private let tool = CommandLineTool(helper: Bundle.main.bundleURL.appending(path: "Contents/Helpers/remora"))
+    private let tool = CommandLineTool(target: Bundle.main.bundleURL.appending(path: "Contents/Helpers/remora"))
     private static let pointerTitle = "Show pointer while the command line controls a session"
 
     var body: some View {
@@ -154,26 +179,11 @@ private struct CommandLinePane: View {
                 if state == .installed {
                     VStack(alignment: .leading, spacing: 7) {
                         Text(CommandLineTool.pathAdvice)
-                        HStack {
-                            Text(CommandLineTool.pathCommand)
-                                .font(.callout.monospaced())
-                                .textSelection(.enabled)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                            Button("Copy", systemImage: "doc.on.doc") {
-                                NSPasteboard.general.clearContents()
-                                NSPasteboard.general.setString(CommandLineTool.pathCommand, forType: .string)
-                            }
-                            .labelStyle(.iconOnly)
-                            .buttonStyle(.borderless)
-                            .help("Copy")
-                        }
-                        .padding(.vertical, 5)
-                        .padding(.horizontal, 8)
-                        .background(Color(nsColor: .textBackgroundColor), in: .rect(cornerRadius: 7))
-                        .overlay(RoundedRectangle(cornerRadius: 7).strokeBorder(.separator))
+                        CopyableText(text: CommandLineTool.pathCommand)
                     }
                 }
             }
+            AgentSkillSection()
             Section {
                 Toggle(isOn: $showAgentPointer) {
                     Text(Self.pointerTitle)
@@ -194,5 +204,62 @@ private struct CommandLinePane: View {
     private func perform(_ action: () throws -> Void) {
         do { try action() } catch { NSApplication.shared.presentError(error) }
         state = tool.state
+    }
+}
+
+/// Links the bundled agent skill into each detected agent's skills folder.
+private struct AgentSkillSection: View {
+    @State private var states: [AgentSkill.Agent: CommandLineTool.State] = [:]
+    private let skill = AgentSkill(app: Bundle.main.bundleURL)
+
+    private var agents: [AgentSkill.Agent] { AgentSkill.Agent.allCases.filter { states[$0] != nil } }
+    private var installable: [AgentSkill.Agent] { agents.filter { states[$0] != .installed && states[$0] != .conflict } }
+
+    var body: some View {
+        Section {
+            LabeledContent {
+                Button("Install for All") { perform { for agent in installable { try skill.link(for: agent).install() } } }
+                    .disabled(installable.isEmpty)
+                    .accessibilityIdentifier("installAgentSkillForAll")
+            } label: {
+                Text("Agent skill")
+                Text(agents.isEmpty ? "No supported AI agents were found on this Mac." : "Teaches AI agents to use the remora command.")
+            }
+            ForEach(agents, id: \.self) { agent in
+                let link = skill.link(for: agent)
+                LabeledContent {
+                    switch states[agent] {
+                    case .notInstalled: Button("Install") { perform(link.install) }
+                    case .installed, .broken: Button("Remove") { perform(link.uninstall) }
+                    case .conflict: Button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting([link.link]) }
+                    case nil: EmptyView()
+                    }
+                } label: {
+                    Text(agent.name)
+                    switch states[agent] {
+                    case .installed, .broken: StatusLabel(text: "Installed at \(link.displayPath)", ok: true)
+                    case .conflict: StatusLabel(text: "Another skill is in use at \(link.displayPath).", ok: false)
+                    case .notInstalled, nil: Text("Not installed")
+                    }
+                }
+                .accessibilityIdentifier("agentSkill-\(agent.rawValue)")
+            }
+            VStack(alignment: .leading, spacing: 7) {
+                Text("For other agents, link this folder into their skills folder.")
+                CopyableText(text: skill.folder.path)
+            }
+        }
+        .onAppear(perform: refresh)
+        // The user may install an agent or change its skills folder while Remora is in the background.
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in refresh() }
+    }
+
+    private func refresh() {
+        states = Dictionary(uniqueKeysWithValues: AgentSkill.Agent.allCases.filter(\.isDetected).map { ($0, skill.link(for: $0).state) })
+    }
+
+    private func perform(_ action: () throws -> Void) {
+        do { try action() } catch { NSApplication.shared.presentError(error) }
+        refresh()
     }
 }

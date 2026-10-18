@@ -185,7 +185,10 @@ static void send_display_updates(RMDisplay *d, bool allow) {
         .left = 0, .top = 0,
         .right = (UINT16)(width > 0 ? width - 1 : 0), .bottom = (UINT16)(height > 0 ? height - 1 : 0)
     };
-    BOOL sent = context->update->SuppressOutput(context, allow ? 1 : 0, allow ? &desktop : NULL);
+    /* Force a real off-to-on transition even if the previous suppression was coalesced. */
+    BOOL sent = context->update->SuppressOutput(context, 0, NULL);
+    if (sent && allow)
+        sent = context->update->SuppressOutput(context, 1, &desktop);
     if (sent && allow)
         sent = context->update->RefreshRect(context, 1, &desktop);
     os_log_info(d->log, "Display updates: %{public}s, server support=%d, status=%d", allow ? "on" : "off",

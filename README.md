@@ -38,6 +38,8 @@ remora help agent
 
 `remora help agent` is the guide for agents. When an agent is in control, the tab shows it, and you can take over at any moment.
 
+AI agents should run `remora help agent` first. To install the guide as an agent skill, use Settings > Command Line or `remora skill install`. It also works with `npx skills add sadiksaifi/remora`.
+
 ## License
 
 GPL-3.0. See [LICENSE](LICENSE).

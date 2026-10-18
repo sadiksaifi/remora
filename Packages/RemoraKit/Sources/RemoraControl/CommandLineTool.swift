@@ -1,7 +1,7 @@
 import Foundation
 
-/// The `remora` link on the user's PATH. Remora creates, replaces and removes only links to a Remora helper,
-/// so it never overwrites or deletes a file it didn't create.
+/// A link Remora owns: the `remora` command on the user's PATH, or the `remora` folder in an agent's skills folder.
+/// Remora creates, replaces and removes only its own links, so it never overwrites or deletes a file it didn't create.
 public struct CommandLineTool: Sendable {
     public enum State: String, Sendable {
         case notInstalled, installed
@@ -26,12 +26,16 @@ public struct CommandLineTool: Sendable {
     public static let pathCommand = #"export PATH="$HOME/.local/bin:$PATH""#
 
     public let link: URL
-    public let helper: URL
+    public let target: URL
+    private let adoptsOtherCopies: Bool
 
-    /// `helper` is the bundled executable, `Remora.app/Contents/Helpers/remora`.
-    public init(helper: URL, link: URL = FileManager.default.homeDirectoryForCurrentUser.appending(path: ".local/bin/remora")) {
-        self.helper = helper
+    /// `target` is the file the link points to, such as the bundled executable, `Remora.app/Contents/Helpers/remora`.
+    /// With `adoptsOtherCopies`, a link to a Remora helper in another copy of Remora also counts as Remora's.
+    public init(target: URL, link: URL = FileManager.default.homeDirectoryForCurrentUser.appending(path: ".local/bin/remora"),
+                adoptsOtherCopies: Bool = true) {
+        self.target = target
         self.link = link
+        self.adoptsOtherCopies = adoptsOtherCopies
     }
 
     /// The link's path for display, such as ~/.local/bin/remora.
@@ -49,7 +53,7 @@ public struct CommandLineTool: Sendable {
         switch state {
         case .notInstalled:
             try FileManager.default.createDirectory(at: link.deletingLastPathComponent(), withIntermediateDirectories: true)
-            try FileManager.default.createSymbolicLink(at: link, withDestinationURL: helper)
+            try FileManager.default.createSymbolicLink(at: link, withDestinationURL: target)
         case .conflict: throw Failure.conflict(displayPath)
         case .installed, .broken: try repair()
         }
@@ -58,7 +62,7 @@ public struct CommandLineTool: Sendable {
     /// Points Remora's link at this copy of Remora.
     public func repair() throws {
         try uninstall()
-        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: helper)
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: target)
     }
 
     public func uninstall() throws {
@@ -69,10 +73,11 @@ public struct CommandLineTool: Sendable {
         }
     }
 
-    /// A symbolic link to a Remora helper, here or in a moved or deleted copy of Remora.
+    /// A symbolic link to the target, or with `adoptsOtherCopies` to a Remora helper in a moved or deleted copy of Remora.
     private var isOwned: Bool {
         guard let destination = try? FileManager.default.destinationOfSymbolicLink(atPath: link.path) else { return false }
-        let target = URL(fileURLWithPath: destination, relativeTo: link.deletingLastPathComponent()).standardizedFileURL
-        return target == helper.standardizedFileURL || target.path.hasSuffix("/Remora.app/Contents/Helpers/remora")
+        let found = URL(fileURLWithPath: destination, relativeTo: link.deletingLastPathComponent()).standardizedFileURL
+        return found == target.standardizedFileURL
+            || adoptsOtherCopies && found.path.hasSuffix("/Remora.app/Contents/Helpers/remora")
     }
 }

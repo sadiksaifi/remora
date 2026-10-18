@@ -24,6 +24,10 @@ targets:
     sources:
       - path: Remora
         type: syncedFolder
+      # Copied whole to Contents/Resources/skills/remora.
+      - path: skills
+        type: folder
+        buildPhase: resources
     dependencies:
       - target: RemoraCLI
         embed: true
@@ -37,6 +41,13 @@ targets:
         product: RemoraCore
       - package: RemoraKit
         product: RDPSession
+    # Parses every `remora ...` line in the skill with the embedded, signed CLI, without running it.
+    postBuildScripts:
+      - name: Check skill commands
+        script: '"$TARGET_BUILD_DIR/$CONTENTS_FOLDER_PATH/Helpers/remora" __check-skill "$SRCROOT/skills/remora/SKILL.md"'
+        inputFiles:
+          - $(SRCROOT)/skills/remora/SKILL.md
+        basedOnDependencyAnalysis: false
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: dev.sadiksaifi.Remora
