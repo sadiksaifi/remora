@@ -34,7 +34,6 @@ extension CommandLineController {
         guard let input = backend.beginAgentInput() else { throw ControlFailure(.notConnected, "The session is not connected.") }
         session.activeAgentInput = input
         session.agentInputCancellation = nil
-        session.agentInputReleaseSucceeded = true
         var finished = false
         defer { session.activeAgentInput = nil; session.agentInputCancellation = nil }
         let deadline = ContinuousClock.now.advanced(by: .seconds(min(60, request.timeout ?? 10)))
@@ -70,16 +69,15 @@ extension CommandLineController {
                 }
             }
             try check()
-            session.agentInputReleaseSucceeded = await input.finish()
             finished = true
-            guard session.agentInputReleaseSucceeded else { throw ControlFailure(.backendFailed, "The RDP input release failed. The transport was closed.") }
+            guard await input.finish() else { throw ControlFailure(.backendFailed, "The RDP input release failed. The transport was closed.") }
             try check()
             return .object(["session": .string(id.uuidString), "submittedActions": .number(Double(completed)),
                 "submittedEvents": .number(Double(submitted)), "acknowledgment": .string("protocol-submission")])
         } catch {
             if !finished {
                 input.cancel()
-                session.agentInputReleaseSucceeded = await input.finish()
+                await input.finish()
             }
             let failure: ControlFailure
             if let cancelled = session.agentInputCancellation { failure = cancelled }

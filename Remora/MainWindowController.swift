@@ -312,7 +312,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
             menuItem.state = session?.hasKeyboard == true ? .on : .off
             return session?.isConnected == true && session === sessionTabs.selectedSession
         case #selector(takeOverAgentControl(_:)): return session?.control.canTakeOver == true
-        case #selector(resumeAgentControl(_:)): return session?.control.canResume == true
+        case #selector(resumeAgentControl(_:)): return session?.isConnected == true && session?.control.canResume == true
         case #selector(stopAgentControl(_:)): return session?.control.canStop == true
         case #selector(stopAllAgentControl(_:)):
             return sessionTabs.tabs.contains { sessionTabs.session(for: $0.id)?.control.canStop == true }

@@ -77,8 +77,9 @@ public struct SessionControl: Sendable {
         }
     }
 
+    /// Settles a pending handover. A human pause survives, so only Resume returns control.
     public mutating func ended() {
-        if state != .idle { state = .stopped }
+        if let handover { state = handover } else if state == .active { state = .stopped }
         handover = nil
         observationRequired = false
     }

@@ -124,7 +124,6 @@ final class SessionViewController: NSViewController {
     private(set) var control = SessionControl()
     static let controlDidChange = Notification.Name("SessionControlDidChange")
     private var controlFrameDemand = false
-    var agentInputReleaseSucceeded = true
     var activeAgentInput: AgentInputRequest?
     var agentInputCancellation: ControlFailure?
 
@@ -828,19 +827,12 @@ extension SessionViewController {
         cancelAgentInput(ControlFailure(stopping ? .cancelled : .userActive,
             stopping ? "Agent control was stopped." : "The user has taken control of this session.",
             hint: stopping ? "" : "Wait for user.resumed, then take a new screenshot."))
-        let attempt = attemptID
-        let backend = session
-        // The executor owns finish(), including its transport-failure cleanup.
+        // The executor owns finish(). A failed release closes the transport, and a
+        // recovered reconnect releases every source before new input, so neither
+        // case can leave agent-held state under human input. A session that ends
+        // meanwhile has already settled the handover.
         while activeAgentInput != nil {
             await Task.detached { try? await Task.sleep(for: .milliseconds(5)) }.value
-        }
-        guard attemptID == attempt else {
-            if let backend, session === backend { disconnect() }
-            throw ControlFailure(.sessionEnded, "The session attempt was replaced during handover.")
-        }
-        guard isConnected, agentInputReleaseSucceeded else {
-            disconnect()
-            throw ControlFailure(.backendFailed, "The session ended before control could be transferred.")
         }
         control.completeHandover()
         applyControl()

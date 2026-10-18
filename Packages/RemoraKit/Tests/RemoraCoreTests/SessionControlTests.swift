@@ -67,16 +67,20 @@ import Testing
     #expect(throws: SessionControl.Refusal.observationRequired) { try control.attach() }
 }
 
-@Test func endingASessionClearsPendingHandoverAndDemand() throws {
+@Test func endingASessionSettlesHandoverAndKeepsAPause() throws {
     var control = SessionControl()
     try control.attach()
     control.beginHandover(stopping: false, frame: 2)
     control.ended()
-    control.completeHandover()
-    #expect(control.state == .stopped)
+    #expect(control.state == .paused)
     #expect(control.allowsHumanInput)
     #expect(!control.isTransferring)
-    #expect(!control.needsFrames)
+    #expect(throws: SessionControl.Refusal.userActive) { try control.attach() }
+    var active = SessionControl()
+    try active.attach()
+    active.ended()
+    #expect(active.state == .stopped)
+    #expect(!active.needsFrames)
 }
 
 @Test func resumeTreatsAReplacedFrameCounterAsChanged() throws {
@@ -87,4 +91,22 @@ import Testing
     control.invalidateObservation()
     // A new session attempt can reach the same frame number with different pixels.
     #expect(control.resume(frame: 1)?.screenChanged == true)
+}
+
+@Test func stopAllSkipsUncontrolledTabsAndStopsPausedOnes() throws {
+    var idle = SessionControl()
+    let stoppedIdle = idle.beginHandover(stopping: true, frame: 0)
+    #expect(!stoppedIdle)
+    var paused = SessionControl()
+    try paused.attach()
+    paused.beginHandover(stopping: false, frame: 4)
+    paused.completeHandover()
+    paused.record(.key)
+    let stoppedPaused = paused.beginHandover(stopping: true, frame: 5)
+    #expect(stoppedPaused)
+    paused.completeHandover()
+    #expect(paused.state == .stopped)
+    let stoppedAgain = paused.beginHandover(stopping: true, frame: 6)
+    #expect(!stoppedAgain)
+    #expect(paused.resume(frame: 6)?.counts.keys == 1)
 }
