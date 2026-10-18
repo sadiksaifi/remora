@@ -135,7 +135,7 @@ private struct GeneralPane: View {
                 .accessibilityIdentifier("saveLocation")
                 Toggle(isOn: $showPointer) {
                     Text(Self.pointerTitle)
-                    Text("Recordings show the pointer and a ring on each click. Screenshots never do.")
+                    Text("Recordings show your pointer with a ring on each click, and the command line's cursor. Screenshots never do.")
                 }
                 .accessibilityLabel(Self.pointerTitle)
                 .accessibilityIdentifier("showPointerInRecordings")
@@ -245,7 +245,7 @@ private struct CommandLinePane: View {
             Section {
                 Toggle(isOn: $showAgentPointer) {
                     Text(Self.pointerTitle)
-                    Text("A blue arrow marks where the command line last pointed or clicked. It never appears in screenshots.")
+                    Text("A cursor glides to each point the command line moves to or clicks. It never appears in screenshots.")
                 }
                 .accessibilityLabel(Self.pointerTitle)
                 .accessibilityIdentifier("showAgentPointer")

@@ -34,8 +34,13 @@ extension CommandLineController {
         guard let input = backend.beginAgentInput() else { throw ControlFailure(.notConnected, "The session is not connected.") }
         session.activeAgentInput = input
         session.agentInputCancellation = nil
+        session.inputOverlays.setAgentCursorBusy(true)
         var finished = false
-        defer { session.activeAgentInput = nil; session.agentInputCancellation = nil }
+        defer {
+            session.activeAgentInput = nil
+            session.agentInputCancellation = nil
+            session.inputOverlays.setAgentCursorBusy(false)
+        }
         let deadline = ContinuousClock.now.advanced(by: .seconds(min(60, request.timeout ?? 10)))
         var completed = 0
         var submitted = 0
@@ -51,6 +56,32 @@ extension CommandLineController {
             }
             guard ContinuousClock.now < deadline else { throw ControlFailure(.timeout, "The input command timed out.") }
         }
+        var skipCursorWaits = false
+        var cursorTarget: CGPoint?
+        var remainingDelay = plan.duration
+        func wait(_ seconds: Double, while shouldWait: () -> Bool = { true }) async throws {
+            let until = min(deadline, ContinuousClock.now.advanced(by: .seconds(seconds)))
+            while ContinuousClock.now < until {
+                try check()
+                guard shouldWait() else { return }
+                try await Task.sleep(until: min(until, ContinuousClock.now.advanced(by: .milliseconds(10))), clock: .continuous)
+            }
+        }
+        func cursorWait(_ seconds: Double) async throws {
+            guard seconds > 0 else { return }
+            // Reserve the existing input delays too, so cursor time cannot consume their budget.
+            if ContinuousClock.now.advanced(by: .seconds(seconds + remainingDelay / 1000 + 1)) > deadline {
+                skipCursorWaits = true
+            }
+            try await wait(seconds, while: {
+                guard !skipCursorWaits, session.isAgentCursorPresented else {
+                    if let cursorTarget { session.inputOverlays.moveAgentCursor(to: cursorTarget, animated: false) }
+                    session.inputOverlays.releaseAgentCursor()
+                    return false
+                }
+                return true
+            })
+        }
         do {
             for step in plan.steps {
                 try check()
@@ -59,12 +90,21 @@ extension CommandLineController {
                     try await input.send(event, deadline: deadline)
                     submitted += 1
                 case .delay(let milliseconds):
-                    let until = min(deadline, ContinuousClock.now.advanced(by: .milliseconds(milliseconds)))
-                    // Poll cancellation from Take Over while held in a delay.
-                    while ContinuousClock.now < until {
-                        try check()
-                        try await Task.sleep(until: min(until, ContinuousClock.now.advanced(by: .milliseconds(10))), clock: .continuous)
-                    }
+                    try await wait(milliseconds / 1000)
+                    remainingDelay -= milliseconds
+                case .cursorMove(let point):
+                    cursorTarget = CGPoint(x: Int(point.x), y: Int(point.y))
+                    let animated = session.isAgentCursorPresented && !skipCursorWaits
+                    let delay = session.inputOverlays.moveAgentCursor(to: cursorTarget!, animated: animated)
+                    try await cursorWait(delay)
+                case .cursorFollow(let point):
+                    session.inputOverlays.followAgentCursor(to: CGPoint(x: Int(point.x), y: Int(point.y)))
+                case .cursorPress(let depth):
+                    session.inputOverlays.pressAgentCursor(depth: depth, animated: session.isAgentCursorPresented && !skipCursorWaits)
+                case .cursorRelease:
+                    session.inputOverlays.releaseAgentCursor()
+                case .cursorWait(let seconds):
+                    try await cursorWait(seconds)
                 case .completed: completed += 1
                 }
             }
@@ -102,11 +142,12 @@ extension CommandLineController {
 private struct InputPlan {
     enum Step {
         case event(AgentInputEvent), delay(Double), completed
+        case cursorMove(RemotePoint), cursorFollow(RemotePoint), cursorPress(Double), cursorRelease, cursorWait(Double)
     }
     var steps: [Step] = []
     private var keys: Set<PhysicalKey> = []
     private var buttons: PointerButtons = []
-    private var duration = 0.0
+    private(set) var duration = 0.0
     private let size: DesktopSize
     private let geometry: ScreenshotGeometry?
     private let capabilities: AgentInputCapabilities
@@ -222,7 +263,9 @@ private struct InputPlan {
         switch request.command {
         case "move":
             try request.validateArguments(["x", "y"])
-            event(.pointer(try point(request), buttons))
+            let target = try point(request)
+            steps.append(.cursorMove(target))
+            event(.pointer(target, buttons))
         case "click", "drag":
             let drag = request.command == "drag"
             try request.validateArguments(drag ? ["from", "to", "button", "modifiers", "durationMs"] : ["x", "y", "button", "count", "modifiers"])
@@ -234,7 +277,11 @@ private struct InputPlan {
             let milliseconds = drag ? try number(request, "durationMs", default: 500) : 0
             guard !drag || (1...10_000).contains(milliseconds) else { throw ControlFailure(.invalidArgument, "Drag duration must be 1 to 10000 milliseconds.") }
             let additions = try modifiers(request)
+            steps.append(.cursorMove(start))
+            steps.append(.cursorWait(0.05))
             for index in 0..<count {
+                steps.append(.cursorPress(drag ? CursorTuning.dragDepth : CursorTuning.clickDepth))
+                steps.append(.cursorWait(CursorTuning.pressHold))
                 event(.pointer(start, buttons))
                 event(.pointer(start, buttons.union(button)))
                 if drag {
@@ -244,10 +291,13 @@ private struct InputPlan {
                         let fraction = Double(sample) / Double(samples)
                         let x = Double(start.x) + (Double(end.x) - Double(start.x)) * fraction
                         let y = Double(start.y) + (Double(end.y) - Double(start.y)) * fraction
-                        event(.pointer(RemotePoint(x: UInt16(x.rounded()), y: UInt16(y.rounded())), buttons.union(button)))
+                        let point = RemotePoint(x: UInt16(x.rounded()), y: UInt16(y.rounded()))
+                        event(.pointer(point, buttons.union(button)))
+                        steps.append(.cursorFollow(point))
                     }
                 } else { delay(20) }
                 event(.pointer(end, buttons))
+                steps.append(.cursorRelease)
                 if index + 1 < count { delay(80) }
             }
             release(additions)
@@ -262,6 +312,7 @@ private struct InputPlan {
             }
             let horizontal = Int32(h), vertical = Int32(v)
             guard horizontal != 0 || vertical != 0 else { throw ControlFailure(.invalidArgument, "Scroll must move at least 1/120 notch.") }
+            steps.append(.cursorMove(at))
             event(.pointer(at, buttons))
             event(.wheel(.init(vertical: vertical, horizontal: horizontal)))
         case "type":
@@ -320,7 +371,13 @@ private struct InputPlan {
             let down = request.command == "button-down"
             guard buttons.contains(button) != down else { throw ControlFailure(.invalidArgument, "The button must be pressed and released in order within this batch.") }
             if down { buttons.insert(button) } else { buttons.remove(button) }
+            steps.append(.cursorMove(point))
+            if down {
+                steps.append(.cursorPress(CursorTuning.clickDepth))
+                steps.append(.cursorWait(CursorTuning.pressHold))
+            }
             event(.pointer(point, buttons))
+            if !down { steps.append(.cursorRelease) }
         default: throw ControlFailure(.invalidArgument, "Unknown input action '\(request.command)'.")
         }
     }

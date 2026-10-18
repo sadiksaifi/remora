@@ -337,11 +337,14 @@ final class AppleCaptureMovie: CaptureMovie, @unchecked Sendable {
                 var decorated = glass.map { Self.composite($0, over: image) } ?? image
                 for sprite in sprites {
                     let rect = sprite.rect
-                    let overlay = CIImage(cgImage: sprite.image)
+                    var overlay = CIImage(cgImage: sprite.image)
                         .transformed(by: CGAffineTransform(scaleX: rect.width / CGFloat(sprite.image.width),
                                                           y: -rect.height / CGFloat(sprite.image.height)))
                         .transformed(by: CGAffineTransform(translationX: rect.minX, y: rect.maxY))
                         .applyingFilter("CIColorMatrix", parameters: ["inputAVector": CIVector(x: 0, y: 0, z: 0, w: sprite.opacity)])
+                    if sprite.blurRadius > 0 {
+                        overlay = overlay.applyingFilter("CIGaussianBlur", parameters: [kCIInputRadiusKey: sprite.blurRadius])
+                    }
                     decorated = overlay.composited(over: decorated)
                 }
                 let scale = min(Double(size.width) / Double(texture.width), Double(size.height) / Double(texture.height))

@@ -38,7 +38,7 @@ let package = Package(
             name: "RemoraCore",
             dependencies: [.product(name: "KeychainAccess", package: "KeychainAccess")]
         ),
-        .testTarget(name: "RemoraCoreTests", dependencies: ["RemoraCore", "CFreeRDPBridge"])
+        .testTarget(name: "RemoraCoreTests", dependencies: ["RemoraCore", "CFreeRDPBridge"], resources: [.copy("CursorReference")])
     ],
     swiftLanguageModes: [.v6]
 )

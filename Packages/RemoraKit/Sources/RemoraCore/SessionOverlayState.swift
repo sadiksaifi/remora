@@ -9,6 +9,8 @@ public final class SessionOverlayState: @unchecked Sendable {
         public let time: TimeInterval
     }
     public struct Snapshot: Sendable {
+        /// Reading a snapshot advances this shared cursor monotonically to `time`.
+        public let agentCursor: AgentCursorFrame?
         public let point: CGPoint?
         public let owner: InputSource
         public let cursor: CGImage?
@@ -28,6 +30,14 @@ public final class SessionOverlayState: @unchecked Sendable {
     }
 
     private let lock = NSLock()
+    private var agentCursor: CursorMotion?
+    private var agentUnit = 1.0
+    private var agentPoint: CGPoint?
+    private var desktopSize = CGSize.zero
+    private var agentVisible = false
+    private var agentBusy = false
+    private var idleSince: TimeInterval?
+    private var reduceMotion = false
     private var point: CGPoint?
     private var owner: InputSource = .human
     private var cursor: CGImage?
@@ -55,6 +65,12 @@ public final class SessionOverlayState: @unchecked Sendable {
     public func reset() {
         change {
             point = nil
+            agentCursor = nil
+            agentPoint = nil
+            desktopSize = .zero
+            agentVisible = false
+            agentBusy = false
+            idleSince = nil
             clicks = []
             press = nil
             humanKeys = KeyPressDisplay(); agentKeys = KeyPressDisplay()
@@ -69,9 +85,100 @@ public final class SessionOverlayState: @unchecked Sendable {
             showPointer = showPointerInRecordings
             showKeys = showKeyPresses
             showAgent = showAgentPointer
+            let oldUnit = cursorUnit
             self.scale = max(1, scale)
+            if oldUnit != cursorUnit { replaceCursorGeometry() }
             if !showKeys { press = nil }
         }
+    }
+
+    private var cursorUnit: Double { sessionOverlayUnit(scale: scale, desktopHeight: desktopSize.height) }
+
+    public func setDesktopSize(_ size: CGSize) {
+        change {
+            guard desktopSize != size else { return }
+            desktopSize = size
+            replaceCursorGeometry()
+        }
+    }
+
+    public func setReduceMotion(_ enabled: Bool) {
+        change { reduceMotion = enabled; agentCursor?.reduceMotion = enabled }
+    }
+
+    /// Control ownership alone sets visibility. Screen/recording settings only select outputs.
+    public func setAgentCursorVisible(_ visible: Bool) {
+        change {
+            guard agentVisible != visible else { return }
+            agentVisible = visible
+            if agentCursor == nil { replaceCursorGeometry() }
+            if !visible, let at = agentCursor?.pose.hotspot { agentCursor?.follow(to: at) }
+            agentCursor?.isVisible = visible
+            updateThinkingWindow()
+        }
+    }
+
+    public func setAgentCursorBusy(_ busy: Bool) {
+        change {
+            agentBusy = busy
+            idleSince = busy ? nil : ProcessInfo.processInfo.systemUptime
+            if !busy { agentCursor?.release() }
+            updateThinkingWindow()
+        }
+    }
+
+    /// Returns the remaining fixed-grid travel time. Points are remote desktop pixels.
+    @discardableResult
+    public func moveAgentCursor(to point: CGPoint, animated: Bool) -> TimeInterval {
+        var delay = 0.0
+        change {
+            agentPoint = point
+            if agentCursor == nil { replaceCursorGeometry() }
+            let target = CGPoint(x: point.x / cursorUnit, y: point.y / cursorUnit)
+            if animated { agentCursor?.move(to: target) }
+            else { agentCursor?.place(at: target) }
+            delay = agentCursor?.arrivalDelay ?? 0
+        }
+        return delay
+    }
+
+    public func followAgentCursor(to point: CGPoint) {
+        change {
+            agentPoint = point
+            agentCursor?.follow(to: CGPoint(x: point.x / cursorUnit, y: point.y / cursorUnit))
+        }
+    }
+
+    public func pressAgentCursor(depth: Double, animated: Bool) {
+        change {
+            agentCursor?.pressDown(depth: depth)
+            // Unpresented commands do not animate or wait for a press.
+            if !animated { agentCursor?.release() }
+        }
+    }
+
+    public func releaseAgentCursor() { change { agentCursor?.release() } }
+
+    private func updateThinkingWindow() {
+        agentCursor?.thinkingWindow = agentVisible && !agentBusy ? idleSince.map { ($0 + 0.5)..<($0 + 30) } : nil
+    }
+
+    private func replaceCursorGeometry() {
+        guard desktopSize.width > 0, desktopSize.height > 0, agentCursor != nil || agentVisible else { return }
+        let pixel = agentCursor.map { CGPoint(x: $0.pose.hotspot.x * agentUnit, y: $0.pose.hotspot.y * agentUnit) }
+        let at = pixel ?? agentPoint ?? point ?? CGPoint(x: desktopSize.width / 2, y: desktopSize.height / 2)
+        let target = CGPoint(x: at.x / cursorUnit, y: at.y / cursorUnit)
+        let bounds = CGRect(x: 0, y: 0, width: desktopSize.width / cursorUnit, height: desktopSize.height / cursorUnit)
+        if agentCursor != nil {
+            agentCursor?.bounds = bounds
+            agentCursor?.place(at: target)
+        } else {
+            agentCursor = CursorMotion(hotspot: target, bounds: bounds, time: ProcessInfo.processInfo.systemUptime)
+        }
+        agentCursor?.reduceMotion = reduceMotion
+        agentCursor?.isVisible = agentVisible
+        agentUnit = cursorUnit
+        updateThinkingWindow()
     }
 
     public func setDarkAppearance(_ dark: Bool) { change { self.dark = dark } }
@@ -88,7 +195,7 @@ public final class SessionOverlayState: @unchecked Sendable {
                 point = CGPoint(x: Int(position.x), y: Int(position.y))
                 owner = source
                 let previous = source == .human ? humanButtons : agentButtons
-                if !buttons.subtracting(previous).isEmpty {
+                if source == .human, !buttons.subtracting(previous).isEmpty {
                     clicks.append(Click(point: point!, source: source, time: now))
                     clicks = Array(clicks.suffix(8))
                 }
@@ -108,9 +215,10 @@ public final class SessionOverlayState: @unchecked Sendable {
 
     public func snapshot(at time: TimeInterval = ProcessInfo.processInfo.systemUptime) -> Snapshot {
         lock.withLock {
+            agentCursor?.advance(to: time)
             let age = time - keyTime
             let text = showKeys && age < 1.5 ? press.map { $0.text + (repeats > 1 ? " ×\(repeats)" : "") } : nil
-            return Snapshot(point: point, owner: owner, cursor: cursor, hotspot: hotspot,
+            return Snapshot(agentCursor: agentCursor.map { AgentCursorFrame(pose: $0.pose, unit: cursorUnit, isSettled: $0.isSettled) }, point: point, owner: owner, cursor: cursor, hotspot: hotspot,
                 clicks: clicks.filter { time - $0.time < 0.5 }, keyText: text, keyIsText: press?.isText ?? false,
                 keyOpacity: min(1, max(0, (1.5 - age) / 0.25)), keySize: keySize, dark: dark,
                 showPointerInRecordings: showPointer, showAgentPointer: showAgent, scale: scale, time: time)
@@ -143,9 +251,10 @@ public final class SessionOverlayState: @unchecked Sendable {
 
     private func change(_ body: () -> Void) {
         lock.withLock {
+            agentCursor?.advance(to: ProcessInfo.processInfo.systemUptime)
             body()
             tick()
-            if timer == nil, !clicks.isEmpty || (showKeys && press != nil) {
+            if timer == nil, needsTicks {
                 let timer = DispatchSource.makeTimerSource(queue: .global(qos: .userInteractive))
                 timer.schedule(deadline: .now() + 1.0 / 60, repeating: 1.0 / 60)
                 timer.setEventHandler { [weak self] in
@@ -158,11 +267,17 @@ public final class SessionOverlayState: @unchecked Sendable {
         }
     }
 
+    private var needsTicks: Bool {
+        !clicks.isEmpty || (showKeys && press != nil) || agentCursor?.isSettled == false
+            || (agentVisible && !agentBusy && !reduceMotion && idleSince.map { ProcessInfo.processInfo.systemUptime < $0 + 30 } == true)
+    }
+
     private func tick() {
         let now = ProcessInfo.processInfo.systemUptime
+        agentCursor?.advance(to: now)
         clicks.removeAll { now - $0.time >= 0.5 }
         if now - keyTime >= 1.5 { press = nil }
         for observer in observers.values { observer(now) }
-        if clicks.isEmpty && press == nil { timer?.cancel(); timer = nil }
+        if !needsTicks { timer?.cancel(); timer = nil }
     }
 }

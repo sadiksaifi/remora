@@ -197,6 +197,9 @@ final class SessionViewController: NSViewController {
         }
         NotificationCenter.default.addObserver(self, selector: #selector(refreshOverlaySettings),
             name: UserDefaults.didChangeNotification, object: nil)
+        NSWorkspace.shared.notificationCenter.addObserver(self, selector: #selector(refreshReduceMotion),
+            name: NSWorkspace.accessibilityDisplayOptionsDidChangeNotification, object: nil)
+        refreshReduceMotion()
         refreshOverlaySettings()
         capture.onRecordingStateChange = { [weak self] in self?.onControlEvent?("recording.state", nil) }
         capture.onRecordingActivityChange = { [weak self] active in
@@ -213,6 +216,7 @@ final class SessionViewController: NSViewController {
     }
 
     isolated deinit {
+        NSWorkspace.shared.notificationCenter.removeObserver(self)
         eventTask?.cancel()
         session?.disconnect()
         cancelChallenge?()
@@ -555,6 +559,7 @@ final class SessionViewController: NSViewController {
         case .desktopSizeChanged(let size, _):
             if desktopSize != size { inputGeometryRevision += 1 }
             desktopSize = size
+            inputOverlays.setDesktopSize(CGSize(width: size.width, height: size.height))
             // The window never resizes for a session. The renderer aspect-fits any desktop size.
             sessionLog.info("Desktop size: \(size.width)x\(size.height)")
         case .dynamicResizeChanged(let available):
@@ -847,8 +852,19 @@ extension SessionViewController {
     @objc private func refreshOverlaySettings() {
         inputOverlays.configure(showPointerInRecordings: AppSettings.showPointerInRecordings,
             showKeyPresses: AppSettings.showKeyPresses,
-            showAgentPointer: control.state == .active && AppSettings.showAgentPointer,
+            showAgentPointer: AppSettings.showAgentPointer,
             scale: overlayScale, keyPressSize: AppSettings.keyPressSize)
+    }
+
+    @objc private func refreshReduceMotion() {
+        inputOverlays.setReduceMotion(NSWorkspace.shared.accessibilityDisplayShouldReduceMotion)
+    }
+
+    /// Timing follows the output that can actually present this tab's cursor.
+    var isAgentCursorPresented: Bool {
+        if AppSettings.showPointerInRecordings, case .recording = capture.recordingState { return true }
+        guard AppSettings.showAgentPointer, let window = desktopView?.window else { return false }
+        return window.occlusionState.contains(.visible) && !window.isMiniaturized
     }
 
     private func updateOverlayCursor(_ cursor: RemoteCursor) {
@@ -924,6 +940,8 @@ extension SessionViewController {
         }
         desktopView?.allowsHumanInput = control.allowsHumanInput
         overlays?.controlChanged(control, agent: agentName, showsStop: isConnected && !sessionEnded)
+        inputOverlays.setAgentCursorVisible(control.state == .active && !sessionEnded)
+        if sessionEnded { inputOverlays.reset() }
         refreshOverlaySettings()
         if control.needsFrames != controlFrameDemand {
             controlFrameDemand = control.needsFrames
