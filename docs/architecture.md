@@ -37,7 +37,15 @@ The toolbar shows the title "Connections", the + button, and search while no tab
 
 A hidden tab's desktop leaves the window. Its display link stops, so it presents no frames, and its keys, buttons, and keyboard capture are released. Its session stays connected and asks the server to stop sending desktop updates. `SessionDisplay` does the same while the window is minimized or fully covered (`NSWindow.occlusionState`). Showing the tab redraws the last frame at once, turns updates back on with a refresh of the whole desktop, and requests the current size for Fit to Window. A credentials or certificate request on a hidden tab marks the tab with an orange dot and waits; its sheet appears when the tab shows. Tabs can't change while the window has a sheet.
 
-Closing a tab disconnects its session. Closing the window asks first while any session is live, then closes every tab.
+Closing a tab disconnects its session. Closing the window keeps every tab and its session.
+
+## Menu bar and Dock
+
+Remora runs from the menu bar. The `terminal` menu bar icon shows while Remora runs. The Dock icon shows only while the main window or Settings is open, including minimized. `AppDelegate` switches the activation policy between `.regular` and `.accessory` when either window shows or closes. Launched with `--cli-background`, Remora starts as `.accessory` with no window.
+
+`StatusMenu` owns the icon. It builds its menu each time the menu opens, so it has no observers or timers. Each tab is an item with its status dot, its name, the state as the subtitle, and a submenu: Show, then Disconnect while the session is live. Then come Open Remora, Settings… and Quit Remora. With no tabs, a disabled No Sessions comes first. `sessionItem(for:)` builds one tab's item and submenu.
+
+The red close button closes the window, and its sessions stay connected. A closed window counts as covered, so `SessionDisplay` stops desktop updates unless the tab records. Launching Remora from Finder, Spotlight or the Dock while it runs shows the window through `applicationShouldHandleReopen(_:hasVisibleWindows:)`. Command-Q, Dock menu Quit and Quit Remora ask "Quit Remora and disconnect N sessions?" while any session is live, and add "Recordings in progress are saved." while a tab records.
 
 ## Session interface
 
@@ -192,7 +200,7 @@ The incremental idle capture storage is the optional observer and arrival metada
 
 Recording forces `SessionDisplay` updates on, including hidden tabs, minimized windows, and occluded windows. Stop removes that override and applies the current visibility state. Automatic RDP reconnect keeps the capture object, movie, timeline, and update override. Frames resume in the same movie after reconnect, with any new desktop size fitted into the original video size. Terminal disconnect finishes the movie. A later manual connection attempt attaches a new renderer with no old desktop texture.
 
-Stop, explicit disconnect, terminal session end, and controller teardown remove the renderer's recording observer before finishing the movie. Tab close and window close use the same controller disconnect path. `SessionTabs` retains captures from closed tabs until they finish, so quitting also waits for movies whose tabs have already disappeared. `AppDelegate.applicationShouldTerminate(_:)` disconnects sessions, returns `.terminateLater`, waits for all captures, and calls `reply(toApplicationShouldTerminate:)`. A pending frame has five seconds to drain. Movie finalization has an eight-second cancellation deadline. The app has a ten-second overall deadline and logs any unfinished destination and partial-file location before replying. Force Quit, process crashes, and power loss cannot run this teardown.
+Stop, explicit disconnect, terminal session end, and controller teardown remove the renderer's recording observer before finishing the movie. Tab close and quit use the same controller disconnect path. `SessionTabs` retains captures from closed tabs until they finish, so quitting also waits for movies whose tabs have already disappeared. `AppDelegate.applicationShouldTerminate(_:)` disconnects sessions, returns `.terminateLater`, waits for all captures, and calls `reply(toApplicationShouldTerminate:)`. A pending frame has five seconds to drain. Movie finalization has an eight-second cancellation deadline. The app has a ten-second overall deadline and logs any unfinished destination and partial-file location before replying. Force Quit, process crashes, and power loss cannot run this teardown.
 
 `ScreenshotDestination` reads `com.apple.screencapture` `location`, expands a tilde, and otherwise uses `~/Desktop`. An explicitly configured location that cannot be written produces a typed error rather than silently saving somewhere else. Names use local time, for example `Remora - Office - 2026-10-18 at 03.40.12.png` or `.mov`. Unsafe filename characters are replaced with hyphens. An exclusive file creation reserves the name; collisions add ` (2)`, ` (3)`, and so on. Movie encoding uses a unique hidden `.Remora-<UUID>.partial.mov` in that folder while the destination stays reserved. Successful finish atomically replaces that empty reservation. Failed writes delete the reservation and partial movie. A cleanup error reports the remaining path.
 
@@ -206,7 +214,7 @@ A saved or copied screenshot shows "Screenshot Saved" or "Screenshot Copied" in 
 
 A start or screenshot failure shows a "Capture Failed" warning sheet with the failure's localized description. Every stop path ends in `onRecordingActivityChange(false)`, which awaits the shared stop result once, so user stop, encoder failure, and disconnect report a failure exactly once. When cleanup cannot remove a reserved or partial file, the core's description names its path, so the sheet shows it. A failure on a hidden tab marks it with the orange dot and shows when the tab shows. It waits in its own slot, so it never replaces a pending credentials or certificate request; AppKit shows the second sheet after the first ends.
 
-When any tab records or finishes a recording, the window close sheet adds "Recordings in progress are saved." Quit shows no capture UI and is bounded by the ten-second finalization deadline above.
+When any tab records or finishes a recording, the quit alert adds "Recordings in progress are saved." Quit shows no capture UI and is bounded by the ten-second finalization deadline above.
 
 ### Verification and remaining work
 
@@ -222,5 +230,5 @@ The on-screen verifier should use only a development instance it launches itself
 - Resize a Fit to Window session during recording. Check fixed movie dimensions, preserved aspect ratio, and black bars.
 - Check that idle time remains in the movie duration and playback seeks correctly.
 - Exercise automatic reconnect while recording, then verify one playable file with the reconnect interval and resumed desktop frames.
-- Separately test stop, tab close, Disconnect, terminal session end, window close through the Disconnect sheet, and normal app quit. Open every resulting movie after finalization.
+- Separately test stop, tab close, Disconnect, terminal session end, and app quit through the quit alert. Open every resulting movie after finalization.
 - Check the observable finishing and failed states through the completed UI, including a destination that cannot be written. Confirm the app reports failures and no unexplained partial file remains.
