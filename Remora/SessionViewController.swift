@@ -26,7 +26,6 @@ final class SessionViewController: NSViewController {
     private var commandLine = false
     private var renderer: FrameRenderer?
     private(set) var desktopSize: DesktopSize?
-    private(set) var resizeRevision = 0
     var frameSize: DesktopSize? { renderer?.desktop.size }
     var supportsDynamicResize: Bool { session?.supportsDynamicResize == true }
     enum Prompt {
@@ -311,7 +310,6 @@ final class SessionViewController: NSViewController {
         attemptID = UUID()
         attemptConnection = connection
         desktopSize = nil
-        resizeRevision = 0
         state = .connecting
         let connectingView = showStatus(.connecting)
         do {
@@ -454,9 +452,8 @@ final class SessionViewController: NSViewController {
             }
         case .remoteClipboardText(let text):
             clipboardSync?.receiveRemoteText(text)
-        case .desktopSizeChanged(let size, let requested):
+        case .desktopSizeChanged(let size, _):
             desktopSize = size
-            if requested { resizeRevision += 1 }
             // The window never resizes for a session. The renderer aspect-fits any desktop size.
             sessionLog.info("Desktop size: \(size.width)x\(size.height)")
         case .dynamicResizeChanged(let available):

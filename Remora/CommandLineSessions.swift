@@ -184,6 +184,9 @@ extension CommandLineController {
             session.disconnectSession()
             try await waitFor(session, id: id, timeout: timeout, disconnected: true) { !session.state.isLive }
             if case .failure(let failure) = await session.stopRecording() { throw ControlFailure(.captureFailed, failure.localizedDescription) }
+            guard session.attemptID == id, sessions.session(for: session.connection.id) === session else {
+                throw ControlFailure(.sessionEnded, "The session attempt was closed or replaced.", hint: "Inspect session list.")
+            }
             if request.command == "session.close" { sessions.close(session.connection.id) }
         case "session.reconnect":
             let noWait = try request.flag("noWait")
@@ -200,14 +203,12 @@ extension CommandLineController {
             }
         case "session.resize":
             let resolution = try parseResolution(request.string("resolution", required: true)!)
-            let revision = session.resizeRevision
             try session.resize(resolution)
             if case .fixed(let width, let height) = resolution, session.desktopSize != .init(width: width, height: height) {
                 session.addFrameDemand()
                 defer { session.removeFrameDemand() }
-                try await waitFor(session, id: id, timeout: timeout) { session.resizeRevision > revision }
-                guard session.desktopSize == .init(width: width, height: height) else {
-                    throw ControlFailure(.unsupported, "The server confirmed a different desktop size.", hint: "Inspect session get for the effective dimensions.")
+                try await waitFor(session, id: id, timeout: timeout) {
+                    session.desktopSize == .init(width: width, height: height)
                 }
             }
         case "wait":
