@@ -88,6 +88,7 @@ public struct ScrollAccumulator: Sendable {
 public struct KeyboardState: Sendable {
     private var pressed: Set<UInt16> = []
     private var capsLockOn = false
+    private var staleModifiers: UInt = 0
 
     public init() {}
 
@@ -109,11 +110,11 @@ public struct KeyboardState: Sendable {
             capsLockOn = on
             return [KeyInput(keyCode: keyCode, isDown: true), KeyInput(keyCode: keyCode, isDown: false)]
         }
-        // Accessibility-generated flags events can carry keyCode zero. The
-        // device flags still describe both sides, so reconcile the full state.
+        let flags = modifierFlags(rawFlags, keyCode: keyCode)
+        staleModifiers &= flags
         var changes: [KeyInput] = []
         for key: UInt16 in [0x36, 0x37, 0x38, 0x3A, 0x3B, 0x3C, 0x3D, 0x3E] {
-            let down = rawFlags & Self.modifierMask(key)! != 0
+            let down = flags & ~staleModifiers & Self.modifierMask(key)! != 0
             guard down != pressed.contains(key) else { continue }
             if down { pressed.insert(key) } else { pressed.remove(key) }
             changes.append(KeyInput(keyCode: key, isDown: down))
@@ -127,9 +128,32 @@ public struct KeyboardState: Sendable {
         return releases
     }
 
-    public mutating func reset(capsLockOn: Bool) {
+    public mutating func reset(capsLockOn: Bool, rawFlags: UInt = 0) {
         pressed.removeAll()
         self.capsLockOn = capsLockOn
+        staleModifiers = 0
+        staleModifiers = modifierFlags(rawFlags, keyCode: 0)
+    }
+
+    /// Aggregate-only accessibility events omit the side. Retain known held sides,
+    /// including suppressed keys after focus loss; otherwise choose the event's side or left.
+    private func modifierFlags(_ rawFlags: UInt, keyCode: UInt16) -> UInt {
+        var flags: UInt = 0
+        for (aggregate, left, right): (UInt, UInt16, UInt16) in [
+            (0x20000, 0x38, 0x3C), (0x40000, 0x3B, 0x3E),
+            (0x80000, 0x3A, 0x3D), (0x100000, 0x37, 0x36)
+        ] {
+            let mask = Self.modifierMask(left)! | Self.modifierMask(right)!
+            let device = rawFlags & mask
+            if device != 0 { flags |= device }
+            else if rawFlags & aggregate != 0 {
+                let held = [left, right].reduce(staleModifiers & mask) {
+                    $0 | (pressed.contains($1) ? Self.modifierMask($1)! : 0)
+                }
+                flags |= held != 0 ? held : Self.modifierMask(keyCode == right ? right : left)!
+            }
+        }
+        return flags
     }
 
     private static func modifierMask(_ key: UInt16) -> UInt? {

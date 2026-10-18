@@ -9,6 +9,31 @@ import Testing
     #expect(state.flagsChanged(keyCode: 0, rawFlags: 0) == [KeyInput(keyCode: 0x36, isDown: false)])
 }
 
+@Test func aggregateModifiersPreserveKnownSidesWithoutAddingAnotherKey() {
+    for (aggregate, left, right, rightMask): (UInt, UInt16, UInt16, UInt) in [
+        (0x20000, 0x38, 0x3C, 0x04), (0x40000, 0x3B, 0x3E, 0x2000),
+        (0x80000, 0x3A, 0x3D, 0x40), (0x100000, 0x37, 0x36, 0x10)
+    ] {
+        var state = KeyboardState()
+        #expect(state.flagsChanged(keyCode: 0, rawFlags: aggregate) == [KeyInput(keyCode: left, isDown: true)])
+        #expect(state.flagsChanged(keyCode: 0, rawFlags: aggregate).isEmpty)
+        #expect(state.flagsChanged(keyCode: 0, rawFlags: 0) == [KeyInput(keyCode: left, isDown: false)])
+        #expect(state.flagsChanged(keyCode: right, rawFlags: aggregate | rightMask) == [KeyInput(keyCode: right, isDown: true)])
+        #expect(state.flagsChanged(keyCode: 0, rawFlags: aggregate).isEmpty)
+        #expect(state.flagsChanged(keyCode: 0, rawFlags: 0) == [KeyInput(keyCode: right, isDown: false)])
+    }
+}
+
+@Test func focusResetSuppressesHeldModifiersAcrossAggregateAndDeviceEvents() {
+    var state = KeyboardState()
+    state.reset(capsLockOn: false, rawFlags: 0x42000) // Right Control held at focus reset.
+    #expect(state.flagsChanged(keyCode: 0, rawFlags: 0x40000).isEmpty)
+    #expect(state.flagsChanged(keyCode: 0x3B, rawFlags: 0x42001) == [KeyInput(keyCode: 0x3B, isDown: true)])
+    #expect(state.flagsChanged(keyCode: 0, rawFlags: 0x40000).isEmpty)
+    #expect(state.flagsChanged(keyCode: 0, rawFlags: 0) == [KeyInput(keyCode: 0x3B, isDown: false)])
+    #expect(state.flagsChanged(keyCode: 0, rawFlags: 0x40000) == [KeyInput(keyCode: 0x3B, isDown: true)])
+}
+
 @Test func eachModifierSideReleasesIndependently() {
     let modifiers: [(UInt16, UInt, UInt16, UInt)] = [
         (0x38, 0x02, 0x3C, 0x04), (0x3B, 0x01, 0x3E, 0x2000),
