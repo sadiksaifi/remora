@@ -269,11 +269,23 @@ private struct InputPlan {
             try request.validateArguments(["text"])
             let text = try request.string("text", required: true)!
             // Check before expanding the text into steps.
-            guard duration + Double(text.unicodeScalars.count) * 5 <= 60_000 else {
+            let count = text.reduce(0) { $0 + ($1 == "\r\n" ? 1 : $1.unicodeScalars.count) }
+            guard duration + Double(count) * 5 <= 60_000 else {
                 throw ControlFailure(.invalidArgument, "Input exceeds 60 seconds of intended duration.")
             }
-            guard capabilities.contains(.unicode) else { throw ControlFailure(.unsupported, "The server did not negotiate Unicode keyboard input.") }
-            for scalar in text.unicodeScalars { event(.unicode(scalar)); delay(5) }
+            let enter = try chord("Enter")[0]
+            for character in text {
+                switch character {
+                case "\n", "\r", "\r\n":
+                    guard !keys.contains(enter) else { throw ControlFailure(.invalidArgument, "Release the held Enter key before typing line breaks.") }
+                    event(.key(enter, down: true))
+                    event(.key(enter, down: false))
+                    delay(5)
+                default:
+                    guard capabilities.contains(.unicode) else { throw ControlFailure(.unsupported, "The server did not negotiate Unicode keyboard input.") }
+                    for scalar in character.unicodeScalars { event(.unicode(scalar)); delay(5) }
+                }
+            }
         case "key":
             try request.validateArguments(["key", "repeat"])
             let chord = try chord(request.string("key", required: true)!)

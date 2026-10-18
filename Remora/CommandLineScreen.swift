@@ -63,7 +63,9 @@ extension CommandLineController {
                 guard session.attemptID == id, sessions.session(for: session.connection.id) === session else {
                     throw ControlFailure(.sessionEnded, "The session attempt was closed or replaced during capture.")
                 }
-                guard session.inputGeometryRevision == geometryRevision else { throw ControlFailure(.imageExpired, "The desktop resized during capture. Take another screenshot.") }
+                guard session.inputGeometryRevision == geometryRevision, geometry.desktop == session.desktopSize else {
+                    throw ControlFailure(.imageExpired, "The desktop resized during capture. Take another screenshot.")
+                }
                 try Task.checkCancellation()
                 let receipt = ScreenshotReceipt(session: id, geometry: geometry, frame: revision - baseline, geometryRevision: geometryRevision)
                 let path: String?
