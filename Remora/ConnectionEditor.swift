@@ -81,23 +81,35 @@ struct ConnectionEditor: View {
                     TextField("Host", text: $host, prompt: Text("Name or IP address"))
                         .focused($focusedField, equals: .host)
                         .autocorrectionDisabled()
+                        .accessibilityIdentifier("editorHost")
+                        .accessibilityHint(hostProblem ?? "")
                     TextField("Port", text: $port, prompt: Text(String(Connection.defaultPort)))
                         .autocorrectionDisabled()
+                        .accessibilityIdentifier("editorPort")
+                        .accessibilityHint(portProblem ?? "")
                 } header: {
                     Text("Connection")
                 } footer: {
-                    if !addressProblems.isEmpty {
+                    if hostProblem != nil || portProblem != nil {
                         VStack(alignment: .leading, spacing: 4) {
-                            ForEach(addressProblems, id: \.self, content: ValidationMessage.init)
+                            if let hostProblem {
+                                ValidationMessage(hostProblem).accessibilityIdentifier("editorHostProblem")
+                            }
+                            if let portProblem {
+                                ValidationMessage(portProblem).accessibilityIdentifier("editorPortProblem")
+                            }
                         }
                     }
                 }
                 Section {
                     TextField("Username", text: $username, prompt: Text("Optional"))
                         .autocorrectionDisabled()
+                        .accessibilityIdentifier("editorUsername")
                     KeychainPasswordField(title: "Password", text: $password)
+                        .accessibilityIdentifier("editorPassword")
                     TextField("Domain", text: $domain, prompt: Text("Optional"))
                         .autocorrectionDisabled()
+                        .accessibilityIdentifier("editorDomain")
                 } header: {
                     Text("Account")
                 } footer: {
@@ -111,6 +123,7 @@ struct ConnectionEditor: View {
                         }
                     }
                     .pickerStyle(.menu)
+                    .accessibilityIdentifier("editorResolution")
                     .onChange(of: resolutionChoice) { previous, current in
                         guard current == .custom else { return }
                         if case .fixed(let width, let height) = previous.resolution {
@@ -128,11 +141,13 @@ struct ConnectionEditor: View {
                             HStack(spacing: 6) {
                                 TextField("Width", text: $customWidth)
                                     .labelsHidden()
-                                    .accessibilityLabel("Width")
+                                    .accessibilityIdentifier("editorWidth")
+                                    .accessibilityHint(resolutionProblem ?? "")
                                 Text("×")
                                 TextField("Height", text: $customHeight)
                                     .labelsHidden()
-                                    .accessibilityLabel("Height")
+                                    .accessibilityIdentifier("editorHeight")
+                                    .accessibilityHint(resolutionProblem ?? "")
                                 Text("pixels").foregroundStyle(.secondary)
                             }
                             .textFieldStyle(.roundedBorder)
@@ -143,11 +158,12 @@ struct ConnectionEditor: View {
                     Text("Display")
                 } footer: {
                     if let resolutionProblem {
-                        ValidationMessage(resolutionProblem)
+                        ValidationMessage(resolutionProblem).accessibilityIdentifier("editorResolutionProblem")
                     }
                 }
                 Section {
                     TextField("Name", text: $name, prompt: Text(trimmedHost.isEmpty ? "Optional" : trimmedHost))
+                        .accessibilityIdentifier("editorName")
                 } footer: {
                     Text("Shown in the connections list.")
                         .foregroundStyle(.secondary)
@@ -161,8 +177,10 @@ struct ConnectionEditor: View {
                 Spacer()
                 Button("Cancel", role: .cancel, action: onCancel)
                     .keyboardShortcut(.cancelAction)
+                    .accessibilityIdentifier("editorCancel")
                 Button("Save", action: save)
                     .keyboardShortcut(.defaultAction)
+                    .accessibilityIdentifier("editorSave")
                     .disabled(draft == nil)
             }
             .controlSize(.large)
@@ -188,15 +206,13 @@ struct ConnectionEditor: View {
     }
 
     /// Shown only for input the user has typed; an empty host just disables Save.
-    private var addressProblems: [String] {
-        var problems: [String] = []
-        if trimmedHost.contains(where: \.isWhitespace) || trimmedHost.contains("/") {
-            problems.append("Enter a host name or IP address without spaces or slashes.")
-        }
-        if parsedPort == nil {
-            problems.append("Enter a port from 1 to 65535.")
-        }
-        return problems
+    private var hostProblem: String? {
+        guard trimmedHost.contains(where: \.isWhitespace) || trimmedHost.contains("/") else { return nil }
+        return "Enter a host name or IP address without spaces or slashes."
+    }
+
+    private var portProblem: String? {
+        parsedPort == nil ? "Enter a port from 1 to 65535." : nil
     }
 
     private var resolution: ConnectionResolution? {
@@ -212,7 +228,7 @@ struct ConnectionEditor: View {
 
     /// The edited connection, or nil while the host is empty or the address is invalid.
     private var draft: Connection? {
-        guard !trimmedHost.isEmpty, addressProblems.isEmpty, let port = parsedPort,
+        guard !trimmedHost.isEmpty, hostProblem == nil, let port = parsedPort,
               let resolution, resolution.isValid else { return nil }
         let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
         let trimmedDomain = domain.trimmingCharacters(in: .whitespacesAndNewlines)

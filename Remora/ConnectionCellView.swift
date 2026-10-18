@@ -45,7 +45,6 @@ final class ConnectionCellView: NSTableCellView {
         statusView.image = NSImage(systemSymbolName: "circle.fill", accessibilityDescription: nil)
         statusView.setContentHuggingPriority(.required, for: .horizontal)
         statusView.setContentCompressionResistancePriority(.required, for: .horizontal)
-        statusView.setAccessibilityElement(false)
         statusView.isHidden = true
 
         detailField.font = .preferredFont(forTextStyle: .subheadline)
@@ -114,9 +113,26 @@ final class ConnectionCellView: NSTableCellView {
                 ))
             } ?? ""
             actionButton.title = "Connect"
-            setAccessibilityLabel([connection.name, subtitle].joined(separator: ", "))
+            var label = [connection.name, subtitle]
+            if !detailField.stringValue.isEmpty {
+                label.append("last connected \(detailField.stringValue.lowercased())")
+            }
+            setAccessibilityLabel(label.joined(separator: ", "))
         }
+        // AppKit's row and cell elements drop identifiers, so the name carries the connection's ID.
+        // It also offers the hover button's action, so agents and VoiceOver reach it without a pointer.
+        nameField.cell?.setAccessibilityIdentifier("connection-\(connection.id.uuidString)")
+        nameField.cell?.setAccessibilityCustomActions([NSAccessibilityCustomAction(name: actionButton.title) { [weak self] in
+            guard let self, let action = actionButton.action else { return false }
+            return actionButton.sendAction(action, to: actionButton.target)
+        }])
         isHovered = hovered
+    }
+
+    /// The cell's label carries the account and detail text, so only the name and the hover button,
+    /// while it shows, are elements. The icon and status dot are decorative.
+    override func accessibilityChildren() -> [Any]? {
+        [nameField.cell, actionButton.isHidden ? nil : actionButton].compactMap { $0 }
     }
 
     private static let statusSymbolConfiguration = NSImage.SymbolConfiguration(pointSize: 7, weight: .regular)

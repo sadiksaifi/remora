@@ -8,6 +8,7 @@ final class RemoteDesktopInput: NSObject {
     var input: (any RemoteSession)? {
         didSet {
             oldValue?.releaseAll()
+            keyboardRouting = KeyboardRouting()
             reset()
             focusIn()
         }
@@ -15,22 +16,19 @@ final class RemoteDesktopInput: NSObject {
     private var connected = false
     private lazy var shortcutCapture = SystemShortcutCapture(
         isFocused: { [weak self] in self?.hasFocus == true },
-        receive: { [weak self] event in
+        receive: { [weak self] event in self?.receiveKeyboardEvent(event) ?? false },
+        releaseKeys: { [weak self] in
             guard let self else { return }
-            if event.type == .flagsChanged { flagsChanged(event, captured: true) }
-            else { key(event, down: event.type == .keyDown, captured: true) }
-        },
-        releaseKeys: { [weak self] in self?.releaseKeys() },
-        releaseCapture: { [weak self] in self?.view?.window?.makeFirstResponder(nil) }
+            keyboardRouting = KeyboardRouting()
+            releaseKeys()
+        }
     )
     private var hasFocus: Bool {
         connected && input != nil && NSApp.isActive && view?.window?.isKeyWindow == true &&
             view?.window?.firstResponder === view
     }
     private var keyboard = KeyboardState()
-    /// Device modifier bits held when the key state last reset, for example the rest of a tab shortcut.
-    /// They stay out of the remote state until released, so a lone Command release can't reach the remote.
-    private var staleModifiers: UInt = 0
+    private var keyboardRouting = KeyboardRouting()
     private var scroll = ScrollAccumulator()
     private var buttons: PointerButtons = []
     private var lastPosition: RemotePoint?
@@ -57,11 +55,9 @@ final class RemoteDesktopInput: NSObject {
         // before dispatch so every forwarded shortcut gets its matching release.
         keyUpMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyUp) { [weak self] event in
             let handled = MainActor.assumeIsolated {
-                guard let self, self.connected, !self.shortcutCapture.isActive, self.input != nil, let view = self.view,
-                      view.window?.isKeyWindow == true, view.window?.firstResponder === view,
-                      event.window === view.window else { return false }
-                self.key(event, down: false)
-                return true
+                guard let self, let view = self.view,
+                      event.window == nil || event.window === view.window else { return false }
+                return self.receiveKeyboardEvent(event)
             }
             return handled ? nil : event
         }
@@ -100,6 +96,7 @@ final class RemoteDesktopInput: NSObject {
     func focusOut() {
         captureMayHaveChanged()
         shortcutCapture.stop()
+        keyboardRouting = KeyboardRouting()
         releaseKeys()
     }
 
@@ -125,37 +122,47 @@ final class RemoteDesktopInput: NSObject {
         lastPosition = nil
     }
 
-    func key(_ event: NSEvent, down: Bool, captured: Bool = false) {
-        guard connected, captured || !shortcutCapture.isActive, let input else { return }
-        for key in keyboard.key(keyCode: event.keyCode, isDown: down) {
-            input.sendKey(key)
-        }
+    func key(_ event: NSEvent, down: Bool) {
+        _ = receiveKeyboardEvent(event)
     }
 
     private func resetKeyboard() {
-        keyboard.reset(capsLockOn: NSEvent.modifierFlags.contains(.capsLock))
-        staleModifiers = UInt(CGEventSource.flagsState(.combinedSessionState).rawValue) & Self.deviceModifierBits
+        keyboard.reset(capsLockOn: NSEvent.modifierFlags.contains(.capsLock),
+                       rawFlags: UInt(CGEventSource.flagsState(.combinedSessionState).rawValue))
     }
 
-    /// NX_DEVICE* bits for left and right Shift, Control, Option, and Command.
-    private static let deviceModifierBits: UInt = 0x207F
-
-    func flagsChanged(_ event: NSEvent, captured: Bool = false) {
-        guard connected, captured || !shortcutCapture.isActive, let input else { return }
-        staleModifiers &= event.modifierFlags.rawValue
-        let flags = event.modifierFlags.rawValue & ~staleModifiers
-        for key in keyboard.flagsChanged(keyCode: event.keyCode, rawFlags: flags) {
-            input.sendKey(key)
-        }
+    func flagsChanged(_ event: NSEvent) {
+        _ = receiveKeyboardEvent(event)
     }
 
     func performKeyEquivalent(_ event: NSEvent) -> Bool {
-        guard connected, !shortcutCapture.isActive, input != nil, let view, view.window?.firstResponder === view,
-              event.modifierFlags.contains(.command) else { return false }
-        // Cmd-Q, Ctrl-Cmd-F, and the Ctrl-Option-Cmd tab, Connections, capture, and release shortcuts go to the menus.
-        if SystemShortcutCapture.staysLocal(keyCode: event.keyCode, flags: event.modifierFlags) { return false }
-        key(event, down: true)
-        return true
+        guard event.modifierFlags.contains(.command) else { return false }
+        return receiveKeyboardEvent(event)
+    }
+
+    /// The tap consumes remote events, so AppKit only sees bypass events and local chords.
+    /// Both routes use the same eligibility, shortcut policy, and pressed-key state.
+    private func receiveKeyboardEvent(_ event: NSEvent) -> Bool {
+        guard hasFocus, let input else { return false }
+        switch keyboardRouting.route(keyCode: event.keyCode, rawFlags: event.modifierFlags.rawValue,
+                                     event: event.type == .flagsChanged ? .flagsChanged
+                                        : event.type == .keyDown ? .keyDown : .keyUp) {
+        case .local: return false
+        case .deferModifiers: return true
+        case .beginLocalChord:
+            releaseKeys()
+            return false
+        case .releaseCapture:
+            view?.window?.makeFirstResponder(nil)
+            return true
+        case .remote:
+            let keys = event.type == .flagsChanged
+                ? keyboard.flagsChanged(keyCode: event.keyCode, rawFlags: event.modifierFlags.rawValue)
+                : keyboard.key(keyCode: event.keyCode, isDown: event.type == .keyDown,
+                               rawFlags: event.modifierFlags.rawValue)
+            for key in keys { input.sendKey(key) }
+            return true
+        }
     }
 
     /// Presses and releases Control, Option, and Forward Delete, which RDP maps to Ctrl-Alt-Del.

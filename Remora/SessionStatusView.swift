@@ -19,9 +19,12 @@ struct SessionStatusView: View {
     let computerName: String
     let address: String
     var overDesktop = false
+    /// After a session ends, Close takes the keyboard when the status appears.
+    var focusesClose = false
     var onCancel: () -> Void = {}
     var onReconnect: () -> Void = {}
     var onClose: () -> Void = {}
+    @FocusState private var closeFocused: Bool
 
     var body: some View {
         if overDesktop {
@@ -87,14 +90,20 @@ struct SessionStatusView: View {
         case .connecting, .reconnecting:
             Button("Cancel", action: onCancel)
                 .keyboardShortcut(.cancelAction)
+                .accessibilityIdentifier("sessionCancel")
         case .awaitingCredentials, .awaitingTrust:
             EmptyView()
         case .disconnected:
             HStack(spacing: 12) {
                 Button("Close", action: onClose)
+                    .keyboardShortcut(.cancelAction)
+                    .focused($closeFocused)
+                    .accessibilityIdentifier("sessionClose")
                 Button("Reconnect", action: onReconnect)
                     .keyboardShortcut(.defaultAction)
+                    .accessibilityIdentifier("sessionReconnect")
             }
+            .onAppear { closeFocused = focusesClose }
         }
     }
 
@@ -129,7 +138,7 @@ struct SessionStatusView: View {
         }
     }
 
-    private static func title(for reason: DisconnectReason?) -> String {
+    static func title(for reason: DisconnectReason?) -> String {
         switch reason {
         case .authenticationFailed: "Authentication Failed"
         case .certificateRejected: "Certificate Not Trusted"
@@ -188,8 +197,10 @@ struct ShortcutPermissionBanner: View {
             .frame(maxWidth: 440, alignment: .leading)
             HStack(spacing: 8) {
                 Button("Not Now", action: onDismiss)
+                    .accessibilityIdentifier("shortcutPermissionNotNow")
                 Button("Open System Settings", action: onOpenSettings)
                     .buttonStyle(.borderedProminent)
+                    .accessibilityIdentifier("shortcutPermissionOpenSettings")
             }
             .fixedSize()
         }
@@ -208,5 +219,6 @@ struct CaptureConfirmation: View {
             .padding(.horizontal, 16)
             .padding(.vertical, 10)
             .glassEffect(.regular, in: .capsule)
+            .accessibilityIdentifier("captureConfirmation")
     }
 }

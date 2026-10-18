@@ -45,7 +45,7 @@ struct SessionTabStrip: View {
                                 onSelect: { onSelect(tab.id) },
                                 onClose: { onClose(tab.id) },
                                 onStopRecording: { onStopRecording(tab.id) },
-                                onShowActions: { onShowActions(tab.id, $0) },
+                                onShowActions: { onShowActions(tab.id, $0 ?? layout.frames[tab.id] ?? .zero) },
                                 onSetKeyboardCapture: { onSetKeyboardCapture(tab.id, $0) },
                                 onHover: { inside in
                                     if inside { hovered = tab.id } else if hovered == tab.id { hovered = nil }
@@ -105,7 +105,8 @@ private struct SessionTabView: View {
     let onSelect: () -> Void
     let onClose: () -> Void
     let onStopRecording: () -> Void
-    let onShowActions: (CGRect) -> Void
+    /// Without a frame, when the accessibility action finds no menu button, the menu hangs under the tab.
+    let onShowActions: (CGRect?) -> Void
     let onSetKeyboardCapture: (Bool) -> Void
     let onHover: (Bool) -> Void
     /// Hovering the button reevaluates the body, which refreshes the elapsed time in its help.
@@ -169,7 +170,13 @@ private struct SessionTabView: View {
         .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
         .accessibilitySortPriority(1)
         .accessibilityAction(.default, onSelect)
+        .accessibilityIdentifier("tab-\(tab.id.uuidString)")
         .accessibilityAction(named: "Close Tab", onClose)
+        // Async, so the accessibility client's action returns while the menu tracks.
+        .accessibilityAction(named: "Show Tab Actions") {
+            let button = showsControls ? actionsFrame : nil
+            DispatchQueue.main.async { onShowActions(button) }
+        }
         .accessibilityActions {
             if recording == .recording {
                 Button("Stop Recording", action: onStopRecording)
@@ -191,8 +198,8 @@ private struct SessionTabView: View {
                 .buttonStyle(.plain)
                 .foregroundStyle(.secondary)
                 .help("Tab Actions")
-                .accessibilityLabel("Tab Actions")
-                .accessibilityIdentifier("tabActions")
+                .accessibilityLabel("Tab Actions, \(tab.title)")
+                .accessibilityIdentifier("tabActions-\(tab.id.uuidString)")
                 .onGeometryChange(for: CGRect.self) { $0.frame(in: .named(SessionTabStrip.coordinateSpace)) } action: {
                     actionsFrame = $0
                 }

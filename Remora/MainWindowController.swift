@@ -501,12 +501,9 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
     // MARK: Toolbar
 
     private func configureToolbarItems() {
-        homeToolbarItem.image = NSImage(systemSymbolName: "house", accessibilityDescription: "Connections")
+        homeToolbarItem.view = toolbarButton("house", "Connections", action: #selector(showHome(_:)), identifier: "home")
         homeToolbarItem.label = "Connections"
         homeToolbarItem.toolTip = "Show Connections"
-        homeToolbarItem.isBordered = true
-        homeToolbarItem.target = self
-        homeToolbarItem.action = #selector(showHome(_:))
 
         tabStrip.rootView = SessionTabStrip(
             tabs: sessionTabs,
@@ -534,6 +531,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
         tabsToolbarItem.visibilityPriority = .high
 
         let field = searchToolbarItem.searchField
+        field.setAccessibilityIdentifier("connectionsSearch")
         field.placeholderString = "Search"
         field.target = self
         field.action = #selector(searchChanged(_:))
@@ -542,6 +540,15 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
         // Below the item's own constraints, so the field still expands while it has the keyboard.
         searchWidth.priority = .init(500)
         searchWidth.isActive = true
+    }
+
+    /// Looks like a bordered image item. Unlike one, it can carry an accessibility identifier.
+    private func toolbarButton(_ symbol: String, _ description: String, action: Selector, identifier: String) -> NSButton {
+        let button = NSButton(image: NSImage(systemSymbolName: symbol, accessibilityDescription: description)!,
+                              target: self, action: action)
+        button.bezelStyle = .toolbar
+        button.setAccessibilityIdentifier(identifier)
+        return button
     }
 
     func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
@@ -567,12 +574,9 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
             return tabsToolbarItem
         case Self.newConnectionItem:
             let item = NSToolbarItem(itemIdentifier: itemIdentifier)
-            item.image = NSImage(systemSymbolName: "plus", accessibilityDescription: "New Connection")
+            item.view = toolbarButton("plus", "New Connection", action: #selector(newConnection(_:)), identifier: "newConnection")
             item.label = "New Connection"
             item.toolTip = "New Connection"
-            item.isBordered = true
-            item.target = self
-            item.action = #selector(newConnection(_:))
             return item
         case Self.searchItem:
             return searchToolbarItem

@@ -173,15 +173,18 @@ public final class SessionCapture {
         monitor = nil
         recordingState = .finishing
         onRecordingActivityChange?(false)
-        let task = Task { await movie.finish() }
-        finishTask = task
-        let result = await task.value
-        finishTask = nil
-        recordingURL = nil
-        switch result {
-        case .success(let url): lastSavedURL = url; recordingState = .idle
-        case .failure(let failure): recordingState = .failed(failure)
+        let task = Task {
+            let result = await movie.finish()
+            // Publish completion before any concurrent stop caller resumes.
+            finishTask = nil
+            recordingURL = nil
+            switch result {
+            case .success(let url): lastSavedURL = url; recordingState = .idle
+            case .failure(let failure): recordingState = .failed(failure)
+            }
+            return result
         }
-        return result
+        finishTask = task
+        return await task.value
     }
 }
