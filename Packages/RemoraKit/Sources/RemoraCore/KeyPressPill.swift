@@ -66,11 +66,11 @@ public struct KeyPressPill: Equatable, Sendable {
         return ceil(CGFloat(CTLineGetTypographicBounds(line, nil, nil, nil)))
     }
 
-    /// The pill for a snapshot in desktop pixels, and its frame at the bottom center of the desktop.
-    /// A point is the session's backing scale, but at least the desktop height over 1080, so large fixed
-    /// desktops stay legible. The pill's bottom sits 64 points up, clear of a taskbar or dock.
-    public static func placed(_ state: SessionOverlayState.Snapshot, desktop: CGSize) -> (pill: KeyPressPill, frame: CGRect)? {
-        let unit = max(CGFloat(state.scale), desktop.height / 1080)
+    /// The pill at the bottom center, in view points on screen or desktop pixels in recordings.
+    /// Recorded points use the connection scale, or at least the desktop height over 1080.
+    /// The pill's bottom sits 64 points up, clear of a taskbar or dock.
+    public static func placed(_ state: SessionOverlayState.Snapshot, desktop: CGSize, recording: Bool = true) -> (pill: KeyPressPill, frame: CGRect)? {
+        let unit = recording ? max(CGFloat(state.scale), desktop.height / 1080) : 1
         guard let standard = KeyPressPill(text: state.keyText, isText: state.keyIsText, scale: unit * state.keySize) else { return nil }
         let fit = min(1, max(0.1, (desktop.width - 16 * unit) / standard.size.width))
         let pill = fit < 1 ? KeyPressPill(text: state.keyText, isText: state.keyIsText, scale: standard.scale * fit)! : standard

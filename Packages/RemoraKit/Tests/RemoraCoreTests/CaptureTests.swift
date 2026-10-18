@@ -104,10 +104,17 @@ private struct RecordingTestDestination: CaptureDestination {
     #expect(FileManager.default.createFile(atPath: url.path, contents: Data()))
     let frames = try MetalDesktop(device: #require(MTLCreateSystemDefaultDevice()))
     desktop(width: 320, height: 240, bgra: [20, 30, 240, 0], sink: frames)
-    let movie = try AppleCaptureMedia().movie(at: url, source: frames)
+    let overlays = SessionOverlayState()
+    let cursor = try #require(CGContext(data: nil, width: 32, height: 32, bitsPerComponent: 8,
+        bytesPerRow: 0, space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+    cursor.setFillColor(CGColor(srgbRed: 1, green: 0, blue: 1, alpha: 1))
+    cursor.fill(CGRect(x: 0, y: 0, width: 32, height: 32))
+    overlays.setCursor(cursor.makeImage(), hotspot: CGPoint(x: 16, y: 16))
+    let movie = try AppleCaptureMedia(overlays: overlays).movie(at: url, source: frames)
     let observer = frames.addFrameObserver { movie.submit(arrival: $0) }
     try await Task.sleep(for: .milliseconds(180))
     desktop(width: 160, height: 240, bgra: [30, 240, 20, 0], sink: frames)
+    overlays.receive(.human, .pointer(.init(x: 0, y: 120), []))
     // Exercise latest-frame coalescing faster than the 60 fps limit.
     let green: [UInt8] = [30, 240, 20, 0]
     var burst = Array(repeating: green, count: 160 * 240).flatMap { $0 }
@@ -164,6 +171,11 @@ private struct RecordingTestDestination: CaptureDestination {
     let stride = CVPixelBufferGetBytesPerRow(buffer)
     let edge = 120 * stride + 10 * 4
     #expect(pixels[edge] < 12 && pixels[edge + 1] < 12 && pixels[edge + 2] < 12)
+    // Half the cursor extends past the resized desktop's left edge. Only the desktop half is visible.
+    let bar = 120 * stride + 68 * 4
+    #expect(pixels[bar] < 12 && pixels[bar + 1] < 12 && pixels[bar + 2] < 12)
+    let pointer = 120 * stride + 84 * 4
+    #expect(pixels[pointer] > 180 && pixels[pointer + 1] < 80 && pixels[pointer + 2] > 180)
     let center = 120 * stride + 160 * 4
     #expect(pixels[center + 1] > 210)
     let top = 40 * stride + 160 * 4

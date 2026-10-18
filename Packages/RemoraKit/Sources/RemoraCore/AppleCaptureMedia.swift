@@ -253,6 +253,7 @@ final class AppleCaptureMovie: CaptureMovie, @unchecked Sendable {
                         // Preserve the pacing clock across small scheduling delays, without replaying idle time.
                         lastAppend = now - lastAppend >= 2.0 / 60 ? now : lastAppend + 1.0 / 60
                     } else {
+                        lastAppend = ProcessInfo.processInfo.systemUptime
                         lock.withLock { if pending == nil { pending = selected } }
                     }
                 } catch { fail(error as? CaptureFailure ?? .recording(error.localizedDescription)); return }
@@ -315,7 +316,7 @@ final class AppleCaptureMovie: CaptureMovie, @unchecked Sendable {
         let submission = try source.submit { texture, command in
             let desktopSize = CGSize(width: texture.width, height: texture.height)
             let snapshot = overlays?.snapshot(at: arrival)
-            let sprites = snapshot.map { overlayDrawing.sprites($0, desktop: desktopSize, recording: true) } ?? []
+            let sprites = snapshot.map { overlayDrawing.sprites($0, recording: true) } ?? []
             let glass = snapshot.flatMap { overlayDrawing.keyPress($0, desktop: desktopSize) }
             if texture.width == size.width && texture.height == size.height && sprites.isEmpty && glass == nil {
                 guard let blit = command.makeBlitCommandEncoder() else { throw CaptureFailure.recording("No encoder blit command.") }
@@ -344,7 +345,8 @@ final class AppleCaptureMovie: CaptureMovie, @unchecked Sendable {
                     decorated = overlay.composited(over: decorated)
                 }
                 let scale = min(Double(size.width) / Double(texture.width), Double(size.height) / Double(texture.height))
-                let fitted = decorated.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
+                let fitted = decorated.cropped(to: image.extent)
+                    .transformed(by: CGAffineTransform(scaleX: scale, y: scale))
                     .transformed(by: CGAffineTransform(translationX: (Double(size.width) - Double(texture.width) * scale) / 2,
                                                       y: (Double(size.height) - Double(texture.height) * scale) / 2))
                 let bounds = CGRect(x: 0, y: 0, width: size.width, height: size.height)

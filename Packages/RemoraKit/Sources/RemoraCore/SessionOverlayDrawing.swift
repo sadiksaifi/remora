@@ -3,7 +3,7 @@ import CoreText
 import Foundation
 
 /// Shared raster artwork in desktop pixels, with top-left coordinates. Each consumer owns a cache.
-/// AppKit and movies both use these exact pointer images and placement. The screen draws the key press
+/// AppKit keeps the pointer artwork's point size independent of desktop scaling. The screen draws the key press
 /// pill as Liquid Glass; movies draw `keyPress(_:desktop:)` over a blurred backdrop.
 public final class SessionOverlayDrawing {
     public struct Sprite {
@@ -46,9 +46,10 @@ public final class SessionOverlayDrawing {
 
     public init() {}
 
-    public func sprites(_ state: SessionOverlayState.Snapshot, desktop: CGSize, recording: Bool) -> [Sprite] {
+    /// Screen consumers supply their view points per desktop pixel; recordings use the connection scale.
+    public func sprites(_ state: SessionOverlayState.Snapshot, recording: Bool, pointsPerPixel: CGFloat = 1) -> [Sprite] {
         var result: [Sprite] = []
-        let scale = state.scale
+        let scale = recording ? state.scale : 1 / pointsPerPixel
         let pointerVisible = recording ? state.showPointerInRecordings : state.showAgentPointer
         if pointerVisible {
             for click in state.clicks where recording || click.source == .agent {

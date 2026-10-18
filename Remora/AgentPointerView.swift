@@ -45,12 +45,9 @@ final class AgentPointerView: NSView {
         guard let desktop = superview as? RemoteDesktopView, desktop.remoteSize.width > 0 else { return }
         let snapshot = state.snapshot()
         let screen = desktop.screenRect
-        let scale = screen.width / desktop.remoteSize.width
-        if let (pill, frame) = KeyPressPill.placed(snapshot, desktop: desktop.remoteSize) {
-            let shown = KeyPressPill(text: snapshot.keyText, isText: snapshot.keyIsText, scale: pill.scale * scale)
-            if keyPress.rootView.pill != shown { keyPress.rootView = KeyPressCapsule(pill: shown) }
-            keyPress.frame = CGRect(x: screen.minX + frame.minX * scale, y: screen.minY + frame.minY * scale,
-                                    width: frame.width * scale, height: frame.height * scale)
+        if let (pill, frame) = KeyPressPill.placed(snapshot, desktop: screen.size, recording: false) {
+            if keyPress.rootView.pill != pill { keyPress.rootView = KeyPressCapsule(pill: pill) }
+            keyPress.frame = frame.offsetBy(dx: screen.minX, dy: screen.minY)
         }
         let shown = snapshot.keyText != nil && snapshot.keyOpacity >= 1
         guard shown != keyPressShown else { return }
@@ -63,11 +60,12 @@ final class AgentPointerView: NSView {
               let context = NSGraphicsContext.current?.cgContext else { return }
         let screen = desktop.screenRect
         let scale = screen.width / desktop.remoteSize.width
+        guard scale > 0 else { return }
         context.saveGState()
         context.clip(to: screen)
         context.translateBy(x: screen.minX, y: screen.minY)
         context.scaleBy(x: scale, y: scale)
-        for sprite in drawing.sprites(state.snapshot(), desktop: desktop.remoteSize, recording: false) {
+        for sprite in drawing.sprites(state.snapshot(), recording: false, pointsPerPixel: scale) {
             context.saveGState()
             context.setAlpha(sprite.opacity)
             context.translateBy(x: sprite.rect.minX, y: sprite.rect.maxY)

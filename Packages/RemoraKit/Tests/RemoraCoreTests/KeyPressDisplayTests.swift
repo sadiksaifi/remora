@@ -1,4 +1,5 @@
 import Testing
+import Foundation
 import RemoraCore
 
 @Test func keyPressDisplayUsesRemoteModifierNames() throws {
@@ -64,4 +65,29 @@ import RemoraCore
     let large = try #require(KeyPressPill(text: "Ctrl+Alt+Delete", isText: false, scale: 2))
     // SF Pro tracks tighter at larger optical sizes, so widths scale slightly less than heights.
     #expect(large.size.height == 2 * chord.size.height && abs(large.size.width / chord.size.width - 2) < 0.1)
+}
+
+@Test(arguments: [1.0, 2.0]) func screenFeedbackKeepsPointSizes(connectionScale: Double) throws {
+    let overlays = SessionOverlayState()
+    overlays.configure(showPointerInRecordings: true, showKeyPresses: true, showAgentPointer: true,
+        scale: connectionScale, keyPressSize: 1.5)
+    overlays.receive(.agent, .pointer(.init(x: 400, y: 200), .left))
+    overlays.receive(.agent, .text("hello"))
+    let state = overlays.snapshot()
+    let drawing = SessionOverlayDrawing()
+    for pointsPerPixel: CGFloat in [0.25, 0.5, 1, 2] {
+        let sprites = drawing.sprites(state, recording: false, pointsPerPixel: pointsPerPixel)
+        let ring = try #require(sprites.first)
+        let arrow = try #require(sprites.last)
+        #expect(ring.rect.width * pointsPerPixel == 32)
+        #expect(arrow.rect.width * pointsPerPixel == 24 && arrow.rect.height * pointsPerPixel == 27)
+        #expect((arrow.rect.minX + 4 / pointsPerPixel) * pointsPerPixel == 400.5 * pointsPerPixel)
+    }
+    let recorded = try #require(drawing.sprites(state, recording: true).last)
+    #expect(recorded.rect.height == 27 * CGFloat(connectionScale))
+    let screen = try #require(KeyPressPill.placed(state, desktop: CGSize(width: 960, height: 540), recording: false))
+    #expect(screen.pill.size.height == 66 && screen.pill.scale == 1.5)
+    #expect(screen.frame.midX == 480 && screen.frame.maxY == 476)
+    let movie = try #require(KeyPressPill.placed(state, desktop: CGSize(width: 3840, height: 2160)))
+    #expect(movie.pill.size.height == 132)
 }
