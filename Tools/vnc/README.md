@@ -21,9 +21,9 @@ If tunnel setup fails after remote provisioning, the state file still identifies
 
 ## Observe the fixture
 
-The fixture starts at 1280x800 with a German keyboard layout. Its text entry, two clipboard buttons, and pointer surface contain only generated test content. The pointer surface animates a marker every half second and uses a crosshair cursor. The fixture records key transitions, text changes, pointer movement, button transitions, wheel events, and requested clipboard contents in its private `events.jsonl`.
+The fixture starts fullscreen at 1280x800 with a German keyboard layout. Its text entry, two clipboard buttons, and pointer surface contain only generated test content. The pointer surface animates a marker every half second and uses a crosshair cursor. The fixture records key transitions, text changes, pointer movement, button transitions, wheel events, and requested clipboard contents in its private `events.jsonl`.
 
-At 1280x800 the text entry includes desktop coordinate (500,180), the copy button includes (500,215), the read-client-clipboard button includes (500,265), and the pointer surface includes (500,400). Recheck coordinates after resizing. Run one input test at a time so events can be attributed to that test.
+The fullscreen layout keeps the text entry at desktop coordinate (500,75), the copy button at (500,120), the read-client-clipboard button at (500,170), and the pointer surface at (500,400). These coordinates remain stable through the documented resize tests. Run one input test at a time so events can be attributed to that test.
 
 ```sh
 python3 Tools/vnc/target.py events > .snap/vnc-fixture-events.jsonl
@@ -35,7 +35,36 @@ The `resize` command changes only the dedicated headless output. It tests a serv
 
 ## Verify Remora
 
-Use an isolated certificate store and a development executable. Keep the installed app, saved connections, and Keychain untouched. The backend smoke executable is maintained by the backend engineer; it reads the private target file and uses the actual `VNCSession`, `MetalDesktop`, and `AppleCaptureMedia` implementations. It does not use saved application connections or Keychain.
+The SwiftPM executable in `Tools/vnc/Smoke` reads the private target file and uses the actual `VNCSession`, `MetalDesktop`, `SessionCapture`, and `AppleCaptureMedia` implementations. It uses the supplied certificate-pin directory and does not use saved application connections or Keychain.
+
+On an Apple silicon Mac with Xcode and CMake installed, build the engine archives once from the repository root:
+
+```sh
+./Vendor/build-engine.sh
+```
+
+Start the Linux target as described above, then run:
+
+```sh
+swift run --package-path Tools/vnc/Smoke VNCSmoke \
+  .snap/vnc-target.json .snap/vnc-smoke-pins accept .snap/vnc-accept.png
+```
+
+The executable takes `TARGET_JSON PIN_DIRECTORY MODE [OUTPUT]`. Its modes are `accept`, `reject`, `wrong-password`, `prompt-cancel`, `disconnect`, `input`, `pointer`, `clipboard`, `cursor`, `resize`, `hidden`, and `recording`. Every mode except `reject` accepts fixture certificate challenges into the supplied pin directory. A successful run prints `PASS MODE`. A failed expectation exits with an error. Input acknowledgements still require the independent fixture observations below. Logs can contain synthetic clipboard text; redirect them into private scratch files when retaining evidence.
+
+Run `accept` twice with the same pin directory to verify pin persistence. Run `reject` with a fresh pin directory to exercise a new trust decision. The `resize` mode requests 1100x720 and checks wayvnc's asynchronous forwarding path: actual dimensions, retained resize capability, and the server-reported origin. Restore the target to 1280x800 after the test. An optional output path writes a PNG, except in `recording` mode, which requires an unused MOV output path:
+
+```sh
+swift run --package-path Tools/vnc/Smoke VNCSmoke \
+  .snap/vnc-target.json .snap/vnc-smoke-pins recording .snap/vnc-recording.mov
+ffprobe -v error -select_streams v:0 \
+  -show_entries stream=codec_name,width,height,duration,nb_frames \
+  -of json .snap/vnc-recording.mov
+ffmpeg -v error -i .snap/vnc-recording.mov -map 0:v:0 \
+  -f framemd5 .snap/vnc-recording-framemd5.txt
+```
+
+The media commands require FFmpeg. They verify decoding and pixel changes independently of the capture writer. Output files are never overwritten.
 
 Record a separate result for each observable behavior:
 
@@ -57,14 +86,6 @@ Third-party client checks establish target readiness. They do not establish Remo
 
 The target was a Raspberry Pi Compute Module 4 running Debian 13.7, labwc 0.20.2, and wayvnc 0.10.2. The native client used the real Remora `VNCSession` with LibVNCClient and OpenSSL 3.6.5. Credentials and certificate pins were supplied through scratch files and an isolated pin directory. The installed application, saved connections, and Keychain were untouched.
 
-Run the backend engineer's scratch harness from the repository root when it is available:
-
-```sh
-.snap/vnc-smoke/.build/debug/VNCSmoke \
-  .snap/vnc-target.json .snap/vnc-test-agent-pins accept \
-  .snap/vnc-test-accept.png
-```
-
 The following observations came from the native backend, rather than a reference client:
 
 - **TLS and pixels:** negotiated `VeNCrypt X509Plain`. The first acceptance produced a new-certificate challenge, connected at 1280x800, and delivered 661 dirty-rectangle callbacks. `AppleCaptureMedia` produced an 86,906-byte PNG that was visually inspected. Callback counts are not frame-rate measurements.
@@ -73,13 +94,29 @@ The following observations came from the native backend, rather than a reference
 - **Keyboard and ownership:** fresh GTK events recorded appended text `Remora äöüß €A`, including Euro keyval 8364 and explicit key-up events. Holding agent Shift while pressing and releasing human Shift preserved uppercase `A`. Finishing the agent request produced the final Shift-up with modifier state zero and `INPUT_RELEASE true`. Logs and synthetic capture: `.snap/vnc-test-input.log`, `.snap/vnc-test-native-events.jsonl`, and `.snap/vnc-test-input.png`.
 - **Pointer and wheel:** fresh remote events recorded left-button down/up on the pointer surface, vertical delta 1.5, and horizontal delta 1.5. Cursor callbacks reported a 24x24 image and a hotspot change from (3,1) to crosshair (11,11). Logs: `.snap/vnc-test-pointer.log` and `.snap/vnc-test-pointer-events.jsonl`.
 - **UTF-8 clipboard:** the fixture received exactly `Remora UTF8 äöüß € 界` from the native client. The native client then received exactly `Remora clipboard: Grüße 日本語 🐟` from the fixture. Logs: `.snap/vnc-test-clipboard.log` and `.snap/vnc-test-clipboard-events.jsonl`.
-- **Geometry:** a server-originated change delivered 1024x768 with `REQUESTED false` and the matching Metal desktop size. A client request delivered 1100x720 and the matching Metal desktop size. The client-requested origin flag varied during output restoration and initial negotiation; that flag was not established as reliable by this run. Logs: `.snap/vnc-test-{server,client}-resize.log`. The target was restored to 1280x800.
+- **Geometry:** a server-originated change delivered 1024x768 with `REQUESTED false` and the matching Metal desktop size. A client request was forwarded asynchronously by wayvnc. The final-artifact retest is described below; earlier pending-request origin inference is not used.
 - **Hidden refresh:** display-update disabling changed callback counts from 657 to 661 while in-flight work drained. Re-enabling updates advanced the count to 1185. This established current-frame resumption, not reduced wire traffic. Log: `.snap/vnc-test-hidden.log`.
 - **Video:** the existing `SessionCapture` and `AppleCaptureMedia` pipeline finalized `.snap/vnc-native-recording.mov`. `ffprobe` identified HEVC, 1280x800, and duration 2.183333 seconds. `ffmpeg` decoded three frames with three distinct pixel hashes. Container metadata reported four frames. Logs: `.snap/vnc-test-recording.log`, `.snap/vnc-test-recording-metadata.json`, and `.snap/vnc-test-recording-framemd5.txt`.
 
+The retained SwiftPM verifier was then rebuilt against the final patched engine. Acceptance passed with 535 dirty-rectangle callbacks at 1280x800. Incorrect-password rejection passed with the typed authentication failure. A private target-file copy with only `host` changed to `localhost` exercised DNS resolution and a new certificate-pin decision, then received 749 callbacks at 1280x800. Logs: `.snap/vnc-final-tools-{accept,wrong-password,localhost}-v3.log`.
+
+The final client-resize run passed with 1,453 callbacks, the actual 1100x720 Metal desktop, `REQUESTED false`, and resize capability retained throughout the request. Its exact wire sequence was:
+
+```text
+ExtendedDesktopSize origin=1 result=4 screens=1 size=1100x720
+ExtendedDesktopSize origin=0 result=0 screens=1 size=1280x800
+ExtendedDesktopSize origin=0 result=0 screens=1 size=1100x720
+```
+
+Result 4 means "Request forwarded" and permits asynchronous completion. The later origin-zero update supplies the actual geometry; reporting `REQUESTED false` preserves that wire origin. The forwarded reply must not allocate the requested framebuffer early or remove resize capability. This behavior follows the [RFB ExtendedDesktopSize specification](https://github.com/rfbproto/rfbproto/blob/master/rfbproto.rst#extendeddesktopsize-pseudo-encoding). The verifier checks actual dimensions and retained capability instead of requiring a synchronous success reply. Log: `.snap/vnc-final-tools-resize-v3.log`.
+
+A server-originated resize was repeated against that final engine and delivered 1024x768, `REQUESTED false`, and 913 callbacks with the matching Metal desktop size. After restoring 1280x800, another input run produced fresh appended `Remora äöüß €A` text and a successful source release. Logs: `.snap/vnc-final-tools-server-resize.log`, `.snap/vnc-final-tools-input-after-resize.log`, and `.snap/vnc-final-tools-events-after-resize.jsonl`.
+
+The fullscreen fixture also passed fresh text entry `Remora äöüß €A`, remote pointer down/up and both scroll axes, and bidirectional UTF-8 clipboard checks through the retained verifier. Logs: `.snap/vnc-fullscreen-{input,pointer,clipboard}.log` and `.snap/vnc-fullscreen-events.jsonl`. Fullscreen placement keeps the controls stable when the compositor resizes the output.
+
 Independent target checks also verified X509Plain with the Pi's installed Debian LibVNCClient 0.9.15 and GnuTLS, including repeated raw-only connections. A scratch Python protocol probe verified TLS certificate rejection and incorrect-password rejection, but had an unresolved subsequent-frame timeout. It was removed from the reusable tools and was not used to judge Remora.
 
-This run did not establish full application UI or CLI behavior. Those checks require the UI owner's separately isolated development app with the real backend synchronized into it. Native smoke input used the backend's agent-input API, not the application CLI. The run also did not test live certificate rotation, sustained network-loss recovery, every encoding individually, audio, or VNC servers on Windows or macOS. No result here establishes support for other authentication modes or operating systems.
+This run did not establish full application UI or CLI behavior. Those checks require a separately isolated development app with the real backend. Native smoke input used the backend's agent-input API, not the application CLI. The run also did not test live certificate rotation, sustained network-loss recovery, every encoding individually, audio, or VNC servers on Windows or macOS. No result here establishes support for other authentication modes or operating systems.
 
 ## Stop and clean up
 

@@ -73,6 +73,7 @@ window.connect("key-release-event", lambda _, e: record("key-up", keyval=e.keyva
 window.connect("destroy", Gtk.main_quit)
 GLib.timeout_add(500, lambda: (area.queue_draw(), True)[1])
 window.show_all()
+window.fullscreen()
 entry.grab_focus()
 record("ready")
 Gtk.main()
