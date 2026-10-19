@@ -1,6 +1,6 @@
 --- a/include/rfb/rfbclient.h
 +++ b/include/rfb/rfbclient.h
-@@ -506,6 +506,11 @@
+@@ -506,6 +506,12 @@
          rfbBool isUpdateRectManagedByLib;
  
          GetX509CertFingerprintMismatchDecisionProc GetX509CertFingerprintMismatchDecision;
@@ -8,6 +8,7 @@
 +        rfbBool remoraAuthFailed;
 +        rfbBool remoraResizeSupported;
 +        rfbBool remoraResizeProhibited;
++        uint16_t remoraLastResizeWidth, remoraLastResizeHeight;
 +        void (*RemoraDesktopSize)(struct _rfbClient*, rfbBool requested);
  } rfbClient;
  
@@ -171,7 +172,7 @@
    }
    
    rfbClientLog("Selected Security Scheme %d\n", authScheme);
-@@ -1704,6 +1636,7 @@
+@@ -1704,12 +1636,20 @@
    rfbSetDesktopSizeMsg sdm;
    rfbExtDesktopScreen screen;
  
@@ -179,17 +180,33 @@
    if (client->screen.width == 0 && client->screen.height == 0 ) {
      rfbClientLog("Screen not yet received from server - not sending dimensions %dx%d\n", width, height);
      return TRUE;
-@@ -1729,8 +1662,7 @@
+   }
+ 
+-  if (client->screen.width != rfbClientSwap16IfLE(width) || client->screen.height != rfbClientSwap16IfLE(height)) {
++  /* Confirmed geometry and the last sent intent differ during forwarded
++   * resizes. A return to the current geometry must supersede an older request. */
++  if (!client->remoraLastResizeWidth) {
++    client->remoraLastResizeWidth = rfbClientSwap16IfLE(client->screen.width);
++    client->remoraLastResizeHeight = rfbClientSwap16IfLE(client->screen.height);
++  }
++  if (client->screen.width != rfbClientSwap16IfLE(width) || client->screen.height != rfbClientSwap16IfLE(height) ||
++      client->remoraLastResizeWidth != width || client->remoraLastResizeHeight != height) {
+     rfbClientLog("Sending dimensions %dx%d\n", width, height);
+     sdm.type = rfbSetDesktopSize;
+     sdm.width = rfbClientSwap16IfLE(width);
+@@ -1729,8 +1669,9 @@
      if (!WriteToRFBServer(client, (char *)&sdm, sz_rfbSetDesktopSizeMsg)) return FALSE;
      if (!WriteToRFBServer(client, (char *)&screen, sz_rfbExtDesktopScreen)) return FALSE;
  
 -    client->screen.width = screen.width;
 -    client->screen.height = screen.height;
++    client->remoraLastResizeWidth = width;
++    client->remoraLastResizeHeight = height;
 +    /* Keep the confirmed screen geometry until the server applies a change. */
  
      client->requestedResize = FALSE;
  
-@@ -2149,6 +2081,7 @@
+@@ -2149,6 +2090,7 @@
  	if(!ResizeClientBuffer(client, rect.r.w, rect.r.h))
  	  return FALSE;
  	SendFramebufferUpdateRequest(client, 0, 0, rect.r.w, rect.r.h, FALSE);
@@ -197,7 +214,7 @@
  	rfbClientLog("Got new framebuffer size: %dx%d\n", rect.r.w, rect.r.h);
  	continue;
        }
-@@ -2165,24 +2098,41 @@
+@@ -2165,24 +2107,41 @@
          }
  
          screens = eds.numberOfScreens;

@@ -12,6 +12,9 @@ private final class StalledPeer: @unchecked Sendable {
     private let lock = NSLock()
     private var accepted: Int32 = -1
     private var closing = false
+    private var clientBytes: [UInt8] = []
+    private var clientPrefixRead = false
+    private var receivedResizes: [DesktopSize] = []
 
     init(partialFrame: Bool, stallRectangle: Bool = true) throws {
         let listener = socket(AF_INET, SOCK_STREAM, 0)
@@ -57,6 +60,38 @@ private final class StalledPeer: @unchecked Sendable {
             1,0,0,0, 0,0,0,1, 0,0,0,0, 0,width,0,16, 0,0,0,0]
         lock.withLock {
             if accepted >= 0 { bytes.withUnsafeBytes { _ = Darwin.send(accepted, $0.baseAddress, $0.count, 0) } }
+        }
+    }
+    func resizeRequests() -> [DesktopSize] {
+        lock.withLock {
+            guard accepted >= 0 else { return receivedResizes }
+            var bytes = [UInt8](repeating: 0, count: 8192)
+            while true {
+                let count = recv(accepted, &bytes, bytes.count, MSG_DONTWAIT)
+                guard count > 0 else { break }
+                clientBytes.append(contentsOf: bytes.prefix(count))
+            }
+            // Client version, None selection, and ClientInit precede normal messages.
+            if !clientPrefixRead {
+                guard clientBytes.count >= 14 else { return receivedResizes }
+                clientBytes.removeFirst(14)
+                clientPrefixRead = true
+            }
+            while clientBytes.count >= 8 {
+                func word(_ offset: Int) -> Int { Int(clientBytes[offset]) << 8 | Int(clientBytes[offset + 1]) }
+                let length: Int
+                switch clientBytes[0] {
+                case 0: length = 20 // SetPixelFormat
+                case 2: length = 4 + word(2) * 4 // SetEncodings
+                case 3: length = 10 // FramebufferUpdateRequest
+                case 251: length = 8 + Int(clientBytes[6]) * 16 // SetDesktopSize
+                default: return receivedResizes
+                }
+                guard clientBytes.count >= length else { return receivedResizes }
+                if clientBytes[0] == 251 { receivedResizes.append(.init(width: word(2), height: word(4))) }
+                clientBytes.removeFirst(length)
+            }
+            return receivedResizes
         }
     }
     func stop() {
@@ -187,4 +222,32 @@ private struct DiscardFrames: FrameSink { func consume(_ frame: BorrowedFrame) {
     #expect(capabilities == [true, false])
     #expect(!sizes.contains(.init(width: 32, height: 16)))
     #expect(sizes.last == .init(width: 16, height: 16))
+}
+
+
+@Test @MainActor func vncResizeBackToConfirmedSizeIsSentWhileEarlierResizeIsForwarded() async throws {
+    let peer = try StalledPeer(partialFrame: true, stallRectangle: false)
+    defer { peer.stop() }
+    let session = VNCSession(configuration: .init(host: "127.0.0.1", port: peer.port, username: "", desktopSize: .init(width: 16, height: 16)), frameSink: DiscardFrames())
+    let fallback = Task { do { try await Task.sleep(for: .seconds(3)); peer.stop(); session.disconnect() } catch {} }
+    defer { fallback.cancel() }
+    var requests: [DesktopSize] = []
+    session.connect()
+    for await event in session.events {
+        switch event {
+        case .stateChanged(.connected): peer.sendLayout(width: 16, origin: 0, result: 0)
+        case .dynamicResizeChanged(true):
+            session.requestResize(.init(width: 32, height: 16), scale: 1)
+            let firstDeadline = ContinuousClock.now.advanced(by: .seconds(1))
+            while peer.resizeRequests().isEmpty, ContinuousClock.now < firstDeadline { try await Task.sleep(for: .milliseconds(5)) }
+            peer.sendLayout(width: 32, origin: 1, result: 4)
+            session.requestResize(.init(width: 16, height: 16), scale: 1)
+            let deadline = ContinuousClock.now.advanced(by: .milliseconds(250))
+            while peer.resizeRequests().count < 2, ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(5)) }
+            requests = peer.resizeRequests()
+            session.disconnect()
+        default: break
+        }
+    }
+    #expect(requests == [.init(width: 32, height: 16), .init(width: 16, height: 16)])
 }
