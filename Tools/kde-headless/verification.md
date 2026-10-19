@@ -18,13 +18,18 @@ capability negotiation.
 | `patches/kwin-6.3.6-cursor-free-screencast.patch` | Render the workspace separately for capture so the virtual output's software cursor does not enter desktop video. |
 | `patches/kpipewire-6.3.6-encoder-backpressure.patch` | Pause before encoding, retain the latest source frame, and bound encoder work. |
 | `patches/krdp-6.3.5-bounded-flow.patch` | Replace the RTT source-rate heuristic and sender polling with bounded ACK and encoder backpressure. |
+| `patches/krdp-6.3.5-scroll.patch` | Preserve fractional wheel deltas and encode native Wayland axis values correctly. |
+| `patches/krdp-6.3.5-clipboard.patch` | Adapt upstream bidirectional Unicode text clipboard support to the native Plasma backend. |
 
 Apply the KWin patches in the listed order with `patch -p1` from its source
-directory. Apply the KRdp input patch before its flow-control patch. Build the
+directory. Apply the KRdp input, flow-control, scroll, and clipboard patches in
+that order. The clipboard patch also requires KF6 GuiAddons. Build the
 patched KPipeWire first, then rebuild both the KRdp library and server against
 it. Use private prefixes to retain the system desktop packages. Application
 order, build requirements, and measured motion results are in
 [smoothness-verification.md](smoothness-verification.md).
+The current input and clipboard checks, supported formats, and known server
+limitations are recorded in [compatibility.md](compatibility.md).
 
 The EGL patch comes from KWin commit
 [`60b39e6`](https://github.com/KDE/kwin/commit/60b39e6fdaa8e1c8f54e5c9bc919dae5d6c0cd43).
@@ -64,8 +69,8 @@ Loading a private executable with the system capture plugin does not test the fi
 
 ## Remaining work
 
-The setup is temporary and has no login or reboot service. Global KDE shortcuts
-are disabled in the isolated launcher. The capture backport renders a complete
+The setup is temporary and has no login or reboot service. The current P1
+launcher enables global KDE shortcuts; Alt+F4 has been verified. The capture backport renders a complete
 output scene. The flow-control backport approximately doubled distinct desktop
 updates in the measured animation and drag workloads. Delivered motion remains
 below 60 updates per second. GNOME/Windows parity has not been measured.
