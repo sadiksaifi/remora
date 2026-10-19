@@ -42,3 +42,11 @@ import Testing
     #expect(try JSONDecoder().decode([Connection].self, from: encoded) == [old, vnc])
     #expect(vnc.port == 5900)
 }
+
+@Test func vncPatchesDiscardRDPDomainsWithoutChangingRDP() throws {
+    let rdp = Connection(name: "Desktop", host: "host", username: "user", domain: "OFFICE")
+    let vnc = try ConnectionPatch(kind: .vnc).applying(to: rdp)
+    #expect(vnc.domain == nil)
+    #expect(try ConnectionPatch(domain: "IGNORED").applying(to: vnc).domain == nil)
+    #expect(try ConnectionPatch(name: "Renamed").applying(to: rdp).domain == "OFFICE")
+}

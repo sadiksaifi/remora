@@ -40,6 +40,7 @@ public struct ConnectionPatch: Sendable {
         if let port { result.port = port }
         if let username { result.username = trim(username) }
         if let domain { result.domain = trim(domain).isEmpty ? nil : trim(domain) }
+        if result.kind == .vnc { result.domain = nil }
         if let resolution { result.resolution = resolution }
         guard !result.host.isEmpty, !result.host.contains(where: \.isWhitespace), !result.host.contains("/") else {
             throw ValidationFailure(message: "Enter a host name or IP address without spaces or slashes.")
