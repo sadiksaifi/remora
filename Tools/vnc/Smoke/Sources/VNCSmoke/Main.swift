@@ -167,7 +167,7 @@ final class Sink: FrameSink, @unchecked Sendable {
             case .credentialsChallenge(let challenge):
                 credentialsSeen = true
                 print("CREDENTIALS \(challenge.fields)")
-                if mode == "prompt-cancel" { session.disconnect() }
+                if mode == "prompt-cancel" { challenge.responder.respond(nil) }
                 else { challenge.responder.respond(.init(username: target.username, password: target.password)) }
             case .desktopSizeChanged(let size, let requested):
                 print("SIZE \(size) REQUESTED \(requested)")
