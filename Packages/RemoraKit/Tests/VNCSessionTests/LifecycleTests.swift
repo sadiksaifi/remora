@@ -65,6 +65,12 @@ private final class StalledPeer: @unchecked Sendable {
         if screens == 2 { bytes += [0,0,0,2, 0,0,0,0, 0,width,0,16, 0,0,0,0] }
         send(bytes)
     }
+    func sendCursor(hidden: Bool) {
+        // RichCursor: one opaque red pixel, or the protocol's empty shape.
+        let bytes: [UInt8] = [0,0,0,1, 0,0,0,0, 0,hidden ? 0 : 1,0,hidden ? 0 : 1, 255,255,255,17]
+            + (hidden ? [] : [0,0,255,0,128])
+        send(bytes)
+    }
     private func send(_ bytes: [UInt8]) {
         lock.withLock {
             if accepted >= 0 { bytes.withUnsafeBytes { _ = Darwin.send(accepted, $0.baseAddress, $0.count, 0) } }
@@ -343,4 +349,25 @@ private func waitForResizes(_ count: Int, from peer: StalledPeer) async throws -
         }
         #expect(exercised)
     }
+}
+
+@Test @MainActor func vncEmptyCursorShapeHidesThePreviousImage() async throws {
+    let peer = try StalledPeer(partialFrame: true, stallRectangle: false)
+    defer { peer.stop() }
+    let session = VNCSession(configuration: .init(host: "127.0.0.1", port: peer.port, username: "", desktopSize: .init(width: 16, height: 16)), frameSink: DiscardFrames())
+    let fallback = Task { do { try await Task.sleep(for: .seconds(1)); session.disconnect() } catch {} }
+    defer { fallback.cancel() }
+    var cursors: [RemoteCursor] = []
+    session.connect()
+    for await event in session.events {
+        switch event {
+        case .stateChanged(.connected): peer.sendCursor(hidden: false)
+        case .cursorChanged(let cursor):
+            cursors.append(cursor)
+            if cursors.count == 1 { peer.sendCursor(hidden: true) }
+            if cursors.count == 2 { session.disconnect() }
+        default: break
+        }
+    }
+    #expect(cursors == [.image(pixels: Data([0,0,255,255]), width: 1, height: 1, hotspot: .init(x: 0, y: 0)), .hidden])
 }
