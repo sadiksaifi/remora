@@ -354,7 +354,8 @@ public final class VNCSession: AgentInputSession, @unchecked Sendable {
                         responder: responder, fields: usernameRequired ? .usernamePassword : .password))]
                 }
             }
-            guard let answer else { return false }
+            // A nil answer is the user's cancellation, not a rejected account.
+            guard let answer else { session.state.lock.withLock { if session.state.reason == nil { session.state.reason = .cancelledByUser } }; return false }
             let username = strdup(answer.username), password = strdup(answer.password)
             guard let username, let password else { free(username); free(password); return false }
             newUsername?.pointee = username; newPassword?.pointee = password

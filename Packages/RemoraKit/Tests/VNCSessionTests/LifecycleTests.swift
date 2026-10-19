@@ -4,7 +4,7 @@ import RemoraCore
 import Testing
 import VNCSession
 
-/// A loopback network boundary that stalls inside a greeting or raw rectangle.
+/// A loopback network boundary that stalls inside a greeting, a raw rectangle, or a classic VNC password challenge.
 /// No TLS, credentials, external server, saved settings, or Keychain is used.
 private final class StalledPeer: @unchecked Sendable {
     let port: UInt16
@@ -16,7 +16,7 @@ private final class StalledPeer: @unchecked Sendable {
     private var clientPrefixRead = false
     private var receivedResizes: [DesktopSize] = []
 
-    init(partialFrame: Bool, stallRectangle: Bool = true) throws {
+    init(partialFrame: Bool, stallRectangle: Bool = true, passwordChallenge: Bool = false) throws {
         let listener = socket(AF_INET, SOCK_STREAM, 0)
         self.listener = listener
         var address = sockaddr_in()
@@ -42,7 +42,11 @@ private final class StalledPeer: @unchecked Sendable {
                 return true
             }
             guard ready else { return }
-            if partialFrame {
+            if passwordChallenge {
+                // RFB 3.8, VncAuth only, and its 16-byte challenge.
+                let bytes = Array("RFB 003.008\n".utf8) + [1, 2] + [UInt8](repeating: 0, count: 16)
+                bytes.withUnsafeBytes { _ = Darwin.send(client, $0.baseAddress, $0.count, 0) }
+            } else if partialFrame {
                 // RFB 3.8, None, SecurityResult success, 16x16 ServerInit.
                 var bytes = Array("RFB 003.008\n".utf8) + [1, 1, 0, 0, 0, 0]
                 bytes += [0,16,0,16, 32,24,0,1, 0,255,0,255,0,255, 16,8,0, 0,0,0, 0,0,0,0]
@@ -120,6 +124,29 @@ private struct DiscardFrames: FrameSink { func consume(_ frame: BorrowedFrame) {
         if case .stateChanged(.disconnected(let reason)) = event { terminals.append(reason) }
     }
     #expect(start.duration(to: .now) < .seconds(1))
+    #expect(terminals == [.cancelledByUser])
+}
+
+@Test @MainActor func vncCredentialsCancellationThroughResponderEndsAsCancelled() async throws {
+    let peer = try StalledPeer(partialFrame: false, passwordChallenge: true)
+    defer { peer.stop() }
+    let session = VNCSession(configuration: .init(host: "127.0.0.1", port: peer.port, username: "", desktopSize: .init(width: 16, height: 16)), frameSink: DiscardFrames())
+    let fallback = Task { do { try await Task.sleep(for: .seconds(3)); peer.stop(); session.disconnect() } catch {} }
+    defer { fallback.cancel() }
+    var fields: [CredentialsChallenge.Fields] = []
+    var terminals: [DisconnectReason?] = []
+    session.connect()
+    for await event in session.events {
+        switch event {
+        // The credentials sheet's Cancel and the CLI prompt answer nil without disconnecting.
+        case .credentialsChallenge(let challenge):
+            fields.append(challenge.fields)
+            challenge.responder.respond(nil)
+        case .stateChanged(.disconnected(let reason)): terminals.append(reason)
+        default: break
+        }
+    }
+    #expect(fields == [.password])
     #expect(terminals == [.cancelledByUser])
 }
 
