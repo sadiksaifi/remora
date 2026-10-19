@@ -31,10 +31,12 @@ The in-flight limit is `ceil(60 * RTT_seconds)`, clamped to 2 through 60 frames.
 The encoded send queue pauses the producer above three queued packets and
 resumes it when empty. The encoder's combined filter/encode pending budget is
 three frames, KPipeWire 6.3's minimum. Source frames are coalesced before encoding; encoded H.264 packets
-remain in order. The repeat timer respects pause and capacity. The latest
-paused frame is submitted after resume, including when the desktop becomes
-stationary. Pause state survives producer recreation, and cached frames are
-cleared on format setup.
+remain in order. The repeat timer respects pause and capacity. A rejected
+source remains pending until submission succeeds. Encoder completion and resume
+retry pending work when capacity returns. A separate flag retains an expired
+one-shot codec flush; successful submission consumes that flag. New source
+frames replace older pending work. Pause state survives producer recreation,
+and cached frames are cleared on format setup.
 
 A suspended-ACK PDU clears pending IDs and disables ACK tracking until a normal
 ACK returns. Exact ID matching avoids ordered arithmetic across uint32 wrap.
@@ -179,6 +181,86 @@ are retained outside Git under `.snap/perf-kde/`. They contain no saved
 credentials or private keys. The obsolete benchmark desktop and its generated
 password/key were removed. The separate demo uses a one-hour launcher and no
 per-frame instrumentation or ACK probe.
+
+## Final frame recovery correction
+
+Review of commit `2449bc9` found a recovery bug in the KPipeWire backport. If
+its combined pending budget stayed full beyond the repeat timer, the timer
+returned without another trigger. A final rejected source or delayed codec
+flush could remain unsent indefinitely. Resuming a paused source into a full
+budget had the same failure.
+
+The correction retains rejected source work and expired repeat work separately.
+The existing encoded-completion notification retries only retained work on the
+producer thread. Resume uses the same operation. Pause, deactivation, and the
+three-frame budget still gate submission. A successful source submission arms
+the usual delayed flush; a successful flush consumes its pending state. No
+capacity polling timer, extra encoded-packet queue, or completion-driven repeat
+loop was added.
+
+`verification/producer-recovery.py SOURCE BUILD` compiles a disposable producer
+copy against an existing KPipeWire 6.3.6 Makefiles build. It removes only the
+PipeWire connection setup from `initialize()`, retaining the actual repeat
+timer and all producer admission/retry code. The C++ fixture supplies CPU image
+frames at `processFrame()`, replaces image download with an FFmpeg buffer
+submission, and uses the actual libx264 filter graph, encoder, and H.264 decoder.
+It holds worker processing while three real filtered frames occupy the budget,
+sends one final source, then waits 250 ms, beyond the actual 100 ms single-shot
+repeat interval. After releasing processing it sends no more sources. Worker
+operations and their pending-counter updates run synchronously under fixture
+control. This isolates producer recovery; it does not reproduce PipeWire buffer
+ownership, worker races, network ACK pressure, or end-to-end recovery latency.
+
+The same fixture ran against a separate build of the original `2449bc9`
+producer and the corrected producer on 2026-10-19:
+
+| Scenario | Original producer | Corrected producer |
+| --- | --- | --- |
+| Final source rejected by full budget | Final frame absent | Final frame decoded |
+| Resume cached source into full budget | Final frame absent | Final frame decoded |
+| Accepted final source's repeat flush encounters full budget | Final frame absent | Final frame decoded |
+| Release capacity while paused, then resume cached source | Passed | Passed |
+| Release capacity while a repeat flush is paused, then resume | Final frame absent | Final frame decoded |
+
+Both builds held three pending filtered frames for the full 250 ms. On the
+original failures only timestamps 100 and 120 decoded; the expected final was
+160 for source/resume tests and 140 for repeat tests. The corrected source tests
+made five filter submissions, including one final flush, and decoded
+100, 120, 160, 160. Repeat tests made four submissions and decoded 100, 120, 140.
+Decoded pixel brightness also matched each frame's timestamp marker. Completion
+notifications and another 500 ms after settling caused no further submissions.
+Releasing capacity while paused caused no submission before resume. The pending
+budget remained bounded in these runs. KPipeWire 6.3.6's existing filtered-frame
+discard at the encode boundary is exercised here; no encoded H.264 packet is
+discarded by this correction.
+
+The corrected, uninstrumented private library was rebuilt and installed at
+`/home/sdk/.local/opt/kpipewire-recovery-6.3.6`. A separate desktop on remote
+loopback port 3394 loaded it with the existing final KRdp server. The original
+smoothness demo on 3393 was left running with its previous library. Both patch
+chains again reproduced the compiled source files byte for byte; the updated
+KPipeWire patch also passed a dry run with `--fuzz=0`.
+
+Through Remora, the corrected server received `Ctrl+N` and the text
+"KDE encoder recovery verified" in Kate. Screenshots verified the text, reconnect, and window close through the title
+bar button. Captured frames contained no server cursor after pointer movement.
+The isolated launcher disables global shortcuts, so this smoke check used the
+button rather than `Alt+F4`. Runtime maps confirmed the new KPipeWire libraries and existing private
+KRdp library. The compositor retained both cursor-fixed capture modules. No
+probe or per-frame instrumentation was loaded.
+
+One scoped steady-motion recording of the corrected uninstrumented build
+measured 35.06 distinct updates/s over 20.025 seconds, mean 28.53 ms, p95
+50.00 ms, maximum 86.67 ms, and zero gaps over 100 ms. It used the same moving
+counter fixture on the separate desktop, at client-area origin 266,129. This is
+a deployment regression check, not a new matched before/after comparison. The
+original comparison above remains evidence for the flow-control change.
+
+Evidence is under `.snap/perf-kde/recovery/`: `red-final.log`,
+`green-final.log`, `patch-check.log`, `runtime.txt`, screenshots, `motion.mov`,
+and `motion-metrics.json`. GDM and the system GNOME remote-desktop service
+remained active, port 3389 remained listening, and NVIDIA remained 615.71.09 on
+the GTX 1660 Ti. No system package, service, or driver was changed.
 
 ## Limits
 

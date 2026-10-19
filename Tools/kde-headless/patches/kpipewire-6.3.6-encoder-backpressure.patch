@@ -67,32 +67,45 @@ diff --git a/src/pipewireproduce_p.h b/src/pipewireproduce_p.h
      int maxPendingFrames() const;
      void setMaxPendingFrames(int newMaxBufferSize);
  
-@@ -124,6 +128,8 @@
+@@ -124,6 +128,9 @@
  
      QScopedPointer<QTimer> m_frameRepeatTimer;
      PipeWireFrame m_lastFrame;
 +    PipeWireFrame m_lastDroppedFrame;
++    bool m_repeatPending = false;
 +    std::atomic_bool m_encoderPaused = false;
  
      std::thread m_passthroughThread;
      std::thread m_outputThread;
+@@ -155,6 +162,7 @@
+     void finished();
+
+ private:
++    void retryPendingFrame();
+     void initFiltersVaapi();
+     void initFiltersSoftware();
+     std::unique_ptr<Encoder> makeEncoder();
 diff --git a/src/pipewireproduce.cpp b/src/pipewireproduce.cpp
 --- a/src/pipewireproduce.cpp
 +++ b/src/pipewireproduce.cpp
-@@ -81,6 +81,9 @@
+@@ -81,16 +81,48 @@
      m_frameRepeatTimer->setSingleShot(true);
      m_frameRepeatTimer->setInterval(100);
      connect(m_frameRepeatTimer.data(), &QTimer::timeout, this, [this]() {
-+        if (m_encoderPaused || m_pendingFilterFrames + m_pendingEncodeFrames >= m_maxPendingFrames) {
-+            return;
-+        }
-         auto f = m_lastFrame;
-         m_lastFrame = {};
-         aboutToEncode(f);
-@@ -93,6 +96,21 @@
+-        auto f = m_lastFrame;
+-        m_lastFrame = {};
+-        aboutToEncode(f);
+-        if (!m_encoder->filterFrame(f)) {
+-            return;
+-        }
+-
+-        m_pendingFilterFrames++;
+-        m_passthroughCondition.notify_all();
++        m_repeatPending = true;
++        retryPendingFrame();
      });
- }
- 
++}
++
 +void PipeWireProduce::setEncoderPaused(bool paused)
 +{
 +    if (m_encoderPaused.exchange(paused) == paused) {
@@ -100,44 +113,100 @@ diff --git a/src/pipewireproduce.cpp b/src/pipewireproduce.cpp
 +    }
 +    if (!paused) {
 +        QMetaObject::invokeMethod(this, [this]() {
-+            if (m_lastDroppedFrame.dataFrame || m_lastDroppedFrame.dmabuf) {
-+                const auto frame = m_lastDroppedFrame;
-+                processFrame(frame);
-+            }
++            retryPendingFrame();
 +        });
 +    }
 +}
 +
++void PipeWireProduce::retryPendingFrame()
++{
++    if (m_deactivated || m_encoderPaused || m_pendingFilterFrames + m_pendingEncodeFrames >= m_maxPendingFrames) {
++        return;
++    }
++    // A rejected source needs its own submission, then the usual delayed flush.
++    if (m_lastDroppedFrame.dataFrame || m_lastDroppedFrame.dmabuf) {
++        const auto frame = m_lastDroppedFrame;
++        processFrame(frame);
++        return;
++    }
++    if (!m_repeatPending || (!m_lastFrame.dataFrame && !m_lastFrame.dmabuf)) {
++        return;
++    }
++
++    auto frame = m_lastFrame;
++    aboutToEncode(frame);
++    if (!m_encoder->filterFrame(frame)) {
++        return;
++    }
++    // Consume the one-shot flush only after the encoder accepts it.
++    m_lastFrame = {};
++    m_repeatPending = false;
++    m_pendingFilterFrames++;
++    m_passthroughCondition.notify_all();
+ }
+
  Fraction PipeWireProduce::maxFramerate() const
- {
-     return m_maxFramerate;
-@@ -127,6 +145,7 @@
+@@ -127,6 +159,9 @@
  
  void PipeWireProduce::setupStream()
  {
 +    m_lastDroppedFrame = {};
++    m_lastFrame = {};
++    m_repeatPending = false;
      qCDebug(PIPEWIRERECORD_LOGGING) << "Setting up stream";
      disconnect(m_stream.get(), &PipeWireSourceStream::streamParametersChanged, this, &PipeWireProduce::setupStream);
  
-@@ -269,6 +288,12 @@
+@@ -258,6 +293,7 @@
+     auto f = frame;
+
+     m_lastFrame = frame;
++    m_repeatPending = false;
+     m_frameRepeatTimer->start();
+
+     if (frame.cursor) {
+@@ -269,17 +305,24 @@
          }
      }
  
++    m_lastDroppedFrame = frame;
 +    if (m_encoderPaused) {
-+        m_lastDroppedFrame = frame;
 +        return;
 +    }
-+    m_lastDroppedFrame = {};
 +
      auto pts = framePts(frame.presentationTimestamp);
      if (m_previousPts >= 0 && pts <= m_previousPts) {
-         return;
-@@ -279,7 +304,7 @@
++        m_lastDroppedFrame = {};
          return;
      }
  
+     auto frameTime = 1000.0 / (m_maxFramerate.numerator / m_maxFramerate.denominator);
+     if ((pts - m_previousPts) < frameTime) {
+-        return;
+-    }
+-
 -    if (m_pendingFilterFrames + 1 > m_maxPendingFrames) {
++        m_lastDroppedFrame = {};
++        return;
++    }
++
 +    if (m_pendingFilterFrames + m_pendingEncodeFrames + 1 > m_maxPendingFrames) {
          qCWarning(PIPEWIRERECORD_LOGGING) << "Filter queue is full, dropping frame" << pts;
          return;
      }
+@@ -289,6 +332,7 @@
+         return;
+     }
+
++    m_lastDroppedFrame = {};
+     m_pendingFilterFrames++;
+     m_previousPts = pts;
+
+@@ -326,7 +370,8 @@
+ void PipeWireProduce::handleEncodedFramesChanged()
+ {
+     if (!m_deactivated) {
++        retryPendingFrame();
+         return;
+     }
+
+     // If we're deactivating but still have frames in the queue, we want to
