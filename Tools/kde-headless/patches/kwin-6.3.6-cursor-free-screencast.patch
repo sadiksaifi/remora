@@ -1,0 +1,239 @@
+--- a/src/core/renderlayer.cpp
++++ b/src/core/renderlayer.cpp
+@@ -137,7 +137,9 @@
+ void RenderLayer::scheduleRepaint(Item *item)
+ {
+     m_repaintScheduled = true;
+-    m_loop->scheduleRepaint(item);
++    if (m_loop) {
++        m_loop->scheduleRepaint(item);
++    }
+ }
+ 
+ bool RenderLayer::needsRepaint() const
+@@ -190,7 +192,9 @@
+     }
+     if (!region.isEmpty()) {
+         m_repaints += region;
+-        m_loop->scheduleRepaint(nullptr, this);
++        if (m_loop) {
++            m_loop->scheduleRepaint(nullptr, this);
++        }
+     }
+ }
+ 
+@@ -237,7 +241,9 @@
+     } else {
+         if (m_outputLayer) {
+             m_outputLayer->addRepaint(mapToGlobal(boundingRect()).toAlignedRect());
+-            m_loop->scheduleRepaint(nullptr, this);
++            if (m_loop) {
++                m_loop->scheduleRepaint(nullptr, this);
++            }
+         }
+     }
+ 
+--- a/src/plugins/screencast/outputscreencastsource.cpp
++++ b/src/plugins/screencast/outputscreencastsource.cpp
+@@ -6,6 +6,7 @@
+ 
+ #include "outputscreencastsource.h"
+ #include "screencastutils.h"
++#include "screencastscene.h"
+ 
+ #include "compositor.h"
+ #include "core/output.h"
+@@ -23,6 +24,7 @@
+ OutputScreenCastSource::OutputScreenCastSource(Output *output, QObject *parent)
+     : ScreenCastSource(parent)
+     , m_output(output)
++    , m_scene(std::make_unique<ScreencastScene>(output))
+ {
+     connect(m_output, &QObject::destroyed, this, &ScreenCastSource::closed);
+     connect(m_output, &Output::enabledChanged, this, [this] {
+@@ -54,29 +56,14 @@
+ 
+ void OutputScreenCastSource::render(QImage *target)
+ {
+-    const auto [outputTexture, colorDescription] = Compositor::self()->scene()->textureForOutput(m_output);
+-    if (outputTexture) {
+-        grabTexture(outputTexture.get(), target);
++    if (GLTexture *texture = m_scene->texture()) {
++        grabTexture(texture, target);
+     }
+ }
+ 
+ void OutputScreenCastSource::render(GLFramebuffer *target)
+ {
+-    const auto [outputTexture, colorDescription] = Compositor::self()->scene()->textureForOutput(m_output);
+-    if (!outputTexture) {
+-        return;
+-    }
+-
+-    ShaderBinder shaderBinder(ShaderTrait::MapTexture | ShaderTrait::TransformColorspace);
+-    QMatrix4x4 projectionMatrix;
+-    projectionMatrix.scale(1, -1);
+-    projectionMatrix.ortho(QRect(QPoint(), textureSize()));
+-    shaderBinder.shader()->setUniform(GLShader::Mat4Uniform::ModelViewProjectionMatrix, projectionMatrix);
+-    shaderBinder.shader()->setColorspaceUniforms(colorDescription, ColorDescription::sRGB, RenderingIntent::RelativeColorimetricWithBPC);
+-
+-    GLFramebuffer::pushFramebuffer(target);
+-    outputTexture->render(textureSize());
+-    GLFramebuffer::popFramebuffer();
++    m_scene->render(target);
+ }
+ 
+ std::chrono::nanoseconds OutputScreenCastSource::clock() const
+--- a/src/plugins/screencast/outputscreencastsource.h
++++ b/src/plugins/screencast/outputscreencastsource.h
+@@ -14,6 +14,7 @@
+ {
+ 
+ class Output;
++class ScreencastScene;
+ 
+ class OutputScreenCastSource : public ScreenCastSource
+ {
+@@ -44,6 +45,7 @@
+     void report(const QRegion &damage);
+ 
+     QPointer<Output> m_output;
++    std::unique_ptr<ScreencastScene> m_scene;
+     bool m_active = false;
+ };
+ 
+--- a/src/plugins/screencast/regionscreencastsource.cpp
++++ b/src/plugins/screencast/regionscreencastsource.cpp
+@@ -6,6 +6,7 @@
+ 
+ #include "regionscreencastsource.h"
+ #include "screencastutils.h"
++#include "screencastscene.h"
+ 
+ #include "core/pixelgrid.h"
+ #include "cursor.h"
+@@ -93,7 +94,11 @@
+     m_last = output->renderLoop()->lastPresentationTimestamp();
+ 
+     if (m_renderedTexture) {
+-        const auto [outputTexture, colorDescription] = Compositor::self()->scene()->textureForOutput(output);
++        auto &scene = m_scenes[output];
++        if (!scene) {
++            scene = std::make_unique<ScreencastScene>(output);
++        }
++        GLTexture *outputTexture = scene->texture();
+         const auto outputGeometry = snapToPixelGridF(scaledRect(output->geometryF(), m_scale));
+         if (!outputTexture) {
+             return;
+@@ -108,7 +113,7 @@
+         projectionMatrix.translate(outputGeometry.left(), outputGeometry.top());
+ 
+         shaderBinder.shader()->setUniform(GLShader::Mat4Uniform::ModelViewProjectionMatrix, projectionMatrix);
+-        shaderBinder.shader()->setColorspaceUniforms(colorDescription, ColorDescription::sRGB, RenderingIntent::RelativeColorimetricWithBPC);
++        shaderBinder.shader()->setColorspaceUniforms(ColorDescription::sRGB, ColorDescription::sRGB, RenderingIntent::RelativeColorimetricWithBPC);
+ 
+         outputTexture->render(outputGeometry.size());
+         GLFramebuffer::popFramebuffer();
+@@ -187,6 +192,7 @@
+     }
+ 
+     m_scrappers.clear();
++    m_scenes.clear();
+     m_active = false;
+ }
+ 
+--- a/src/plugins/screencast/regionscreencastsource.h
++++ b/src/plugins/screencast/regionscreencastsource.h
+@@ -8,6 +8,8 @@
+ 
+ #include "screencastsource.h"
+ 
++#include <map>
++
+ #include "opengl/gltexture.h"
+ #include "opengl/glutils.h"
+ 
+@@ -16,6 +18,7 @@
+ 
+ class Output;
+ class RegionScreenCastSource;
++class ScreencastScene;
+ 
+ class RegionScreenCastScrapper : public QObject
+ {
+@@ -63,6 +66,7 @@
+     const QRect m_region;
+     const qreal m_scale;
+     std::vector<std::unique_ptr<RegionScreenCastScrapper>> m_scrappers;
++    std::map<Output *, std::unique_ptr<ScreencastScene>> m_scenes;
+     std::unique_ptr<GLFramebuffer> m_target;
+     std::unique_ptr<GLTexture> m_renderedTexture;
+     std::chrono::nanoseconds m_last;
+--- /dev/null
++++ b/src/plugins/screencast/screencastscene.h
+@@ -0,0 +1,65 @@
++/*
++    SPDX-License-Identifier: GPL-2.0-or-later
++*/
++#pragma once
++
++#include "compositor.h"
++#include "core/output.h"
++#include "core/renderlayer.h"
++#include "core/rendertarget.h"
++#include "opengl/gltexture.h"
++#include "opengl/glutils.h"
++#include "scene/workspacescene.h"
++
++namespace KWin
++{
++
++// Backport the independent scene rendering used by KWin 6.5 screencasts.
++// In 6.3 the cursor is a separate scene/layer, so painting only WorkspaceScene
++// leaves it out. ScreenCastStream continues to implement Embedded/Metadata.
++// Never copy textureForOutput(): virtual outputs have the software cursor in it.
++class ScreencastScene
++{
++public:
++    explicit ScreencastScene(Output *output)
++        : m_output(output)
++        , m_layer(nullptr)
++    {
++        // Capture damage must not schedule another frame on the physical output.
++        m_layer.setDelegate(std::make_unique<SceneDelegate>(Compositor::self()->scene(), output));
++    }
++
++    void render(GLFramebuffer *target)
++    {
++        GLFramebuffer::pushFramebuffer(target);
++        const RenderTarget renderTarget(target);
++        m_layer.delegate()->prePaint();
++        m_layer.resetRepaints();
++        m_layer.delegate()->paint(renderTarget, infiniteRegion());
++        m_layer.delegate()->postPaint();
++        GLFramebuffer::popFramebuffer();
++    }
++
++    GLTexture *texture()
++    {
++        if (!m_texture || m_texture->size() != m_output->pixelSize()) {
++            m_texture = GLTexture::allocate(GL_RGBA8, m_output->pixelSize());
++            if (!m_texture) {
++                return nullptr;
++            }
++            m_texture->setContentTransform(OutputTransform::FlipY);
++            m_texture->setFilter(GL_LINEAR);
++            m_texture->setWrapMode(GL_CLAMP_TO_EDGE);
++        }
++        GLFramebuffer target(m_texture.get());
++        render(&target);
++        return m_texture.get();
++    }
++
++private:
++    Output *const m_output;
++    RenderLayer m_layer;
++    std::unique_ptr<GLTexture> m_texture;
++};
++
++} // namespace KWin
