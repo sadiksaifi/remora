@@ -116,6 +116,7 @@ final class SessionViewController: NSViewController {
         if case .credentials(_, let challenge) = prompt {
             if let answer, remember { try onRememberCredentials(answer) }
             credentials = answer
+            credentialsRejected = false
             cancelChallenge = nil
             dismissChallenge(action: answer == nil ? "cancel" : "connect")
             challenge.responder.respond(answer)
@@ -154,6 +155,9 @@ final class SessionViewController: NSViewController {
     /// A capture failure waits separately, so it never replaces a credentials or certificate request.
     private var pendingAlert: NSAlert?
     private var credentials: SessionCredentials?
+    /// After the server rejects the account, the next attempt asks again instead of resending it.
+    /// The credentials sheet starts with the rejected values.
+    private var credentialsRejected = false
     /// The state the tab shows. Setup failures and teardown count as disconnected.
     private(set) var state: SessionState = .connecting {
         didSet {
@@ -243,6 +247,7 @@ final class SessionViewController: NSViewController {
     func update(_ connection: Connection) {
         self.connection = connection
         credentials = nil
+        credentialsRejected = false
         desktopView?.accessibilityTab = (connection.id, connection.name)
     }
 
@@ -446,7 +451,7 @@ final class SessionViewController: NSViewController {
             let configuration = SessionConfiguration(
                 host: connection.host, port: port, username: currentCredentials.username,
                 domain: currentCredentials.domain,
-                password: currentCredentials.password.isEmpty ? nil : currentCredentials.password,
+                password: credentialsRejected || currentCredentials.password.isEmpty ? nil : currentCredentials.password,
                 desktopSize: desktopSize, scaleFactor: scaleFactor, allowsDynamicResize: allowsDynamicResize
             )
             capture.setSource(renderer.desktop)
@@ -546,6 +551,7 @@ final class SessionViewController: NSViewController {
                 }
                 overlays?.reconnecting(attempt: attempt)
             case .disconnected(let reason):
+                if reason == .authenticationFailed { credentialsRejected = true }
                 endAgentControl()
                 finishCapture()
                 capture.setSource(nil)
