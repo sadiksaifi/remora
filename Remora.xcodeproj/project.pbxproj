@@ -11,6 +11,7 @@
 		2B90048E1C415F08629B0F65 /* remora in Embed Dependencies */ = {isa = PBXBuildFile; fileRef = 00A12A4D5662F66E68A846F4 /* remora */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 		36942A6BC008F4DCAE232FCF /* PromptCommands.swift in Sources */ = {isa = PBXBuildFile; fileRef = F4B73C5B05D6A343D4717514 /* PromptCommands.swift */; };
 		3DD3F2D30298024A67E8AA6A /* RemoraControl in Frameworks */ = {isa = PBXBuildFile; productRef = 60133FC969A2D683DBDC1397 /* RemoraControl */; };
+		443519283476C4C1AC50560F /* VNCSession in Frameworks */ = {isa = PBXBuildFile; productRef = 78B73A027DFFF0DF2A211A18 /* VNCSession */; };
 		7943F21C2B787C5DD67C6E30 /* ScreenCommands.swift in Sources */ = {isa = PBXBuildFile; fileRef = B6681F072D5A435B89C65498 /* ScreenCommands.swift */; };
 		924B46096561BCA50859EE48 /* AgentName.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA418E92D1E2E401983629E4 /* AgentName.swift */; };
 		A791380DFFB1D7C1FCEFADC2 /* SessionCommands.swift in Sources */ = {isa = PBXBuildFile; fileRef = 774002F2A34E21E2D626D880 /* SessionCommands.swift */; };
@@ -18,6 +19,7 @@
 		B4A08E7BD7FDC5A9DDA0BC35 /* InputCommands.swift in Sources */ = {isa = PBXBuildFile; fileRef = CDC9A14AD4B548E7D634FC98 /* InputCommands.swift */; };
 		BC282B680631E3344190DDDB /* RemoraCommand.swift in Sources */ = {isa = PBXBuildFile; fileRef = B508BCE9DE4C6DC56D8AA602 /* RemoraCommand.swift */; };
 		BDE8D1D89FD473F62EB7E3C2 /* ApplicationClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 032183C95484016E7FA4168D /* ApplicationClient.swift */; };
+		BF043928244705CEE24238D0 /* licenses in Resources */ = {isa = PBXBuildFile; fileRef = C5EC201A8ADAB7EA85ABF992 /* licenses */; };
 		BF3629BE785DAD332249FF76 /* RDPSession in Frameworks */ = {isa = PBXBuildFile; productRef = CEE650B072CCF9E151EF611A /* RDPSession */; };
 		D5B4AD9852F4632BF785D4D2 /* skills in Resources */ = {isa = PBXBuildFile; fileRef = 33A5CB241568CBA13777867B /* skills */; };
 		DA3C773AD4CF29259B8F1BE8 /* ArgumentParser in Frameworks */ = {isa = PBXBuildFile; productRef = 3F0067FBBEC140EDB05ACBCB /* ArgumentParser */; };
@@ -63,6 +65,7 @@
 		B6681F072D5A435B89C65498 /* ScreenCommands.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScreenCommands.swift; sourceTree = "<group>"; };
 		BA418E92D1E2E401983629E4 /* AgentName.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentName.swift; sourceTree = "<group>"; };
 		C1DA8E222592E8458A63660D /* ClipboardCommands.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClipboardCommands.swift; sourceTree = "<group>"; };
+		C5EC201A8ADAB7EA85ABF992 /* licenses */ = {isa = PBXFileReference; lastKnownFileType = folder; name = licenses; path = Vendor/licenses; sourceTree = SOURCE_ROOT; };
 		CDC9A14AD4B548E7D634FC98 /* InputCommands.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InputCommands.swift; sourceTree = "<group>"; };
 		E3C547F7F1E1AEA0842A1FA7 /* Remora.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Remora.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		F4B73C5B05D6A343D4717514 /* PromptCommands.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PromptCommands.swift; sourceTree = "<group>"; };
@@ -98,6 +101,7 @@
 				E9111E3861BEE04603B7723C /* RemoraControl in Frameworks */,
 				B1C9787A91AEA39CBD37D6CA /* RemoraCore in Frameworks */,
 				BF3629BE785DAD332249FF76 /* RDPSession in Frameworks */,
+				443519283476C4C1AC50560F /* VNCSession in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -107,6 +111,7 @@
 		1780D6DAE8EB0FCECE8B3709 = {
 			isa = PBXGroup;
 			children = (
+				C5EC201A8ADAB7EA85ABF992 /* licenses */,
 				33A5CB241568CBA13777867B /* skills */,
 				F0BF86DBEFD17FE6CE62F9E8 /* Packages */,
 				C5CDBF053038F5C0A7637D02 /* Remora */,
@@ -196,6 +201,7 @@
 				6E81E453A5FACCD885723067 /* RemoraControl */,
 				F4412091013E9923095E958D /* RemoraCore */,
 				CEE650B072CCF9E151EF611A /* RDPSession */,
+				78B73A027DFFF0DF2A211A18 /* VNCSession */,
 			);
 			productName = Remora;
 			productReference = E3C547F7F1E1AEA0842A1FA7 /* Remora.app */;
@@ -249,6 +255,7 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				BF043928244705CEE24238D0 /* licenses in Resources */,
 				D5B4AD9852F4632BF785D4D2 /* skills in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -589,6 +596,10 @@
 		6E81E453A5FACCD885723067 /* RemoraControl */ = {
 			isa = XCSwiftPackageProductDependency;
 			productName = RemoraControl;
+		};
+		78B73A027DFFF0DF2A211A18 /* VNCSession */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = VNCSession;
 		};
 		CEE650B072CCF9E151EF611A /* RDPSession */ = {
 			isa = XCSwiftPackageProductDependency;

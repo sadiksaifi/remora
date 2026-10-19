@@ -63,6 +63,7 @@ extension CommandLineController {
             fields["kind"] = .string("credentials")
             fields["username"] = .string(session.credentialDraft?.username ?? challenge.username)
             fields["domain"] = .string(session.credentialDraft?.domain ?? challenge.domain)
+            fields["fields"] = .array((challenge.fields == .password ? ["password"] : session.connection.kind == .rdp ? ["username", "domain", "password"] : ["username", "password"]).map(ControlValue.string))
             fields["reason"] = .string(challenge.reason == .missing ? "missing" : "rejected")
             fields["remember"] = .bool(session.credentialDraft?.remember ?? true)
             fields["hasPassword"] = .bool(!(session.credentialDraft?.password.isEmpty ?? true))

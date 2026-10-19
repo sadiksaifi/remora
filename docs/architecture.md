@@ -1,6 +1,6 @@
 # Architecture
 
-Remora is a native macOS remote desktop client. V1 speaks RDP through FreeRDP 3.x. VNC comes later behind the same session interface.
+Remora is a native macOS remote desktop client. RDP uses FreeRDP 3.x. VNC uses LibVNCClient behind the same session interface.
 
 This is personal software. Prefer an existing library or a FreeRDP built-in over writing our own. Write code only where nothing suitable exists.
 
@@ -24,7 +24,9 @@ Packages/RemoraKit/
   RemoraControl            Codable control messages and Network.framework Unix sockets
   CFreeRDPBridge           plain C bridge; the only code that includes FreeRDP headers
   RDPSession               Swift RDP adapter implementing the session protocol
-Vendor/build-engine.sh     builds OpenSSL, FreeRDP, and FFmpeg into an arm64 static XCFramework
+  CVNCBridge               plain C adapter, socket lifecycle, LibVNCClient callbacks
+  VNCSession               Swift VNC adapter and independent input ownership
+Vendor/build-engine.sh     builds static RDP and VNC XCFrameworks sharing OpenSSL
 ```
 
 ## Window and tabs
@@ -129,7 +131,7 @@ The window never resizes for a session. Fixed sessions and unrequested server de
 
 ## Input
 
-`RDPSession` is the common input boundary for AppKit and the command line. Its injected feedback callback reports admitted human input and acknowledged agent input, including Unicode text, physical scancodes, pointer coordinates, button changes, and source releases. It uses the same WinPR Apple-to-scancode mapping as the transport. Local shortcuts and refused agent commands produce no feedback. Each controller owns a lock-protected `SessionOverlayState`; transport callbacks update it without scheduling a task per input event. Source releases and reconnects clear held modifiers and buttons.
+`AgentInputSession` in RemoraCore is the common automation contract for RDP and VNC. `RemoteSession` is the human input boundary. Its injected feedback callback reports admitted human input and acknowledged agent input, including Unicode text, physical scancodes, pointer coordinates, button changes, and source releases. It uses the same WinPR Apple-to-scancode mapping as the transport. Local shortcuts and refused agent commands produce no feedback. Each controller owns a lock-protected `SessionOverlayState`; transport callbacks update it without scheduling a task per input event. Source releases and reconnects clear held modifiers and buttons.
 
 `InputPlan` adds cursor operations around the existing protocol events. At each cursor step the main-actor executor checks whether the tab's desktop is in an unoccluded window with `showAgentPointer` enabled, or the tab is recording with `showPointerInRecordings` enabled. An unpresented cursor places directly and adds no waits. Presented moves travel and wait for arrival before submitting the pointer event. Scroll travels to its location before pointer and wheel submission, without a press. Click and drag wait 0.05 seconds after arrival, press to 0.78 or 0.86, and submit the real event 0.10 seconds after press start. Click retains its 20 ms down/up interval. Later clicks retain their 80 ms interval before the next press. Drag retains its straight samples and `durationMs` pacing, pinning the cursor tip to each successfully submitted sample. Raw button down travels and presses before submission; raw button up travels, submits, and releases. Keyboard, text, and delay actions add no cursor steps. Batches use the same per-action operations. Moves shorter than 0.5 points place without travel or an arrival wait.
 
@@ -207,7 +209,7 @@ In Settings, the switch `captureSystemShortcuts` carries its label directly. It 
 
 ## License
 
-GPL-3.0-or-later. Every dependency is compatible, and it keeps LibVNCClient available for the VNC phase. Distribution is outside the Mac App Store.
+GPL-3.0-or-later. Every dependency is compatible, and it permits the GPL-2.0-or-later LibVNCClient backend. Distribution is outside the Mac App Store.
 
 ## Session capture
 
@@ -304,3 +306,24 @@ The on-screen verifier should use only a development instance it launches itself
 - Exercise automatic reconnect while recording, then verify one playable file with the reconnect interval and resumed desktop frames.
 - Separately test stop, tab close, Disconnect, terminal session end, and app quit through the quit alert. Open every resulting movie after finalization.
 - Check the observable finishing and failed states through the completed UI, including a destination that cannot be written. Confirm the app reports failures and no unexplained partial file remains.
+
+
+## VNC backend
+
+`VNCSession(configuration:frameSink:inputFeedback:)` implements `RemoteSession` and the core `AgentInputSession` contract. `Connection.Kind.vnc` defaults to 5900; RDP retains 3389 and its existing JSON representation. A protocol change replaces the old default port while preserving an explicitly supplied or custom port. Older binaries do not understand VNC records and may quarantine the entire connection file as invalid. Keep a connection-file backup before downgrading.
+
+One worker owns LibVNCClient, all protocol writes, decoding, framebuffer storage, and held input. A mutex protects admission, cancellation, pending commands, and the socket handle. DNS uses the cancellable `DNSServiceGetAddrInfo` descriptor with a five-second limit. Nonblocking TCP connect has a ten-second total limit. A twenty-second initialization watchdog also covers TLS and authentication; an outstanding user challenge suspends it. Disconnect shuts down the published socket and signals the DNS/connect wake descriptor. It resolves a pending challenge and pending agent receipts before the terminal event stream finishes. LibVNCClient has a ten-second incomplete-read timeout. Explicit disconnect interrupts incomplete reads immediately. No detached DNS worker survives cancellation.
+
+The native client negotiates Tight, ZRLE, Hextile, CopyRect, or Raw through LibVNCClient. Borrowed BGRA frames use the existing `FrameSink`, Metal desktop, screenshots, and movie capture. Damage pointers remain valid only within the synchronous callback. Frame allocation is limited to 256 MiB. The server owns geometry. ExtendedDesktopSize enables client resize only for a successful single-screen layout. A successful ExtendedDesktopSize acknowledgment emits a geometry event even when no new framebuffer allocation is needed. The requested flag comes from the wire origin. Standard status 4 means the request was forwarded for asynchronous application. It preserves resizing support and does not change framebuffer geometry. A later origin-0 success supplies the actual dimensions with `requested: false`; the CLI waits for those actual dimensions. A rejected resize disables that capability; a later successful advertisement can restore it. Multi-screen layouts remain server-owned. Fixed saved dimensions cannot force a VNC server to resize. Hidden views may continue receiving frames because this backend does not implement display-update suppression; resuming requests a full redraw.
+
+Security negotiation reads the entire server offer before selecting. VeNCrypt wins over classic methods regardless of server order. Only X509None, X509VNC, and X509Plain subtypes are allowed, with TLS 1.2 or newer. A failed secure handshake never retries a weaker method. Anonymous TLS, plaintext VeNCrypt Plain, SASL, UltraVNC MSLogon, and RSA-AES are unsupported. If VeNCrypt is absent, an unfamiliar advertised security type prevents fallback to classic methods. Servers offering only classic VNC, None, or Apple ARD can connect, but their desktop transport is unencrypted. Classic VNC authentication uses at most the first eight password bytes by protocol design. ARD encrypts authentication, not subsequent desktop traffic. No operating-system profiles alter negotiation.
+
+Certificate TLS verifies chain and DNS/IP identity against `/etc/ssl/cert.pem`. A user can explicitly trust a leaf SHA-256 fingerprint after a validation failure. Once a pin exists, it is checked even if a replacement certificate has a valid CA chain. A changed leaf requires a new decision. Chain failures always identify the leaf rather than an intermediate. Fingerprints are stored per normalized host and port in `~/Library/Application Support/Remora/VNC/certificates`; `certificateStoreURL` supplies a separate directory for isolated verification. A trusted tunnel endpoint uses its configured host as the certificate identity. Trusting a mismatch is an explicit fingerprint decision, never a disabled verification setting. The committed upstream patch also serializes OpenSSL initialization, waits for new socket bytes while exact reads are incomplete, and reports parsed authentication failures and resize status to the adapter.
+
+Credential prompts identify `.password` for classic VNC and `.usernamePassword` for Plain/ARD. VNC has no domain. A rejected password ends the attempt with `authenticationFailed`; the user can reconnect with new credentials. Cancellation is distinct from certificate rejection, DNS failure, refusal, and timeout. VNC has no automatic reconnect in this version.
+
+Human and agent keys and buttons have separate owners. Releasing one source preserves the other's held state. An admitted agent request has at most one pending send; acknowledgment means protocol submission. Cancellation discards its queued input. `finish()` sends source-specific releases outside task cancellation and closes the transport if the release cannot finish within two seconds. Standard keysyms work without an extension; negotiated QEMU extended key events preserve physical positions. Human character keysyms retain the original down symbol for release. The public-domain libxkbcommon table preserves legacy Unicode keysyms, including EuroSign. Command maps to Super, Option to Alt, and Control to Control. Wheel fractions accumulate per source; wheel pulses preserve held buttons. Horizontal scrolling is supported; back/forward buttons are unavailable. RFB has no portable lock-state synchronization, so focus synchronization does not guess remote lock state.
+
+Extended Clipboard transfers UTF-8 text when advertised. Otherwise text uses lossless ISO-8859-1. Text outside that fallback alphabet reports `.failed` rather than replacing characters. Text is bounded to one MiB. Incoming text is decoded according to its negotiated encoding. Clipboard availability and revision events use the existing `RemoteClipboard` model.
+
+Live verification used Debian 13.7, labwc 0.20.2, and wayvnc 0.10.2 on a Raspberry Pi Compute Module 4 through an isolated loopback SSH tunnel. The tested security mode was VeNCrypt X509Plain (262), TLS 1.3, with a self-signed certificate containing localhost and 127.0.0.1 SANs. Native tests covered trust acceptance/rejection/persistence, changed-pin detection with a seeded prior pin, wrong credentials, prompt cancellation, immediate disconnect, real framebuffer delivery, Metal PNG capture, German Unicode text including Euro, agent Shift surviving human release, pointer press/release, both wheel axes, bidirectional UTF-8 clipboard, cursor shape/hotspot, server/client resize, hidden-view resume, and a finalized HEVC movie decoded back into changing frames. The seeded-pin test did not rotate the remote certificate. Other security modes remain implementation support, without live interoperability claims. Loopback regression tests interrupt an incomplete greeting and an incomplete raw rectangle and verify that terminal cleanup wakes an admitted agent send.

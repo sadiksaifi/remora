@@ -24,6 +24,9 @@ targets:
     sources:
       - path: Remora
         type: syncedFolder
+      - path: Vendor/licenses
+        type: folder
+        buildPhase: resources
       # Copied whole to Contents/Resources/skills/remora.
       - path: skills
         type: folder
@@ -41,6 +44,8 @@ targets:
         product: RemoraCore
       - package: RemoraKit
         product: RDPSession
+      - package: RemoraKit
+        product: VNCSession
     # Parses every `remora ...` line in the skill with the embedded, signed CLI, without running it.
     postBuildScripts:
       - name: Check skill commands

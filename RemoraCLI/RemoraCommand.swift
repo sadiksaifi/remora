@@ -105,7 +105,7 @@ struct Capabilities: AsyncParsableCommand {
         }
         Output.write(.success(.object([
             "commands": .array(["help", "help agent", "capabilities", "app status", "app show", "app hide", "app close", "app quit", "connection list", "connection get", "connection create", "connection update", "connection duplicate", "connection delete", "connection password set", "connection password clear", "connect", "session list", "session get", "session show", "session disconnect", "session reconnect", "session close", "session resize", "session stop", "session resume", "prompt list", "prompt get", "prompt respond", "wait", "clipboard get", "clipboard set", "settings get", "settings set", "settings reset", "settings permission", "settings cli get", "settings cli repair", "settings cli uninstall", "screenshot", "recording start", "recording get", "recording stop", "events", "move", "click", "drag", "scroll", "type", "key", "input", "skill path", "skill install", "skill uninstall"].map(ControlValue.string)),
-            "protocols": .array([.string("rdp")])
+            "protocols": .array([.string("rdp"), .string("vnc")])
         ])), json: options.json)
     }
 }
