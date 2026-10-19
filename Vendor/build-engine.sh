@@ -285,3 +285,6 @@ echo "Size: $(du -sh "$XCFRAMEWORK" | awk '{print $1}'); elapsed: $((SECONDS - S
 echo "Static contents: OpenSSL $OPENSSL_VERSION, FFmpeg $FFMPEG_VERSION (avcodec, avutil, swscale), WinPR/FreeRDP/client common/client channels $FREERDP_VERSION"
 echo 'Target: arm64-apple-macos26.0, Release. H.264: FFmpeg with VideoToolbox and software decoding.'
 echo "Logs: $BUILD/logs"
+
+# Build VNC against these same OpenSSL archives; never package a second copy.
+REMORA_VNC_ENV=isolated "$VENDOR/build-vnc.sh"

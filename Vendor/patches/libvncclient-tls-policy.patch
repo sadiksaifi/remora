@@ -1,0 +1,435 @@
+--- a/include/rfb/rfbclient.h
++++ b/include/rfb/rfbclient.h
+@@ -506,6 +506,10 @@
+         rfbBool isUpdateRectManagedByLib;
+ 
+         GetX509CertFingerprintMismatchDecisionProc GetX509CertFingerprintMismatchDecision;
++        /* Remora adapter metadata. Set only by parsed protocol results. */
++        rfbBool remoraAuthFailed;
++        rfbBool remoraResizeSupported;
++        void (*RemoraDesktopSize)(struct _rfbClient*, rfbBool requested);
+ } rfbClient;
+ 
+ /* cursor.c */
+--- a/src/libvncclient/rfbclient.c
++++ b/src/libvncclient/rfbclient.c
+@@ -441,6 +441,7 @@
+       return TRUE;
+       break;
+     case rfbVncAuthFailed:
++      client->remoraAuthFailed = TRUE;
+       if (client->major==3 && client->minor>7)
+       {
+         /* we have an error following */
+@@ -450,6 +451,7 @@
+       rfbClientLog("VNC authentication failed\n");
+       return FALSE;
+     case rfbVncAuthTooMany:
++      client->remoraAuthFailed = TRUE;
+       rfbClientLog("VNC authentication failed - too many tries\n");
+       return FALSE;
+     }
+@@ -460,107 +462,35 @@
+ }
+ 
+ 
++/* Remora selects only after reading the complete offer. Certificate TLS wins
++ * regardless of server ordering. An unfamiliar security offer cannot cause
++ * fallback to an unencrypted desktop; failed secure negotiation is terminal. */
+ static rfbBool
+ ReadSupportedSecurityType(rfbClient* client, uint32_t *result, rfbBool subAuth)
+ {
+-    uint8_t count=0;
+-    uint8_t loop=0;
+-    uint8_t flag=0;
+-    rfbBool extAuthHandler;
+-    uint8_t tAuth[256];
+-    char buf1[500],buf2[10];
+-    uint32_t authScheme;
+-    rfbClientProtocolExtension* e;
+-
+-    if (!ReadFromRFBServer(client, (char *)&count, 1)) return FALSE;
+-
+-    if (count==0)
+-    {
+-        rfbClientLog("List of security types is ZERO, expecting an error to follow\n");
+-        ReadReason(client);
++    uint8_t count = 0, offers[256];
++    if (subAuth || !ReadFromRFBServer(client, (char *)&count, 1)) return FALSE;
++    if (!count) { ReadReason(client); return FALSE; }
++    if (!ReadFromRFBServer(client, (char *)offers, count)) return FALSE;
++    uint8_t selected = 0;
++    rfbBool unknown = FALSE, vnc = FALSE, none = FALSE, ard = FALSE;
++    for (unsigned i = 0; i < count; i++) {
++        rfbClientLog("Offered security type %u\n", offers[i]);
++        switch (offers[i]) {
++            case rfbVeNCrypt: selected = rfbVeNCrypt; break;
++            case rfbARD: ard = TRUE; break;
++            case rfbVncAuth: vnc = TRUE; break;
++            case rfbNoAuth: none = TRUE; break;
++            default: unknown = TRUE; break;
++        }
++    }
++    if (!selected && !unknown) selected = ard ? rfbARD : vnc ? rfbVncAuth : none ? rfbNoAuth : 0;
++    if (!selected) {
++        rfbClientLog("Unsupported security offer; refusing unencrypted fallback (RSA-AES/anonymous TLS are unsupported).\n");
+         return FALSE;
+     }
+-
+-    rfbClientLog("We have %d security types to read\n", count);
+-    authScheme=0;
+-    /* now, we have a list of available security types to read ( uint8_t[] ) */
+-    for (loop=0;loop<count;loop++)
+-    {
+-        if (!ReadFromRFBServer(client, (char *)&tAuth[loop], 1)) return FALSE;
+-        rfbClientLog("%d) Received security type %d\n", loop, tAuth[loop]);
+-
+-		switch (tAuth[loop]) {
+-		case rfbUltra:
+-			rfbClientLog("UltraVNC server detected, enabling UltraVNC specific messages\n");
+-			DefaultSupportedMessagesUltraVNC(client);
+-			break;
+-		case rfbTight:
+-			rfbClientLog("TightVNC server detected, enabling TightVNC specific messages\n");
+-			DefaultSupportedMessagesTightVNC(client);
+-			break;
+-		}
+-
+-        if (flag) continue;
+-        extAuthHandler=FALSE;
+-        for (e = rfbClientExtensions; e; e = e->next) {
+-            if (!e->handleAuthentication) continue;
+-            uint32_t const* secType;
+-            for (secType = e->securityTypes; secType && *secType; secType++) {
+-                if (tAuth[loop]==*secType) {
+-                    extAuthHandler=TRUE;
+-                }
+-            }
+-        }
+-        if (tAuth[loop]==rfbVncAuth || tAuth[loop]==rfbNoAuth ||
+-			extAuthHandler ||
+-#if defined(LIBVNCSERVER_HAVE_GNUTLS) || defined(LIBVNCSERVER_HAVE_LIBSSL)
+-	    (!subAuth && (tAuth[loop]==rfbTLS || tAuth[loop]==rfbVeNCrypt)) ||
+-#endif
+-#ifdef LIBVNCSERVER_HAVE_SASL
+-            tAuth[loop]==rfbSASL ||
+-#endif /* LIBVNCSERVER_HAVE_SASL */
+-            ((tAuth[loop]==rfbARD || tAuth[loop]==rfbUltraMSLogonII) && client->GetCredential))
+-        {
+-            if (!subAuth && client->clientAuthSchemes)
+-            {
+-                int i;
+-                for (i=0;client->clientAuthSchemes[i];i++)
+-                {
+-                    if (client->clientAuthSchemes[i]==(uint32_t)tAuth[loop])
+-                    {
+-                        flag++;
+-                        authScheme=tAuth[loop];
+-                        break;
+-                    }
+-                }
+-            }
+-            else
+-            {
+-                flag++;
+-                authScheme=tAuth[loop];
+-            }
+-            if (flag)
+-            {
+-                rfbClientLog("Selecting security type %d (%d/%d in the list)\n", authScheme, loop, count);
+-                /* send back a single byte indicating which security type to use */
+-                if (!WriteToRFBServer(client, (char *)&tAuth[loop], 1)) return FALSE;
+-            }
+-        }
+-    }
+-    if (authScheme==0)
+-    {
+-        memset(buf1, 0, sizeof(buf1));
+-        for (loop=0;loop<count;loop++)
+-        {
+-            if (strlen(buf1)>=sizeof(buf1)-1) break;
+-            snprintf(buf2, sizeof(buf2), (loop>0 ? ", %d" : "%d"), (int)tAuth[loop]);
+-            strncat(buf1, buf2, sizeof(buf1)-strlen(buf1)-1);
+-        }
+-        rfbClientLog("Unknown authentication scheme from VNC server: %s\n",
+-               buf1);
+-        return FALSE;
+-    }
+-    *result = authScheme;
++    if (!WriteToRFBServer(client, (char *)&selected, 1)) return FALSE;
++    *result = selected;
+     return TRUE;
+ }
+ 
+@@ -1042,6 +972,8 @@
+   {
+     if (!ReadFromRFBServer(client, (char *)&authScheme, 4)) return FALSE;
+     authScheme = rfbClientSwap32IfLE(authScheme);
++    /* Legacy RFB 3.3 has no client selection. Do not bypass our allowlist. */
++    if (authScheme != rfbNoAuth && authScheme != rfbVncAuth && authScheme != rfbConnFailed) return FALSE;
+   }
+   
+   rfbClientLog("Selected Security Scheme %d\n", authScheme);
+@@ -1729,8 +1661,7 @@
+     if (!WriteToRFBServer(client, (char *)&sdm, sz_rfbSetDesktopSizeMsg)) return FALSE;
+     if (!WriteToRFBServer(client, (char *)&screen, sz_rfbExtDesktopScreen)) return FALSE;
+ 
+-    client->screen.width = screen.width;
+-    client->screen.height = screen.height;
++    /* Keep the confirmed screen geometry until the server applies a change. */
+ 
+     client->requestedResize = FALSE;
+ 
+@@ -2149,6 +2080,7 @@
+ 	if(!ResizeClientBuffer(client, rect.r.w, rect.r.h))
+ 	  return FALSE;
+ 	SendFramebufferUpdateRequest(client, 0, 0, rect.r.w, rect.r.h, FALSE);
++	if (client->RemoraDesktopSize) client->RemoraDesktopSize(client, FALSE);
+ 	rfbClientLog("Got new framebuffer size: %dx%d\n", rect.r.w, rect.r.h);
+ 	continue;
+       }
+@@ -2165,24 +2097,38 @@
+         }
+ 
+         screens = eds.numberOfScreens;
++        /* x is change reason; y is the result of a client resize request.
++         * A rejected request carries no replacement geometry. Multiple-screen
++         * layouts are server-owned and cannot be flattened to one screen. */
++        rfbBool forwardedResize = rect.r.x == 1 && rect.r.y == 4;
++        rfbBool appliedResize = rect.r.x != 1 || rect.r.y == 0;
++        rfbBool rejectedResize = !appliedResize && !forwardedResize;
++        rfbClientLog("ExtendedDesktopSize origin=%u result=%u screens=%d size=%ux%u\n", rect.r.x, rect.r.y, screens, rect.r.w, rect.r.h);
+         for (loop=0; loop < screens; loop++)
+         {
+           if (!ReadFromRFBServer(client, ((char *)&screen), sz_rfbExtDesktopScreen)) {
+             return FALSE;
+           }
+           if (screen.width && screen.height) {
+-            client->screen = screen;
++            if (appliedResize) client->screen = screen;
+           } else {
+             invalidScreen = TRUE;
+           }
+         }
+ 
+-        if (!invalidScreen && (client->width != rect.r.w || client->height != rect.r.h)) {
++        /* Status 4 means forwarded, not rejected. It carries requested geometry,
++         * not confirmed framebuffer dimensions, and preserves the capability. */
++        if (!forwardedResize)
++          client->remoraResizeSupported = screens == 1 && !rejectedResize && !invalidScreen;
++        if (appliedResize && !invalidScreen && (client->width != rect.r.w || client->height != rect.r.h)) {
+           if(!ResizeClientBuffer(client, rect.r.w, rect.r.h)) {
+             return FALSE;
+           }
+           rfbClientLog("Updated desktop size: %dx%d\n", rect.r.w, rect.r.h);
+         }
++        /* Confirm even an unchanged layout: allocation is not an acknowledgement. */
++        if (appliedResize && !invalidScreen && client->RemoraDesktopSize)
++          client->RemoraDesktopSize(client, rect.r.x == 1);
+         client->requestedResize = FALSE;
+ 
+         continue;
+--- a/src/libvncclient/sockets.c
++++ b/src/libvncclient/sockets.c
+@@ -45,6 +45,17 @@
+ 
+ rfbBool errorMessageOnReadFailure = TRUE;
+ 
++/* During an exact read, existing buffered bytes are insufficient. Do not let
++ * WaitForMessage treat those same bytes as new socket readiness, otherwise
++ * a partial message burns through its timeout in a busy loop. */
++static void wait_for_more_bytes(rfbClient *client, unsigned int usecs)
++{
++  unsigned int buffered = client->buffered;
++  client->buffered = 0;
++  WaitForMessage(client, usecs);
++  client->buffered = buffered;
++}
++
+ /*
+  * ReadFromRFBServer is called whenever we want to read some data from the RFB
+  * server.  It is non-trivial for two reasons:
+@@ -162,7 +173,7 @@
+ 	    /* TODO:
+ 	       ProcessXtEvents();
+ 	    */
+-	    WaitForMessage(client, USECS_WAIT_PER_RETRY);
++	    wait_for_more_bytes(client, USECS_WAIT_PER_RETRY);
+ 	    i = 0;
+ 	  } else {
+ 	    rfbClientErr("read (%d: %s)\n",errno,strerror(errno));
+@@ -211,7 +222,7 @@
+ 	    /* TODO:
+ 	       ProcessXtEvents();
+ 	    */
+-	    WaitForMessage(client, USECS_WAIT_PER_RETRY);
++	    wait_for_more_bytes(client, USECS_WAIT_PER_RETRY);
+ 	    i = 0;
+ 	  } else {
+ 	    rfbClientErr("read (%s)\n",strerror(errno));
+--- a/src/libvncclient/tls_openssl.c
++++ b/src/libvncclient/tls_openssl.c
+@@ -24,6 +24,8 @@
+ 
+ #include <openssl/err.h>
+ #include <openssl/ssl.h>
++#include <pthread.h>
++#include <arpa/inet.h>
+ #include <openssl/x509.h>
+ #include <openssl/rand.h>
+ 
+@@ -144,14 +146,11 @@
+ 	}
+ }
+ 
+-static rfbBool
+-InitializeTLS(void)
+-{
+-  if (rfbTLSInitialized)
+-    return TRUE;
+-
++static pthread_once_t remoraTLSOnce = PTHREAD_ONCE_INIT;
++static void initialize_tls_once(void)
++{
+   if (!InitLockingCb())
+-    return FALSE;
++    return;
+ 
+   SSL_load_error_strings();
+   SSLeay_add_ssl_algorithms();
+@@ -162,8 +161,12 @@
+   rfbTLSCertDecisionIndex = SSL_get_ex_new_index(0, "rfbTLSCertDecisionIndex", NULL, NULL, NULL);
+ 
+   rfbClientLog("OpenSSL version %s initialized.\n", SSLeay_version(SSLEAY_VERSION));
+-  rfbTLSInitialized = TRUE;
+-  return TRUE;
++  rfbTLSInitialized = rfbTLSExpectedFingerprintIndex >= 0 && rfbTLSClientIndex >= 0 && rfbTLSCertDecisionIndex >= 0;
++}
++static rfbBool InitializeTLS(void)
++{
++  pthread_once(&remoraTLSOnce, initialize_tls_once);
++  return rfbTLSInitialized;
+ }
+ 
+ static int sock_read_ready(SSL *ssl, uint32_t ms)
+@@ -292,42 +295,25 @@
+     return decision ? 1 : 0;
+ }
+ 
++/* Remora policy: pins identify the leaf, even when a new certificate has a
++ * valid CA chain. An explicit leaf decision may override chain/name failure.
++ * Never prompt about an intermediate or reuse its fingerprint as a leaf pin. */
+ static int cert_verify_callback(int preverify_ok, X509_STORE_CTX *ctx) {
+-    if (preverify_ok) {
+-        rfbClientLog("Server cert trusted\n");
+-        return 1; // Accept
+-    }
+-
+-    /*
+-      If preverify failed, compare fingerprints
+-    */
+-    unsigned char remote_fingerprint[32];
+-    if (! X509_digest(X509_STORE_CTX_get_current_cert(ctx), EVP_sha256(), remote_fingerprint, NULL)) {
+-        return 0;
+-    }
+-
+     SSL *ssl = X509_STORE_CTX_get_ex_data(ctx, SSL_get_ex_data_X509_STORE_CTX_idx());
+-    const unsigned char *expected_fingerprint = SSL_get_ex_data(ssl, rfbTLSExpectedFingerprintIndex);
+-
+-    // Check if we already have a cached user decision for this certificate
+-    int cached_decision = (int)(intptr_t)SSL_get_ex_data(ssl, rfbTLSCertDecisionIndex);
+-
+-    int verify;
+-    if (cached_decision || (expected_fingerprint && memcmp(remote_fingerprint, expected_fingerprint, 32) == 0)) {
+-        // accept
+-        verify = 1;
+-    } else {
+-        // ask user
+-        verify = cert_fingerprint_mismatch_callback(SSL_get_ex_data(ssl, rfbTLSClientIndex), X509_STORE_CTX_get_current_cert(ctx));
+-        // Cache the user decision to avoid prompting the user multiple times
+-        SSL_set_ex_data(ssl, rfbTLSCertDecisionIndex, (void*)(intptr_t)verify);
+-    }
+-
+-    if(verify) {
+-        X509_STORE_CTX_set_error(ctx, X509_V_OK);
+-    }
+-
+-    return verify;
++    X509 *leaf = X509_STORE_CTX_get0_cert(ctx);
++    const unsigned char *expected = SSL_get_ex_data(ssl, rfbTLSExpectedFingerprintIndex);
++    unsigned char actual[32];
++    if (!leaf || !X509_digest(leaf, EVP_sha256(), actual, NULL)) return 0;
++    int decision = (int)(intptr_t)SSL_get_ex_data(ssl, rfbTLSCertDecisionIndex);
++    if (!decision) {
++        if (expected && memcmp(actual, expected, 32) == 0) decision = 1;
++        else if (expected || !preverify_ok) {
++            decision = cert_fingerprint_mismatch_callback(SSL_get_ex_data(ssl, rfbTLSClientIndex), leaf) ? 1 : -1;
++        } else return 1;
++        SSL_set_ex_data(ssl, rfbTLSCertDecisionIndex, (void*)(intptr_t)decision);
++    }
++    if (decision == 1) X509_STORE_CTX_set_error(ctx, X509_V_OK);
++    return decision == 1;
+ }
+ 
+ 
+@@ -346,6 +332,7 @@
+     return NULL;
+   }
+ 
++  SSL_CTX_set_min_proto_version(ssl_ctx, TLS1_2_VERSION);
+   param = X509_VERIFY_PARAM_new();
+ 
+   /* Setup verification if not anonymous */
+@@ -403,7 +390,11 @@
+     else if (verify_crls == rfbX509CrlVerifyAll)
+       X509_VERIFY_PARAM_set_flags(param, X509_V_FLAG_CRL_CHECK | X509_V_FLAG_CRL_CHECK_ALL);
+ 
+-    if(!X509_VERIFY_PARAM_set1_host(param, client->serverHost, strlen(client->serverHost)))
++    unsigned char address[16];
++    int literal = inet_pton(AF_INET, client->serverHost, address) == 1 ||
++                  inet_pton(AF_INET6, client->serverHost, address) == 1;
++    if (!(literal ? X509_VERIFY_PARAM_set1_ip_asc(param, client->serverHost) :
++                   X509_VERIFY_PARAM_set1_host(param, client->serverHost, strlen(client->serverHost))))
+     {
+       rfbClientLog("Could not set server name for verification.\n");
+       goto error_free_ctx;
+@@ -480,6 +471,8 @@
+   } while( n != 1 );
+ 
+   X509_VERIFY_PARAM_free(param);
++  /* SSL_new retained the context; release the constructor reference. */
++  SSL_CTX_free(ssl_ctx);
+   return ssl;
+ 
+ error_free_ssl:
+@@ -574,27 +567,9 @@
+         if (!ReadFromRFBServer(client, (char *)&tAuth[loop], 4)) return FALSE;
+         t=rfbClientSwap32IfLE(tAuth[loop]);
+         rfbClientLog("%d) Received security type %d\n", loop, t);
+-        if (t==rfbNoAuth ||
+-            t==rfbVncAuth ||
+-            t==rfbVeNCryptPlain ||
+-            t==rfbVeNCryptTLSNone ||
+-            t==rfbVeNCryptTLSVNC ||
+-            t==rfbVeNCryptTLSPlain ||
+-#ifdef LIBVNCSERVER_HAVE_SASL
+-            t==rfbVeNCryptTLSSASL ||
+-            t==rfbVeNCryptX509SASL ||
+-#endif /*LIBVNCSERVER_HAVE_SASL */
+-            t==rfbVeNCryptX509None ||
+-            t==rfbVeNCryptX509VNC ||
+-            t==rfbVeNCryptX509Plain)
+-        {
+-            if (
+-                authScheme==0 ||
+-                authScheme==rfbNoAuth ||
+-                authScheme==rfbVncAuth ||
+-                authScheme==rfbVeNCryptPlain)
+-            {
+-                /* for security reasons, the encrypted type has a higher priority */
++        /* Only authenticated TLS. No anonymous TLS or plaintext fallback. */
++        if (t==rfbVeNCryptX509None || t==rfbVeNCryptX509VNC || t==rfbVeNCryptX509Plain) {
++            if (authScheme == 0 || t > authScheme) {
+                 origAuthScheme=tAuth[loop];
+                 authScheme=t;
+             }
