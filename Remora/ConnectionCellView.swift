@@ -137,18 +137,19 @@ final class ConnectionCellView: NSTableCellView {
 
     private static let statusSymbolConfiguration = NSImage.SymbolConfiguration(pointSize: 7, weight: .regular)
 
-    /// The account and address, leaving out the address when the name already shows it.
+    /// The account, the address unless the name already shows it, and the protocol.
     static func subtitle(for connection: Connection) -> String {
         let name = connection.name.trimmingCharacters(in: .whitespacesAndNewlines)
         let showsAddress = name.caseInsensitiveCompare(connection.host) != .orderedSame
             && name.caseInsensitiveCompare(connection.displayAddress) != .orderedSame
-        let address = showsAddress ? connection.displayAddress : (connection.port == Connection.defaultPort ? "" : "Port \(connection.port)")
-        switch (connection.username.isEmpty, address.isEmpty) {
-        case (true, true): return "Remote Desktop"
-        case (true, false): return address
-        case (false, true): return connection.username
-        case (false, false): return showsAddress ? "\(connection.username)@\(address)" : "\(connection.username) · \(address)"
+        let address = showsAddress ? connection.displayAddress : (connection.port == connection.defaultPort ? "" : "Port \(connection.port)")
+        let account: String? = switch (connection.username.isEmpty, address.isEmpty) {
+        case (true, true): nil
+        case (true, false): address
+        case (false, true): connection.username
+        case (false, false): showsAddress ? "\(connection.username)@\(address)" : "\(connection.username) · \(address)"
         }
+        return [account, connection.kind.title].compactMap { $0 }.joined(separator: " · ")
     }
 
     private func updateTrailingViews() {
