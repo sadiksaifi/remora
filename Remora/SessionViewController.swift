@@ -116,7 +116,8 @@ final class SessionViewController: NSViewController {
         if case .credentials(_, let challenge) = prompt {
             if let answer, remember { try onRememberCredentials(answer) }
             credentials = answer
-            credentialsRejected = false
+            // Cancelling keeps the rejection, so the saved password isn't sent next time.
+            if answer != nil { rejectedCredentials = nil }
             cancelChallenge = nil
             dismissChallenge(action: answer == nil ? "cancel" : "connect")
             challenge.responder.respond(answer)
@@ -155,9 +156,9 @@ final class SessionViewController: NSViewController {
     /// A capture failure waits separately, so it never replaces a credentials or certificate request.
     private var pendingAlert: NSAlert?
     private var credentials: SessionCredentials?
-    /// After the server rejects the account, the next attempt asks again instead of resending it.
-    /// The credentials sheet starts with the rejected values.
-    private var credentialsRejected = false
+    /// The account the server rejected. Attempts that would send it again ask instead,
+    /// and the credentials sheet starts with these values. A replaced password or another account is sent.
+    private var rejectedCredentials: SessionCredentials?
     /// The state the tab shows. Setup failures and teardown count as disconnected.
     private(set) var state: SessionState = .connecting {
         didSet {
@@ -245,9 +246,12 @@ final class SessionViewController: NSViewController {
     /// Takes the saved connection after an edit. A running session keeps its settings; the next
     /// attempt uses the new ones and reads the password from the Keychain again.
     func update(_ connection: Connection) {
+        // A rejection applies only to the server that made it.
+        if (connection.kind, connection.host, connection.port) != (self.connection.kind, self.connection.host, self.connection.port) {
+            rejectedCredentials = nil
+        }
         self.connection = connection
         credentials = nil
-        credentialsRejected = false
         desktopView?.accessibilityTab = (connection.id, connection.name)
     }
 
@@ -424,6 +428,9 @@ final class SessionViewController: NSViewController {
                 )
                 credentials = currentCredentials
             }
+            let rejected = rejectedCredentials.map {
+                ($0.username, $0.domain, $0.password) == (currentCredentials.username, currentCredentials.domain, currentCredentials.password)
+            } ?? false
             let renderer = try FrameRenderer()
             self.renderer = renderer
             view.window?.contentView?.layoutSubtreeIfNeeded()
@@ -451,7 +458,7 @@ final class SessionViewController: NSViewController {
             let configuration = SessionConfiguration(
                 host: connection.host, port: port, username: currentCredentials.username,
                 domain: currentCredentials.domain,
-                password: credentialsRejected || currentCredentials.password.isEmpty ? nil : currentCredentials.password,
+                password: rejected || currentCredentials.password.isEmpty ? nil : currentCredentials.password,
                 desktopSize: desktopSize, scaleFactor: scaleFactor, allowsDynamicResize: allowsDynamicResize
             )
             capture.setSource(renderer.desktop)
@@ -551,7 +558,7 @@ final class SessionViewController: NSViewController {
                 }
                 overlays?.reconnecting(attempt: attempt)
             case .disconnected(let reason):
-                if reason == .authenticationFailed { credentialsRejected = true }
+                if reason == .authenticationFailed { rejectedCredentials = credentials }
                 endAgentControl()
                 finishCapture()
                 capture.setSource(nil)
