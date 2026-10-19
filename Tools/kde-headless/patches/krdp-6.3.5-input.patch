@@ -1,0 +1,48 @@
+--- a/src/PlasmaScreencastV1Session.cpp
++++ b/src/PlasmaScreencastV1Session.cpp
+@@ -32,6 +32,7 @@
+     {
+         initialize();
+         Q_ASSERT(isActive());
++        authenticate(QStringLiteral("KRdp"), QStringLiteral("Remote desktop input"));
+     }
+ };
+ 
+@@ -223,7 +224,7 @@
+         auto me = std::static_pointer_cast<QMouseEvent>(event);
+         auto position = me->position();
+         auto logicalPosition = QPointF{(position.x() / size().width()) * logicalSize().width(), (position.y() / size().height()) * logicalSize().height()};
+-        d->remoteInterface->pointer_motion_absolute(logicalPosition.x(), logicalPosition.y());
++        d->remoteInterface->pointer_motion_absolute(wl_fixed_from_double(logicalPosition.x()), wl_fixed_from_double(logicalPosition.y()));
+         break;
+     }
+     case QEvent::Wheel: {
+--- a/src/InputHandler.cpp
++++ b/src/InputHandler.cpp
+@@ -184,14 +184,14 @@
+ {
+     auto virtualCode = GetVirtualKeyCodeFromVirtualScanCode(flags & KBD_FLAGS_EXTENDED ? code | KBDEXT : code, 4);
+     virtualCode = flags & KBD_FLAGS_EXTENDED ? virtualCode | KBDEXT : virtualCode;
+-    // While "type" suggests an EVDEV code, the actual code is an X code
++    // FreeRDP 3 returns Linux evdev codes; FreeRDP 2 returns XKB codes.
+ #ifdef FREERDP3
+-    quint32 keycode = GetKeycodeFromVirtualKeyCode(virtualCode, WINPR_KEYCODE_TYPE_EVDEV) - 8;
++    quint32 keycode = GetKeycodeFromVirtualKeyCode(virtualCode, WINPR_KEYCODE_TYPE_EVDEV);
+ #else
+     quint32 keycode = GetKeycodeFromVirtualKeyCode(virtualCode, KEYCODE_TYPE_EVDEV) - 8;
+ #endif
+ 
+-    auto type = flags & KBD_FLAGS_DOWN ? QEvent::KeyPress : QEvent::KeyRelease;
++    auto type = flags & KBD_FLAGS_RELEASE ? QEvent::KeyRelease : QEvent::KeyPress;
+ 
+     auto event = std::make_shared<QKeyEvent>(type, 0, Qt::KeyboardModifiers{}, keycode, 0, 0);
+     Q_EMIT inputEvent(event);
+@@ -207,7 +207,7 @@
+         return true;
+     }
+ 
+-    auto type = flags & KBD_FLAGS_DOWN ? QEvent::KeyPress : QEvent::KeyRelease;
++    auto type = flags & KBD_FLAGS_RELEASE ? QEvent::KeyRelease : QEvent::KeyPress;
+ 
+     auto event = std::make_shared<QKeyEvent>(type, 0, Qt::KeyboardModifiers{}, 0, keysym, 0);
+     Q_EMIT inputEvent(event);

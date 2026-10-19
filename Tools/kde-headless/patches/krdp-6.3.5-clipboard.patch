@@ -1,0 +1,585 @@
+KRdp 6.3.5: backport the upstream Unicode text clipboard implementation.
+
+Source: https://invent.kde.org/plasma/krdp/-/commit/28a362a2281928153b5e05b7aa5d2a86d1996efb
+Includes the native KSystemClipboard wiring and client-readiness handshake.
+Apply after the input, bounded-flow, and scroll patches.
+
+Adaptations for 6.3.5: queue owned callback data instead of blocking the main
+thread, serialize channel sends with shutdown, advertise/request Unicode only
+when offered, preserve empty selections, track selection revisions in both directions, stop at the first text terminator, and encode
+null-terminated UTF-16LE with CRLF line endings. Non-text payloads are not copied.
+
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -36,7 +36,7 @@
+ 
+ find_package(Qt6 ${QT_MIN_VERSION} CONFIG REQUIRED Core Quick Gui Network DBus WaylandClient Qml)
+ 
+-find_package(KF6 ${KF6_MIN_VERSION} REQUIRED COMPONENTS Config DBusAddons KCMUtils I18n CoreAddons StatusNotifierItem Crash)
++find_package(KF6 ${KF6_MIN_VERSION} REQUIRED COMPONENTS Config DBusAddons KCMUtils I18n CoreAddons StatusNotifierItem Crash GuiAddons)
+ 
+ if(WITH_FREERDP3)
+     find_package(FreeRDP 3.1 REQUIRED)
+diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
+--- a/src/CMakeLists.txt
++++ b/src/CMakeLists.txt
+@@ -75,6 +75,7 @@
+     winpr
+     freerdp-server
+     KF6::ConfigCore
++    KF6::GuiAddons
+     K::KPipeWire
+     K::KPipeWireRecord
+     XKB::XKB
+diff --git a/src/AbstractSession.h b/src/AbstractSession.h
+--- a/src/AbstractSession.h
++++ b/src/AbstractSession.h
+@@ -9,6 +9,8 @@
+ 
+ #include <PipeWireEncodedStream>
+ #include <PipeWireSourceStream>
++
++class QMimeData;
+ 
+ namespace KRdp
+ {
+@@ -40,6 +42,9 @@
+     void setVirtualMonitor(const VirtualMonitor &vm);
+     void setVideoQuality(quint8 quality);
+ 
++    void setClipboardData(std::unique_ptr<QMimeData> data);
++    void detachClipboard();
++
+     void requestStreamingEnable(QObject *requester);
+     void requestStreamingDisable(QObject *requester);
+ 
+@@ -53,6 +58,7 @@
+ Q_SIGNALS:
+     void started();
+     void error();
++    void clipboardDataChanged(const QMimeData *data);
+ 
+     /**
+      * Emitted whenever a new frame has been received.
+diff --git a/src/AbstractSession.cpp b/src/AbstractSession.cpp
+--- a/src/AbstractSession.cpp
++++ b/src/AbstractSession.cpp
+@@ -6,6 +6,11 @@
+ #include <PipeWireEncodedStream>
+ #include <PipeWireSourceStream>
+ #include <QSet>
++#include <QScopedValueRollback>
++#include <QClipboard>
++#include <QMimeData>
++#include <QMetaMethod>
++#include <KSystemClipboard>
+ 
+ namespace KRdp
+ {
+@@ -26,6 +31,8 @@
+     std::optional<quint32> frameRate = 60;
+     std::optional<quint8> quality;
+     QSet<QObject *> enableRequests;
++    QMetaObject::Connection clipboardConnection;
++    bool settingClipboard = false;
+ };
+ 
+ AbstractSession::AbstractSession(Server *server)
+@@ -33,6 +40,27 @@
+     , d(std::make_unique<Private>())
+ {
+     d->server = server;
++    d->clipboardConnection = connect(KSystemClipboard::instance(), &KSystemClipboard::changed, this, [this](auto mode) {
++        if (mode != QClipboard::Clipboard) {
++            return;
++        }
++        if (d->settingClipboard) {
++            return;
++        }
++
++        auto data = KSystemClipboard::instance()->mimeData(mode);
++        if (!isSignalConnected(QMetaMethod::fromSignal(&AbstractSession::clipboardDataChanged))) {
++            return;
++        }
++
++        // Only retrieve text. Fetching arbitrary Wayland MIME payloads can block.
++        auto newData = new QMimeData();
++        if (data && data->hasText()) {
++            newData->setText(data->text());
++        }
++
++        Q_EMIT clipboardDataChanged(newData);
++    });
+ }
+ 
+ AbstractSession::~AbstractSession()
+@@ -40,6 +68,18 @@
+     if (d->encodedStream) {
+         d->encodedStream->stop();
+     }
++}
++
++void AbstractSession::detachClipboard()
++{
++    QObject::disconnect(d->clipboardConnection);
++}
++
++void AbstractSession::setClipboardData(std::unique_ptr<QMimeData> data)
++{
++    // KSystemClipboard emits changed() synchronously for our own Wayland source.
++    QScopedValueRollback guard(d->settingClipboard, true);
++    KSystemClipboard::instance()->setMimeData(data ? data.release() : new QMimeData(), QClipboard::Clipboard);
+ }
+ 
+ QSize AbstractSession::logicalSize() const
+diff --git a/src/Clipboard.h b/src/Clipboard.h
+--- a/src/Clipboard.h
++++ b/src/Clipboard.h
+@@ -4,6 +4,7 @@
+ 
+ #pragma once
+ 
++#include <QMimeData>
+ #include <QObject>
+ 
+ #include <freerdp/freerdp.h>
+@@ -21,11 +22,6 @@
+     Q_OBJECT
+ 
+ public:
+-    /**
+-     * TODO: This clipboard is currently not implemented. It only
+-     * works as a dummy clipboard that does nothing to avoid crashes if
+-     * cliprdr channel is opened.
+-     */
+     explicit Clipboard(RdpConnection *session);
+     ~Clipboard() override;
+ 
+@@ -34,10 +30,15 @@
+ 
+     bool enabled();
+ 
++    void setServerData(const QMimeData *data);
++
++    Q_SIGNAL void clientDataChanged();
++    std::unique_ptr<QMimeData> getClipboard() const;
++
+ private:
++    void sendServerData();
++
+     class Private;
+     const std::unique_ptr<Private> d;
+-
+-    bool m_enabled;
+ };
+ }
+diff --git a/src/Clipboard.cpp b/src/Clipboard.cpp
+--- a/src/Clipboard.cpp
++++ b/src/Clipboard.cpp
+@@ -4,30 +4,148 @@
+ 
+ #include "Clipboard.h"
+ 
+-#include "PeerContext_p.h"
+-#include "RdpConnection.h"
+-#include <QObject>
++#include <QStringConverter>
++#include <mutex>
++
+ #include <freerdp/freerdp.h>
+ #include <freerdp/peer.h>
+ #include <freerdp/server/cliprdr.h>
+ 
++#include "PeerContext_p.h"
++#include "RdpConnection.h"
++
+ #include "krdp_logging.h"
+ 
++using namespace Qt::StringLiterals;
++
+ namespace KRdp
+ {
++
+ class KRDP_NO_EXPORT Clipboard::Private
+ {
+ public:
+     using CliprdrServerContextPtr = std::unique_ptr<CliprdrServerContext, decltype(&cliprdr_server_context_free)>;
+ 
++    Private(Clipboard *qq)
++        : q(qq)
++    {
++    }
++
++    Clipboard *q;
++
++    uint32_t onClientCapabilities(const CLIPRDR_CAPABILITIES *capabilities);
++    uint32_t onClientFormatList(const CLIPRDR_FORMAT_LIST *formatList);
++    uint32_t onClientFormatDataRequest(const CLIPRDR_FORMAT_DATA_REQUEST *formatDataRequest);
++    uint32_t onClientFormatDataResponse(const CLIPRDR_FORMAT_DATA_RESPONSE *formatDataResponse);
++
+     RdpConnection *session;
+ 
+     CliprdrServerContextPtr clipContext = CliprdrServerContextPtr(nullptr, cliprdr_server_context_free);
++
++    // Only context lifetime and channel sends cross threads. Clipboard data stays on the main thread.
++    std::mutex contextMutex;
++    bool enabled = false;
++    bool clientHasUnicode = false;
++    bool clientDataPending = false;
++    bool clientOwnsSelection = false;
++    quint64 selectionRevision = 0;
++    quint64 requestedRevision = 0;
++    // mstsc drops a format list sent before its capabilities response; hold until markClientReady()
++    bool clientReady = false;
++    void markClientReady()
++    {
++        if (clientReady) {
++            return;
++        }
++        clientReady = true;
++        QMetaObject::invokeMethod(q, &Clipboard::sendServerData, Qt::QueuedConnection);
++    }
++    std::unique_ptr<const QMimeData> serverData;
++    std::unique_ptr<QMimeData> clientData;
++
++    template<typename Callback>
++    static UINT queueInMainThread(CliprdrServerContext *context, Callback callback)
++    {
++        auto clipboard = static_cast<Clipboard *>(context->custom);
++        // FreeRDP owns callback packet memory. Capture only values or deep copies, never packet pointers.
++        // Never wait for the main thread: it may be joining the RDP thread while Stop joins this callback thread.
++        QMetaObject::invokeMethod(
++            clipboard,
++            [clipboard, callback = std::move(callback)]() {
++                if (clipboard->enabled()) {
++                    callback(*clipboard->d);
++                }
++            },
++            Qt::QueuedConnection);
++        return CHANNEL_RC_OK;
++    }
++
++    static UINT clientCapabilities(CliprdrServerContext *context, const CLIPRDR_CAPABILITIES *)
++    {
++        return queueInMainThread(context, [](Private &d) {
++            d.onClientCapabilities(nullptr);
++        });
++    }
++
++    static UINT clientFormatList(CliprdrServerContext *context, const CLIPRDR_FORMAT_LIST *formatList)
++    {
++        bool hasUnicode = false;
++        for (uint32_t i = 0; i < formatList->numFormats; ++i) {
++            hasUnicode |= formatList->formats[i].formatId == CF_UNICODETEXT;
++        }
++        return queueInMainThread(context, [hasUnicode](Private &d) {
++            CLIPRDR_FORMAT format = {};
++            format.formatId = CF_UNICODETEXT;
++            CLIPRDR_FORMAT_LIST list = {};
++            list.numFormats = hasUnicode ? 1 : 0;
++            list.formats = &format;
++            d.onClientFormatList(&list);
++        });
++    }
++
++    static UINT clientFormatListResponse(CliprdrServerContext *, const CLIPRDR_FORMAT_LIST_RESPONSE *)
++    {
++        return CHANNEL_RC_OK;
++    }
++
++    static UINT clientFormatDataRequest(CliprdrServerContext *context, const CLIPRDR_FORMAT_DATA_REQUEST *request)
++    {
++        const auto formatId = request->requestedFormatId;
++        return queueInMainThread(context, [formatId](Private &d) {
++            CLIPRDR_FORMAT_DATA_REQUEST request = {};
++            request.requestedFormatId = formatId;
++            d.onClientFormatDataRequest(&request);
++        });
++    }
++
++    static UINT clientFormatDataResponse(CliprdrServerContext *context, const CLIPRDR_FORMAT_DATA_RESPONSE *response)
++    {
++        const auto flags = response->common.msgFlags;
++        const QByteArray data =
++            response->requestedFormatData ? QByteArray(reinterpret_cast<const char *>(response->requestedFormatData), response->common.dataLen) : QByteArray();
++        return queueInMainThread(context, [flags, data](Private &d) {
++            CLIPRDR_FORMAT_DATA_RESPONSE response = {};
++            response.common.msgFlags = flags;
++            response.common.dataLen = data.size();
++            response.requestedFormatData = reinterpret_cast<const BYTE *>(data.constData());
++            d.onClientFormatDataResponse(&response);
++        });
++    }
++
++    void requestClientData()
++    {
++        CLIPRDR_FORMAT_DATA_REQUEST request = {};
++        request.common.msgType = CB_FORMAT_DATA_REQUEST;
++        request.common.dataLen = 4;
++        request.requestedFormatId = CF_UNICODETEXT;
++        requestedRevision = selectionRevision;
++        clientDataPending = clipContext->ServerFormatDataRequest(clipContext.get(), &request) == CHANNEL_RC_OK;
++    }
+ };
+ 
+ Clipboard::Clipboard(RdpConnection *session)
+     : QObject(nullptr)
+-    , d(std::make_unique<Private>())
++    , d(std::make_unique<Private>(this))
+ {
+     d->session = session;
+ }
+@@ -38,8 +156,9 @@
+ 
+ bool Clipboard::initialize()
+ {
++    std::lock_guard lock(d->contextMutex);
+     if (d->clipContext) {
+-        return true;
++        return d->enabled;
+     }
+ 
+     auto peerContext = reinterpret_cast<PeerContext *>(d->session->rdpPeer()->context);
+@@ -50,7 +169,7 @@
+         return false;
+     }
+ 
+-    d->clipContext->useLongFormatNames = FALSE;
++    d->clipContext->useLongFormatNames = TRUE;
+     d->clipContext->streamFileClipEnabled = FALSE;
+     d->clipContext->fileClipNoFilePaths = FALSE;
+     d->clipContext->canLockClipData = FALSE;
+@@ -58,6 +177,12 @@
+ 
+     d->clipContext->custom = this;
+     d->clipContext->rdpcontext = d->session->rdpPeer()->context;
++
++    d->clipContext->ClientCapabilities = Private::clientCapabilities;
++    d->clipContext->ClientFormatList = Private::clientFormatList;
++    d->clipContext->ClientFormatListResponse = Private::clientFormatListResponse;
++    d->clipContext->ClientFormatDataRequest = Private::clientFormatDataRequest;
++    d->clipContext->ClientFormatDataResponse = Private::clientFormatDataResponse;
+ 
+     // returns 0 on success
+     // https://pub.freerdp.com/api/server_2cliprdr__main_8c.html#ab4e8a28c6b4371c2a5f34e8716ab1e9e
+@@ -66,26 +191,182 @@
+         return false;
+     };
+ 
+-    m_enabled = true;
++    d->enabled = true;
++    // flush a copy made before the cliprdr channel finished coming up, so it isn't silently lost
++    QMetaObject::invokeMethod(this, &Clipboard::sendServerData, Qt::QueuedConnection);
+ 
+     return true;
+ }
+ 
+ bool Clipboard::enabled()
+ {
+-    return m_enabled;
++    std::lock_guard lock(d->contextMutex);
++    return d->enabled;
+ }
+ 
+ void Clipboard::close()
+ {
+-    if (!d->clipContext) {
+-        return;
+-    }
+-
++    {
++        std::lock_guard lock(d->contextMutex);
++        if (!d->clipContext || !d->enabled) {
++            return;
++        }
++        // Reject queued callbacks and sends before joining FreeRDP's clipboard thread.
++        d->enabled = false;
++    }
++    // No main-thread callback waits for this thread, and Stop never runs under contextMutex.
+     if (d->clipContext->Stop(d->clipContext.get())) {
+         qCWarning(KRDP) << "Could not stop Clipboard context";
++    }
++}
++
++void Clipboard::setServerData(const QMimeData *data)
++{
++    ++d->selectionRevision;
++    d->clientOwnsSelection = false;
++    d->serverData.reset(data);
++    QMetaObject::invokeMethod(this, &Clipboard::sendServerData, Qt::QueuedConnection);
++}
++
++std::unique_ptr<QMimeData> Clipboard::getClipboard() const
++{
++    return std::move(d->clientData);
++}
++
++void Clipboard::sendServerData()
++{
++    std::lock_guard lock(d->contextMutex);
++    if (!d->serverData || !d->enabled || d->clientOwnsSelection) {
+         return;
+-    };
+-    m_enabled = false;
+-}
+-}
++    }
++    // held until the client's init handshake completes; flushed from markClientReady()
++    if (!d->clientReady) {
++        return;
++    }
++
++    CLIPRDR_FORMAT format = {};
++    format.formatId = CF_UNICODETEXT;
++    format.formatName = nullptr;
++
++    CLIPRDR_FORMAT_LIST formatList = {};
++    formatList.common.msgType = CB_FORMAT_LIST;
++    formatList.common.msgFlags = 0;
++    formatList.numFormats = d->serverData->hasText() ? 1 : 0;
++    formatList.formats = &format;
++    d->clipContext->ServerFormatList(d->clipContext.get(), &formatList);
++}
++
++uint32_t Clipboard::Private::onClientCapabilities(const CLIPRDR_CAPABILITIES *)
++{
++    // covers copy-out with no prior copy-in: mstsc sends no format list when its clipboard starts empty
++    markClientReady();
++    return CHANNEL_RC_OK;
++}
++
++uint32_t Clipboard::Private::onClientFormatList(const CLIPRDR_FORMAT_LIST *formatList)
++{
++    markClientReady();
++    {
++        std::lock_guard lock(contextMutex);
++        if (!enabled) {
++            return CHANNEL_RC_OK;
++        }
++        // Acknowledge before requesting data, and request Unicode only if the client advertised it.
++        CLIPRDR_FORMAT_LIST_RESPONSE response = {};
++        response.common.msgType = CB_FORMAT_LIST_RESPONSE;
++        response.common.msgFlags = CB_RESPONSE_OK;
++        clipContext->ServerFormatListResponse(clipContext.get(), &response);
++
++        ++selectionRevision;
++        clientOwnsSelection = true;
++        clientHasUnicode = formatList->numFormats != 0;
++        if (clientHasUnicode && !clientDataPending) {
++            requestClientData();
++        }
++    }
++    if (!clientHasUnicode) {
++        clientData.reset();
++        Q_EMIT q->clientDataChanged();
++    }
++    return CHANNEL_RC_OK;
++}
++
++uint32_t Clipboard::Private::onClientFormatDataRequest(const CLIPRDR_FORMAT_DATA_REQUEST *formatDataRequest)
++{
++    std::lock_guard lock(contextMutex);
++    if (!enabled) {
++        return CHANNEL_RC_OK;
++    }
++    if (!serverData || !serverData->hasText() || formatDataRequest->requestedFormatId != CF_UNICODETEXT) {
++        CLIPRDR_FORMAT_DATA_RESPONSE response = {};
++        response.common.msgType = CB_FORMAT_DATA_RESPONSE;
++        response.common.msgFlags = CB_RESPONSE_FAIL;
++        response.common.dataLen = 0;
++        response.requestedFormatData = nullptr;
++        clipContext->ServerFormatDataResponse(clipContext.get(), &response);
++        return CHANNEL_RC_OK;
++    }
++
++    auto text = serverData->text();
++    // CF_UNICODETEXT requires CRLF line endings and null-terminated UTF-16LE.
++    text.replace(u"\r\n"_s, u"\n"_s);
++    text.replace(u"\n"_s, u"\r\n"_s);
++    QStringEncoder encoder(QStringEncoder::Utf16LE);
++    QByteArray utf16Data = encoder(text);
++    utf16Data.append(2, '\0');
++
++    CLIPRDR_FORMAT_DATA_RESPONSE response = {};
++    response.common.msgType = CB_FORMAT_DATA_RESPONSE;
++    response.common.msgFlags = CB_RESPONSE_OK;
++    response.common.dataLen = utf16Data.size();
++    response.requestedFormatData = reinterpret_cast<const BYTE *>(utf16Data.constData());
++
++    clipContext->ServerFormatDataResponse(clipContext.get(), &response);
++
++    return CHANNEL_RC_OK;
++}
++
++uint32_t Clipboard::Private::onClientFormatDataResponse(const CLIPRDR_FORMAT_DATA_RESPONSE *formatDataResponse)
++{
++    {
++        std::lock_guard lock(contextMutex);
++        if (!enabled || !clientDataPending) {
++            return CHANNEL_RC_OK;
++        }
++        clientDataPending = false;
++        if (requestedRevision != selectionRevision) {
++            if (clientOwnsSelection && clientHasUnicode) {
++                requestClientData();
++            }
++            return CHANNEL_RC_OK; // A newer selection on either desktop superseded this request.
++        }
++    }
++    if (!(formatDataResponse->common.msgFlags & CB_RESPONSE_OK)) {
++        return CHANNEL_RC_OK;
++    }
++    const auto length = formatDataResponse->common.dataLen;
++    if (length % 2) {
++        return CHANNEL_RC_OK;
++    }
++    // Accept empty/short success responses without unsigned subtraction or an out-of-bounds read.
++    QByteArrayView bytes(reinterpret_cast<const char *>(formatDataResponse->requestedFormatData), length);
++    // CF_UNICODETEXT ends at its first aligned null code unit. A Windows
++    // clipboard allocation can contain padding after that terminator.
++    for (qsizetype i = 0; i + 1 < bytes.size(); i += 2) {
++        if (bytes[i] == '\0' && bytes[i + 1] == '\0') {
++            bytes = bytes.first(i);
++            break;
++        }
++    }
++    QStringDecoder decoder(QStringDecoder::Utf16LE);
++    QString text = decoder(bytes);
++    if (decoder.hasError()) {
++        return CHANNEL_RC_OK;
++    }
++    text.replace(u"\r\n"_s, u"\n"_s);
++    clientData = std::make_unique<QMimeData>();
++    clientData->setText(text);
++    Q_EMIT q->clientDataChanged();
++    return CHANNEL_RC_OK;
++}
++}
+diff --git a/server/SessionController.cpp b/server/SessionController.cpp
+--- a/server/SessionController.cpp
++++ b/server/SessionController.cpp
+@@ -3,6 +3,7 @@
+ 
+ #include "SessionController.h"
+ 
++#include <Clipboard.h>
+ #include <Cursor.h>
+ #include <InputHandler.h>
+ #include <KLocalizedString>
+@@ -35,6 +36,15 @@
+         connect(connection->videoStream(), &KRdp::VideoStream::enabledChanged, this, &SessionWrapper::onVideoStreamEnabledChanged);
+         connect(connection->videoStream(), &KRdp::VideoStream::requestedFrameRateChanged, this, &SessionWrapper::onRequestedFrameRateChanged);
+         connect(connection->inputHandler(), &KRdp::InputHandler::inputEvent, session.get(), &KRdp::AbstractSession::sendEvent);
++        connect(session.get(), &KRdp::AbstractSession::clipboardDataChanged, connection->clipboard(), &KRdp::Clipboard::setServerData);
++        connect(connection->clipboard(), &KRdp::Clipboard::clientDataChanged, session.get(), [this]() {
++            session->setClipboardData(connection->clipboard()->getClipboard());
++        });
++        connect(connection, &KRdp::RdpConnection::stateChanged, this, [this](KRdp::RdpConnection::State state) {
++            if (state == KRdp::RdpConnection::State::Closed) {
++                session->detachClipboard();
++            }
++        });
+         connect(connection, &QObject::destroyed, this, &SessionWrapper::onConnectionDestroyed);
+     }
+ 

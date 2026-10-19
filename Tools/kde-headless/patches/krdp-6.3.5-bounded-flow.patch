@@ -1,0 +1,445 @@
+diff --git a/src/VideoStream.cpp b/src/VideoStream.cpp
+--- a/src/VideoStream.cpp
++++ b/src/VideoStream.cpp
+@@ -10,6 +10,8 @@
+ #include "VideoStream.h"
+ 
+ #include <algorithm>
++#include <atomic>
++#include <cmath>
+ #include <condition_variable>
+ 
+ #include <QDateTime>
+@@ -29,8 +31,9 @@
+ 
+ namespace clk = std::chrono;
+ 
+-// Maximum number of frames to contain in the queue.
+-constexpr clk::system_clock::duration FrameRateEstimateAveragePeriod = clk::seconds(1);
++constexpr qsizetype MinimumInFlightFrames = 2;
++constexpr qsizetype HighQueueCount = 3;
++constexpr qsizetype LowQueueCount = 1;
+ 
+ struct RdpCapsInformation {
+     uint32_t version;
+@@ -98,11 +101,6 @@
+     QSize size;
+ };
+ 
+-struct FrameRateEstimate {
+-    clk::system_clock::time_point timeStamp;
+-    int estimate = 0;
+-};
+-
+ class KRDP_NO_EXPORT VideoStream::Private
+ {
+ public:
+@@ -118,23 +116,22 @@
+     uint16_t nextSurfaceId = 1;
+     Surface surface;
+ 
+-    bool pendingReset = true;
+-    bool enabled = false;
+-    bool capsConfirmed = false;
++    std::atomic_bool pendingReset = true;
++    std::atomic_bool enabled = false;
++    std::atomic_bool capsConfirmed = false;
+ 
+     std::jthread frameSubmissionThread;
+     std::mutex frameQueueMutex;
+ 
+     QQueue<VideoFrame> frameQueue;
++    std::condition_variable_any frameReady;
+     QSet<uint32_t> pendingFrames;
+-
+-    int maximumFrameRate = 120;
+-    int requestedFrameRate = 60;
+-    QQueue<FrameRateEstimate> frameRateEstimates;
+-    clk::system_clock::time_point lastFrameRateEstimation;
+-
+-    std::atomic_int encodedFrames = 0;
+-    std::atomic_int frameDelay = 0;
++    std::mutex pendingFramesMutex;
++    bool frameAcknowledgementSuspended = false;
++    bool encoderPaused = false;
++    std::atomic<qsizetype> maxInFlight{MinimumInFlightFrames};
++
++    const int requestedFrameRate = 60;
+ };
+ 
+ VideoStream::VideoStream(RdpConnection *session)
+@@ -175,22 +172,22 @@
+         return false;
+     }
+ 
+-    connect(d->session->networkDetection(), &NetworkDetection::rttChanged, this, &VideoStream::updateRequestedFrameRate);
++    connect(d->session->networkDetection(), &NetworkDetection::rttChanged, this, &VideoStream::updateInFlightWindow);
+ 
+     d->frameSubmissionThread = std::jthread([this](std::stop_token token) {
+         while (!token.stop_requested()) {
+             VideoFrame nextFrame;
+             {
+                 std::unique_lock lock(d->frameQueueMutex);
+-                if (!d->frameQueue.isEmpty()) {
+-                    nextFrame = d->frameQueue.takeFirst();
++                if (!d->frameReady.wait(lock, token, [this]() {
++                        return d->enabled && d->capsConfirmed && !d->frameQueue.isEmpty() && hasInFlightCapacity();
++                    })) {
++                    break;
+                 }
+-            }
+-            if (nextFrame.size.isEmpty()) {
+-                std::this_thread::sleep_for(std::chrono::milliseconds(1000) / d->requestedFrameRate);
+-                continue;
++                nextFrame = d->frameQueue.takeFirst();
+             }
+             sendFrame(nextFrame);
++            QMetaObject::invokeMethod(this, &VideoStream::updateBackpressure, Qt::QueuedConnection);
+         }
+     });
+ 
+@@ -205,13 +202,22 @@
+         return;
+     }
+ 
+-    d->gfxContext->Close(d->gfxContext.get());
+-
+     if (d->frameSubmissionThread.joinable()) {
+         d->frameSubmissionThread.request_stop();
++        wakeSender();
+         d->frameSubmissionThread.join();
+     }
+ 
++    d->gfxContext->Close(d->gfxContext.get());
++    {
++        std::lock_guard lock(d->pendingFramesMutex);
++        d->pendingFrames.clear();
++        d->frameAcknowledgementSuspended = false;
++    }
++    {
++        std::lock_guard lock(d->frameQueueMutex);
++        d->frameQueue.clear();
++    }
+     Q_EMIT closed();
+ }
+ 
+@@ -221,8 +227,12 @@
+         return;
+     }
+ 
+-    std::lock_guard lock(d->frameQueueMutex);
+-    d->frameQueue.append(frame);
++    {
++        std::lock_guard lock(d->frameQueueMutex);
++        d->frameQueue.append(frame);
++    }
++    updateBackpressure();
++    wakeSender();
+ }
+ 
+ void VideoStream::reset()
+@@ -242,6 +252,7 @@
+     }
+ 
+     d->enabled = enabled;
++    wakeSender();
+     Q_EMIT enabledChanged();
+ }
+ 
+@@ -324,26 +335,25 @@
+     d->gfxContext->CapsConfirm(d->gfxContext.get(), &capsConfirmPdu);
+ 
+     d->capsConfirmed = true;
++    wakeSender();
+ 
+     return CHANNEL_RC_OK;
+ }
+ 
+ uint32_t VideoStream::onFrameAcknowledge(const RDPGFX_FRAME_ACKNOWLEDGE_PDU *frameAcknowledge)
+ {
+-    auto id = frameAcknowledge->frameId;
+-
+-    auto itr = d->pendingFrames.constFind(id);
+-    if (itr == d->pendingFrames.cend()) {
+-        qCWarning(KRDP) << "Got frame acknowledge for an unknown frame";
+-        return CHANNEL_RC_OK;
+-    }
+-
+-    if (frameAcknowledge->queueDepth & SUSPEND_FRAME_ACKNOWLEDGEMENT) {
+-        qDebug() << "suspend frame ack";
+-    }
+-
+-    d->frameDelay = d->encodedFrames - frameAcknowledge->totalFramesDecoded;
+-    d->pendingFrames.erase(itr);
++    {
++        std::lock_guard lock(d->pendingFramesMutex);
++        d->frameAcknowledgementSuspended = frameAcknowledge->queueDepth == SUSPEND_FRAME_ACKNOWLEDGEMENT;
++        if (d->frameAcknowledgementSuspended) {
++            d->pendingFrames.clear();
++        } else {
++            // Match IDs exactly, including across uint32_t wrap. ACKs received after
++            // suspension may refer to frames that were deliberately not tracked.
++            d->pendingFrames.remove(frameAcknowledge->frameId);
++        }
++    }
++    wakeSender();
+ 
+     return CHANNEL_RC_OK;
+ }
+@@ -394,8 +404,7 @@
+         return;
+     }
+ 
+-    if (d->pendingReset) {
+-        d->pendingReset = false;
++    if (d->pendingReset.exchange(false)) {
+         performReset(frame.size);
+     }
+ 
+@@ -403,9 +412,12 @@
+ 
+     auto frameId = d->frameId++;
+ 
+-    d->encodedFrames++;
+-
+-    d->pendingFrames.insert(frameId);
++    {
++        std::lock_guard lock(d->pendingFramesMutex);
++        if (!d->frameAcknowledgementSuspended) {
++            d->pendingFrames.insert(frameId);
++        }
++    }
+ 
+     RDPGFX_START_FRAME_PDU startFramePdu;
+     RDPGFX_END_FRAME_PDU endFramePdu;
+@@ -455,42 +467,45 @@
+     d->session->networkDetection()->stopBandwidthMeasure();
+ }
+ 
+-void VideoStream::updateRequestedFrameRate()
+-{
+-    auto rtt = std::max(clk::duration_cast<clk::milliseconds>(d->session->networkDetection()->averageRTT()), clk::milliseconds(1));
+-    auto now = clk::system_clock::now();
+-
+-    FrameRateEstimate estimate;
+-    estimate.timeStamp = now;
+-    estimate.estimate = std::min(int(clk::milliseconds(1000) / (rtt * std::max(d->frameDelay.load(), 1))), d->maximumFrameRate);
+-    d->frameRateEstimates.append(estimate);
+-
+-    if (now - d->lastFrameRateEstimation < FrameRateEstimateAveragePeriod) {
+-        return;
+-    }
+-
+-    d->lastFrameRateEstimation = now;
+-
+-    d->frameRateEstimates.erase(std::remove_if(d->frameRateEstimates.begin(),
+-                                               d->frameRateEstimates.end(),
+-                                               [now](const auto &estimate) {
+-                                                   return (estimate.timeStamp - now) > FrameRateEstimateAveragePeriod;
+-                                               }),
+-                                d->frameRateEstimates.cend());
+-
+-    auto sum = std::accumulate(d->frameRateEstimates.cbegin(), d->frameRateEstimates.cend(), 0, [](int acc, const auto &estimate) {
+-        return acc + estimate.estimate;
+-    });
+-    auto average = sum / d->frameRateEstimates.size();
+-
+-    // we want some headroom so we can always clear our current load
+-    // and handle any other latency
+-    constexpr qreal targetFrameRateSaturation = 0.5;
+-    auto frameRate = std::max(1.0, average * targetFrameRateSaturation);
+-
+-    if (frameRate != d->requestedFrameRate) {
+-        d->requestedFrameRate = frameRate;
+-        Q_EMIT requestedFrameRateChanged();
++void VideoStream::updateInFlightWindow()
++{
++    const auto rttMs = clk::duration_cast<clk::milliseconds>(d->session->networkDetection()->averageRTT()).count();
++    qsizetype window = MinimumInFlightFrames;
++    if (rttMs > 0 && rttMs < 60000) {
++        // One round trip of frames, bounded by one second of source video.
++        window = std::clamp(qsizetype(std::ceil(d->requestedFrameRate * rttMs / 1000.0)),
++                            MinimumInFlightFrames, qsizetype(d->requestedFrameRate));
++    }
++    d->maxInFlight.store(window);
++    wakeSender();
++}
++
++void VideoStream::wakeSender()
++{
++    // Serialize notifications for ACK/window changes with the sender's wait.
++    std::lock_guard lock(d->frameQueueMutex);
++    d->frameReady.notify_all();
++}
++
++bool VideoStream::hasInFlightCapacity() const
++{
++    std::lock_guard lock(d->pendingFramesMutex);
++    return d->frameAcknowledgementSuspended || d->pendingFrames.size() < d->maxInFlight.load();
++}
++
++void VideoStream::updateBackpressure()
++{
++    qsizetype queued;
++    {
++        std::lock_guard lock(d->frameQueueMutex);
++        queued = d->frameQueue.size();
++    }
++    if (!d->encoderPaused && queued > HighQueueCount) {
++        d->encoderPaused = true;
++        Q_EMIT encoderPausedChanged(true);
++    } else if (d->encoderPaused && queued < LowQueueCount) {
++        d->encoderPaused = false;
++        Q_EMIT encoderPausedChanged(false);
+     }
+ }
+ }
+diff --git a/src/VideoStream.h b/src/VideoStream.h
+--- a/src/VideoStream.h
++++ b/src/VideoStream.h
+@@ -102,6 +102,7 @@
+ 
+     uint32_t requestedFrameRate() const;
+     Q_SIGNAL void requestedFrameRateChanged();
++    Q_SIGNAL void encoderPausedChanged(bool paused);
+ 
+ private:
+     friend BOOL gfxChannelIdAssigned(RdpgfxServerContext *, uint32_t);
+@@ -115,7 +116,10 @@
+     void performReset(QSize size);
+     void sendFrame(const VideoFrame &frame);
+ 
+-    void updateRequestedFrameRate();
++    void updateInFlightWindow();
++    void wakeSender();
++    bool hasInFlightCapacity() const;
++    void updateBackpressure();
+ 
+     class Private;
+     const std::unique_ptr<Private> d;
+diff --git a/src/NetworkDetection.cpp b/src/NetworkDetection.cpp
+--- a/src/NetworkDetection.cpp
++++ b/src/NetworkDetection.cpp
+@@ -11,6 +11,8 @@
+ 
+ #include <ranges>
+ 
++#include <atomic>
++
+ #include <QQueue>
+ #include <QTimer>
+ 
+@@ -92,8 +94,8 @@
+     QHash<uint32_t, clk::system_clock::time_point> rttRequests;
+     std::vector<RTTMeasurement> rttMeasurements;
+ 
+-    clk::system_clock::duration minimumRtt;
+-    clk::system_clock::duration averageRtt;
++    std::atomic<clk::system_clock::rep> minimumRttTicks{0};
++    std::atomic<clk::system_clock::rep> averageRttTicks{0};
+ 
+     clk::system_clock::time_point lastNetworkResult;
+ };
+@@ -109,12 +111,12 @@
+ 
+ std::chrono::system_clock::duration NetworkDetection::minimumRTT() const
+ {
+-    return d->minimumRtt;
++    return clk::system_clock::duration(d->minimumRttTicks.load());
+ }
+ 
+ std::chrono::system_clock::duration NetworkDetection::averageRTT() const
+ {
+-    return d->averageRtt;
++    return clk::system_clock::duration(d->averageRttTicks.load());
+ }
+ 
+ void NetworkDetection::initialize()
+@@ -227,13 +229,15 @@
+         return;
+     }
+ 
+-    d->minimumRtt = std::numeric_limits<clk::system_clock::duration>::max();
++    auto minimum = std::numeric_limits<clk::system_clock::duration>::max();
+     auto sum = clk::system_clock::duration(0);
+-    std::for_each(d->rttMeasurements.begin(), d->rttMeasurements.end(), [this, &sum](const auto &measurement) {
+-        d->minimumRtt = std::min(d->minimumRtt, measurement.roundTripTime);
++    std::for_each(d->rttMeasurements.begin(), d->rttMeasurements.end(), [&minimum, &sum](const auto &measurement) {
++        minimum = std::min(minimum, measurement.roundTripTime);
+         sum = sum + measurement.roundTripTime;
+     });
+-    d->averageRtt = sum / d->rttMeasurements.size();
++    const auto average = sum / d->rttMeasurements.size();
++    d->minimumRttTicks.store(minimum.count());
++    d->averageRttTicks.store(average.count());
+ 
+     Q_EMIT rttChanged();
+ 
+@@ -250,14 +254,14 @@
+ #ifdef FREERDP3
+     rdpNetworkCharacteristicsResult result;
+     result.type = RDP_NETCHAR_RESULT_TYPE_BASE_RTT_BW_AVG_RTT;
+-    result.baseRTT = clk::duration_cast<clk::milliseconds>(d->minimumRtt).count();
+-    result.averageRTT = clk::duration_cast<clk::milliseconds>(d->averageRtt).count();
++    result.baseRTT = clk::duration_cast<clk::milliseconds>(minimum).count();
++    result.averageRTT = clk::duration_cast<clk::milliseconds>(average).count();
+     result.bandwidth = d->lastBandwithMeasurement;
+     d->rdpAutodetect->NetworkCharacteristicsResult(d->rdpAutodetect, RDP_TRANSPORT_TCP, d->nextSequenceNumber(), &result);
+ #else
+     d->rdpAutodetect->netCharBandwidth = d->lastBandwithMeasurement;
+-    d->rdpAutodetect->netCharBaseRTT = clk::duration_cast<clk::milliseconds>(d->minimumRtt).count();
+-    d->rdpAutodetect->netCharAverageRTT = clk::duration_cast<clk::milliseconds>(d->averageRtt).count();
++    d->rdpAutodetect->netCharBaseRTT = clk::duration_cast<clk::milliseconds>(minimum).count();
++    d->rdpAutodetect->netCharAverageRTT = clk::duration_cast<clk::milliseconds>(average).count();
+     d->rdpAutodetect->NetworkCharacteristicsResult(d->rdpAutodetect->context, d->nextSequenceNumber());
+ #endif
+ }
+diff --git a/src/AbstractSession.cpp b/src/AbstractSession.cpp
+--- a/src/AbstractSession.cpp
++++ b/src/AbstractSession.cpp
+@@ -102,9 +102,13 @@
+     d->frameRate = framerate;
+     if (d->encodedStream) {
+         d->encodedStream->setMaxFramerate({framerate, 1});
+-        // this buffers 1 second of frames and drops after that
+-        d->encodedStream->setMaxPendingFrames(framerate);
++        d->encodedStream->setMaxPendingFrames(3);
+     }
++}
++
++void AbstractSession::setEncoderPaused(bool paused)
++{
++    stream()->setEncoderPaused(paused);
+ }
+ 
+ void AbstractSession::setSize(QSize size)
+@@ -126,6 +130,7 @@
+ {
+     if (!d->encodedStream) {
+         d->encodedStream = std::make_unique<PipeWireEncodedStream>();
++        d->encodedStream->setMaxPendingFrames(3);
+         if (d->frameRate) {
+             d->encodedStream->setMaxFramerate({d->frameRate.value(), 1});
+         }
+diff --git a/src/AbstractSession.h b/src/AbstractSession.h
+--- a/src/AbstractSession.h
++++ b/src/AbstractSession.h
+@@ -35,6 +35,7 @@
+     bool streamingEnabled() const;
+     void setStreamingEnabled(bool enable);
+     void setVideoFrameRate(quint32 framerate);
++    void setEncoderPaused(bool paused);
+     void setActiveStream(int stream);
+     void setVirtualMonitor(const VirtualMonitor &vm);
+     void setVideoQuality(quint8 quality);
+diff --git a/server/SessionController.cpp b/server/SessionController.cpp
+--- a/server/SessionController.cpp
++++ b/server/SessionController.cpp
+@@ -29,6 +29,7 @@
+         m_sni = sni;
+ 
+         connect(session.get(), &KRdp::AbstractSession::frameReceived, connection->videoStream(), &KRdp::VideoStream::queueFrame);
++        connect(connection->videoStream(), &KRdp::VideoStream::encoderPausedChanged, session.get(), &KRdp::AbstractSession::setEncoderPaused);
+         connect(session.get(), &KRdp::AbstractSession::cursorUpdate, this, &SessionWrapper::onCursorUpdate);
+         connect(session.get(), &KRdp::AbstractSession::error, this, &SessionWrapper::sessionError);
+         connect(connection->videoStream(), &KRdp::VideoStream::enabledChanged, this, &SessionWrapper::onVideoStreamEnabledChanged);
