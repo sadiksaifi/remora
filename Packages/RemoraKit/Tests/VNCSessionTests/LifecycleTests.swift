@@ -334,14 +334,18 @@ private func waitForResizes(_ count: Int, from peer: StalledPeer) async throws -
                 #expect(try await waitForResizes(1, from: peer).count == 1)
                 peer.sendLayout(width: 32, origin: 1, result: stop == "denial" ? 1 : 4)
                 if stop == "multihead" { peer.sendLayout(width: 24, origin: 0, result: 0, screens: 2) }
-                if stop == "deadline" { try await Task.sleep(for: .milliseconds(3150)) }
+                if stop == "deadline" {
+                    peer.sendLayout(width: 32, origin: 0, result: 0)
+                    try await Task.sleep(for: .milliseconds(3150))
+                }
                 peer.sendLayout(width: 24, origin: 0, result: 0)
                 try await Task.sleep(for: .milliseconds(100))
                 #expect(peer.resizeRequests().count == 1, "Reconciliation must stop after \(stop).")
                 if stop == "deadline" {
-                    // Expiry abandons the old wire wait; a new explicit target still works.
-                    session.requestResize(.init(width: 48, height: 16), scale: 1)
-                    #expect(try await waitForResizes(2, from: peer).last == .init(width: 48, height: 16))
+                    // A server resize after expiry does not trigger a retry, but an
+                    // explicit request for the same former target must be admitted.
+                    session.requestResize(.init(width: 32, height: 16), scale: 1)
+                    #expect(try await waitForResizes(2, from: peer) == [.init(width: 32, height: 16), .init(width: 32, height: 16)])
                 }
                 session.disconnect()
             default: break

@@ -220,7 +220,7 @@ bool rm_vnc_connect(RMVNC *s) {
     s->error=0;
     return !atomic_load(&s->cancelled);
 }
-/* One corrective request per distinct explicit target, within three seconds.
+/* One corrective request per admitted explicit target, within three seconds.
  * Matches and repeated notifications never renew either bound. */
 static bool reconcile_resize(RMVNC *s) {
     rfbClient *c = s->client;
@@ -263,7 +263,8 @@ const char *rm_vnc_security(RMVNC *s) {
 bool rm_vnc_resize_supported(RMVNC *s) { return s->client->remoraResizeSupported; }
 bool rm_vnc_resize(RMVNC *s,uint16_t w,uint16_t h) {
     if (atomic_load(&s->cancelled) || !s->client->remoraResizeSupported) return true;
-    if (s->resizeWidth == w && s->resizeHeight == h) return true;
+    if (now() >= s->resizeDeadline) cancel_resize(s);
+    if (s->resizeActive && s->resizeWidth == w && s->resizeHeight == h) return true;
     s->resizeWidth = w; s->resizeHeight = h;
     s->resizeActive = s->resizeQueued = true;
     s->resizeCorrectionUsed = s->geometryChanged = false;
