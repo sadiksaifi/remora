@@ -178,7 +178,7 @@ public final class VNCSession: AgentInputSession, @unchecked Sendable {
                     case 3: .connectionTimedOut
                     case 4: .authenticationFailed
                     case 5: .certificateRejected
-                    default: .protocolError("VNC negotiation failed. Supported security: VeNCrypt X509None/X509VNC/X509Plain, classic VNC, None, and ARD. RSA-AES and anonymous TLS are unsupported.")
+                    default: .protocolError("The VNC handshake didn't complete. Remora doesn't support RSA-AES or anonymous TLS security.")
                     }
                     state.lock.withLock { if state.reason == nil { state.reason = reason } }
                     return
