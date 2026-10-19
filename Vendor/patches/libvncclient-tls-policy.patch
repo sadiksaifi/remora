@@ -1,12 +1,13 @@
 --- a/include/rfb/rfbclient.h
 +++ b/include/rfb/rfbclient.h
-@@ -506,6 +506,10 @@
+@@ -506,6 +506,11 @@
          rfbBool isUpdateRectManagedByLib;
  
          GetX509CertFingerprintMismatchDecisionProc GetX509CertFingerprintMismatchDecision;
 +        /* Remora adapter metadata. Set only by parsed protocol results. */
 +        rfbBool remoraAuthFailed;
 +        rfbBool remoraResizeSupported;
++        rfbBool remoraResizeProhibited;
 +        void (*RemoraDesktopSize)(struct _rfbClient*, rfbBool requested);
  } rfbClient;
  
@@ -170,7 +171,15 @@
    }
    
    rfbClientLog("Selected Security Scheme %d\n", authScheme);
-@@ -1729,8 +1661,7 @@
+@@ -1704,6 +1636,7 @@
+   rfbSetDesktopSizeMsg sdm;
+   rfbExtDesktopScreen screen;
+ 
++  if (client->remoraResizeProhibited) return TRUE;
+   if (client->screen.width == 0 && client->screen.height == 0 ) {
+     rfbClientLog("Screen not yet received from server - not sending dimensions %dx%d\n", width, height);
+     return TRUE;
+@@ -1729,8 +1662,7 @@
      if (!WriteToRFBServer(client, (char *)&sdm, sz_rfbSetDesktopSizeMsg)) return FALSE;
      if (!WriteToRFBServer(client, (char *)&screen, sz_rfbExtDesktopScreen)) return FALSE;
  
@@ -180,7 +189,7 @@
  
      client->requestedResize = FALSE;
  
-@@ -2149,6 +2080,7 @@
+@@ -2149,6 +2081,7 @@
  	if(!ResizeClientBuffer(client, rect.r.w, rect.r.h))
  	  return FALSE;
  	SendFramebufferUpdateRequest(client, 0, 0, rect.r.w, rect.r.h, FALSE);
@@ -188,7 +197,7 @@
  	rfbClientLog("Got new framebuffer size: %dx%d\n", rect.r.w, rect.r.h);
  	continue;
        }
-@@ -2165,24 +2097,38 @@
+@@ -2165,24 +2098,41 @@
          }
  
          screens = eds.numberOfScreens;
@@ -198,6 +207,9 @@
 +        rfbBool forwardedResize = rect.r.x == 1 && rect.r.y == 4;
 +        rfbBool appliedResize = rect.r.x != 1 || rect.r.y == 0;
 +        rfbBool rejectedResize = !appliedResize && !forwardedResize;
++        /* An administrative denial remains authoritative for this connection.
++         * Ordinary layout updates describe geometry, not a policy change. */
++        if (rect.r.x == 1 && rect.r.y == 1) client->remoraResizeProhibited = TRUE;
 +        rfbClientLog("ExtendedDesktopSize origin=%u result=%u screens=%d size=%ux%u\n", rect.r.x, rect.r.y, screens, rect.r.w, rect.r.h);
          for (loop=0; loop < screens; loop++)
          {
@@ -216,7 +228,7 @@
 +        /* Status 4 means forwarded, not rejected. It carries requested geometry,
 +         * not confirmed framebuffer dimensions, and preserves the capability. */
 +        if (!forwardedResize)
-+          client->remoraResizeSupported = screens == 1 && !rejectedResize && !invalidScreen;
++          client->remoraResizeSupported = screens == 1 && !rejectedResize && !invalidScreen && !client->remoraResizeProhibited;
 +        if (appliedResize && !invalidScreen && (client->width != rect.r.w || client->height != rect.r.h)) {
            if(!ResizeClientBuffer(client, rect.r.w, rect.r.h)) {
              return FALSE;

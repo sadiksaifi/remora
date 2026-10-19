@@ -155,3 +155,36 @@ private struct DiscardFrames: FrameSink { func consume(_ frame: BorrowedFrame) {
     #expect(!sizes.contains(.init(width: 32, height: 16)))
     #expect(sizes.last == .init(width: 24, height: 16))
 }
+
+@Test @MainActor func vncAdministrativeResizeDenialSurvivesLayoutNotifications() async throws {
+    let peer = try StalledPeer(partialFrame: true, stallRectangle: false)
+    defer { peer.stop() }
+    let session = VNCSession(configuration: .init(host: "127.0.0.1", port: peer.port, username: "", desktopSize: .init(width: 16, height: 16)), frameSink: DiscardFrames())
+    let fallback = Task { do { try await Task.sleep(for: .seconds(3)); peer.stop(); session.disconnect() } catch {} }
+    defer { fallback.cancel() }
+    var capabilities: [Bool] = []
+    var sizes: [DesktopSize] = []
+    session.connect()
+    for await event in session.events {
+        switch event {
+        case .stateChanged(.connected): peer.sendLayout(width: 16, origin: 0, result: 0)
+        case .dynamicResizeChanged(let supported):
+            capabilities.append(supported)
+            if capabilities.count == 1, supported {
+                session.requestResize(.init(width: 32, height: 16), scale: 1)
+                try await Task.sleep(for: .milliseconds(30))
+                peer.sendLayout(width: 32, origin: 1, result: 1)
+                peer.sendLayout(width: 16, origin: 0, result: 0)
+                try await Task.sleep(for: .milliseconds(100))
+                #expect(!session.supportsDynamicResize)
+                #expect(session.maximumResizeArea == nil)
+                session.disconnect()
+            }
+        case .desktopSizeChanged(let size, _): sizes.append(size)
+        default: break
+        }
+    }
+    #expect(capabilities == [true, false])
+    #expect(!sizes.contains(.init(width: 32, height: 16)))
+    #expect(sizes.last == .init(width: 16, height: 16))
+}
