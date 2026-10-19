@@ -3,8 +3,9 @@
 
 Usage: producer-recovery.py SOURCE BUILD
 Uses its real producer, timer, FFmpeg filter/encoder/decoder and pending counters.
-A disposable source copy omits PipeWire connection setup; the C++ fixture drives
-source arrivals and worker scheduling. It never edits the supplied source/build.
+A disposable source copy omits PipeWire connection setup; the C++ fixture fixes
+the unconnected source size and drives source arrivals and worker scheduling.
+It never edits the supplied source/build.
 """
 from pathlib import Path
 import shlex

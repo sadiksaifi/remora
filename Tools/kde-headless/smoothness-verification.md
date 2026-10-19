@@ -288,6 +288,24 @@ was rebuilt from the tracked sources and passed. This correction was verified
 offline; it was not installed into the active private desktop or tested through
 Remora.
 
+A further review of `f12a626` found that retrying a retained source replayed
+its older cursor metadata. After a newer cursor-only shape arrived, the virtual
+`processFrame()` call emitted `cursorChanged` with the old image and hotspot.
+KRdp forwarded that obsolete shape to the client. Retried video now omits cursor
+metadata because the source arrival already consumed it.
+
+The recovery fixture now uses the real `PipeWireEncodeProduce` subclass and
+observes its `cursorChanged` signal. Its only additional PipeWire boundary
+replacement is a fixed 32 by 32 source size, without connecting to PipeWire.
+The existing `source-cursor` scenario supplies a red cursor with the retained
+source and a blue cursor in the newer cursor-only packet. It checks the final
+image, position, and hotspot after recovery and settling. This assertion failed
+on `f12a626` while all video assertions passed. All seven scenarios pass with
+the correction. Fresh Debian source extraction and zero-fuzz application of all
+seven patches reproduced all 23 reviewed files. The rebuilt clipboard fixture
+also passed. Evidence is in `/tmp/remora-pr63-full-review.9gNsYn` on the offline
+build host. This correction has not been deployed or exercised through Remora.
+
 ## Limits
 
 These results show a specific KDE throughput and dispatch-delay improvement.

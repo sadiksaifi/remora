@@ -1,6 +1,7 @@
 // Runs the real producer, filter graph, H.264 encoder and decoder without a desktop.
-// The runner removes only PipeWire connection setup from a disposable producer copy.
-#include "pipewireproduce_p.h"
+// The runner removes PipeWire connection setup from a disposable producer copy.
+// The encoded-stream subclass still delivers real cursorChanged signals.
+#include "pipewireencodedstream_p.h"
 #include "libx264encoder_p.h"
 #include "pwhelpers.h"
 #include <algorithm>
@@ -12,6 +13,9 @@
 extern "C" {
 #include <libavfilter/buffersrc.h>
 }
+
+// Replace only the unconnected PipeWire format lookup.
+QSize PipeWireSourceStream::size() const { return QSize(32, 32); }
 
 static void waitMs(int ms)
 {
@@ -49,12 +53,14 @@ public:
     }
 };
 
-class Produce : public PipeWireProduce
+class Produce : public PipeWireEncodeProduce
 {
 public:
-    Produce() : PipeWireProduce(PipeWireBaseEncodedStream::H264Baseline, 0, 0, {60, 1})
+    Produce(PipeWireEncodedStream *stream) : PipeWireEncodeProduce(PipeWireBaseEncodedStream::H264Baseline, 0, 0, {60, 1}, stream)
     {
         initialize();
+        m_stream.reset(new PipeWireSourceStream(nullptr));
+        QObject::connect(stream, &PipeWireEncodedStream::cursorChanged, this, [this](const PipeWireCursor &cursor) { latestCursor = cursor; });
         setMaxPendingFrames(3);
         auto encoder = std::make_unique<FrameEncoder>(this);
         encoder->setEncodingPreference(PipeWireBaseEncodedStream::Speed);
@@ -65,6 +71,7 @@ public:
     }
     ~Produce() override { avcodec_free_context(&decoder); }
     AVCodecContext *decoder;
+    PipeWireCursor latestCursor;
     std::vector<int64_t> decoded;
     bool pixelsMatch = true;
     void processPacket(AVPacket *packet) override
@@ -86,6 +93,9 @@ public:
         images.back().fill(QColor(pts, pts, pts));
         PipeWireFrame f{};
         f.presentationTimestamp = std::chrono::milliseconds(pts);
+        QImage cursor(2, 2, QImage::Format_ARGB32);
+        cursor.fill(Qt::red);
+        f.cursor = PipeWireCursor{QPoint(2, 3), QPoint(0, 1), cursor};
         f.dataFrame = std::make_shared<PipeWireFrameData>(SPA_VIDEO_FORMAT_RGBA,
             images.back().bits(), images.back().size(), images.back().bytesPerLine(), new PipeWireFrameCleanupFunction([] {}));
         processFrame(f);
@@ -94,9 +104,11 @@ public:
     {
         PipeWireFrame f{};
         f.presentationTimestamp = std::chrono::milliseconds(pts);
-        f.cursor = PipeWireCursor{QPoint(7, 9), QPoint(1, 2), {}};
+        QImage cursor(2, 2, QImage::Format_ARGB32);
+        cursor.fill(Qt::blue);
+        f.cursor = PipeWireCursor{QPoint(7, 9), QPoint(1, 2), cursor};
         processFrame(f);
-        if (m_cursor.position != QPoint(7, 9) || m_cursor.hotspot != QPoint(1, 2)) qFatal("cursor metadata lost");
+        if (latestCursor.position != QPoint(7, 9) || latestCursor.hotspot != QPoint(1, 2)) qFatal("cursor metadata lost");
     }
     void release()
     {
@@ -118,7 +130,9 @@ int main(int argc, char **argv)
     av_log_set_level(AV_LOG_ERROR);
     bool all = true;
     for (const auto scenario : {"source", "resume-full", "repeat", "stay-paused", "repeat-paused", "source-cursor", "repeat-cursor"}) {
-        Produce p;
+        PipeWireEncodedStream stream;
+        av_log_set_level(AV_LOG_ERROR);
+        Produce p(&stream);
         p.source(100); p.source(120); p.source(140);
         const bool repeat = std::string(scenario) == "repeat" || std::string(scenario) == "repeat-paused" || std::string(scenario) == "repeat-cursor";
         const bool pause = std::string(scenario) == "resume-full" || std::string(scenario) == "stay-paused" || std::string(scenario) == "repeat-paused";
@@ -126,7 +140,8 @@ int main(int argc, char **argv)
         if (pause) p.setEncoderPaused(true);
         if (!repeat) p.source(160);
         if (pause && !stayPaused) p.setEncoderPaused(false);
-        if (std::string(scenario) == "source-cursor" || std::string(scenario) == "repeat-cursor") p.cursorOnly(180);
+        const bool hasCursorUpdate = std::string(scenario) == "source-cursor" || std::string(scenario) == "repeat-cursor";
+        if (hasCursorUpdate) p.cursorOnly(180);
         waitMs(250); // The real single-shot repeat interval is 100 ms.
         const bool held = p.m_pendingFilterFrames + p.m_pendingEncodeFrames == 3 && p.submissions() == 3;
         p.release();
@@ -143,10 +158,13 @@ int main(int argc, char **argv)
         const bool bounded = static_cast<FrameEncoder *>(p.m_encoder.get())->maxPending <= 3
             && p.m_pendingFilterFrames + p.m_pendingEncodeFrames <= 3;
         const bool quiet = settled == p.submissions();
-        const bool pass = held && delivered && p.pixelsMatch && bounded && quiet;
+        const bool cursorCurrent = !hasCursorUpdate
+            || (p.latestCursor.position == QPoint(7, 9) && p.latestCursor.hotspot == QPoint(1, 2)
+                && p.latestCursor.texture.pixelColor(0, 0) == QColor(Qt::blue));
+        const bool pass = held && delivered && p.pixelsMatch && bounded && quiet && cursorCurrent;
         std::cout << scenario << " " << (pass ? "PASS" : "FAIL") << " held=" << held
                   << " final=" << delivered << " pixels=" << p.pixelsMatch << " bounded=" << bounded << " quiet=" << quiet
-                  << " submissions=" << p.submissions() << " decoded=";
+                  << " cursorCurrent=" << cursorCurrent << " submissions=" << p.submissions() << " decoded=";
         for (auto pts : p.decoded) std::cout << pts << ",";
         std::cout << std::endl;
         all &= pass;

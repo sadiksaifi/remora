@@ -88,7 +88,7 @@ diff --git a/src/pipewireproduce_p.h b/src/pipewireproduce_p.h
 diff --git a/src/pipewireproduce.cpp b/src/pipewireproduce.cpp
 --- a/src/pipewireproduce.cpp
 +++ b/src/pipewireproduce.cpp
-@@ -81,16 +81,48 @@
+@@ -81,16 +81,50 @@
      m_frameRepeatTimer->setSingleShot(true);
      m_frameRepeatTimer->setInterval(100);
      connect(m_frameRepeatTimer.data(), &QTimer::timeout, this, [this]() {
@@ -125,7 +125,9 @@ diff --git a/src/pipewireproduce.cpp b/src/pipewireproduce.cpp
 +    }
 +    // A rejected source needs its own submission, then the usual delayed flush.
 +    if (m_lastDroppedFrame.dataFrame || m_lastDroppedFrame.dmabuf) {
-+        const auto frame = m_lastDroppedFrame;
++        auto frame = m_lastDroppedFrame;
++        // Cursor metadata was consumed on arrival; newer cursor-only updates win.
++        frame.cursor.reset();
 +        processFrame(frame);
 +        return;
 +    }
@@ -146,7 +148,7 @@ diff --git a/src/pipewireproduce.cpp b/src/pipewireproduce.cpp
  }
  
  Fraction PipeWireProduce::maxFramerate() const
-@@ -127,6 +159,9 @@
+@@ -127,6 +161,9 @@
  
  void PipeWireProduce::setupStream()
  {
@@ -156,7 +158,7 @@ diff --git a/src/pipewireproduce.cpp b/src/pipewireproduce.cpp
      qCDebug(PIPEWIRERECORD_LOGGING) << "Setting up stream";
      disconnect(m_stream.get(), &PipeWireSourceStream::streamParametersChanged, this, &PipeWireProduce::setupStream);
  
-@@ -255,11 +290,6 @@
+@@ -255,11 +292,6 @@
  
  void PipeWireProduce::processFrame(const PipeWireFrame &frame)
  {
@@ -168,7 +170,7 @@ diff --git a/src/pipewireproduce.cpp b/src/pipewireproduce.cpp
      if (frame.cursor) {
          m_cursor.position = frame.cursor->position;
          m_cursor.hotspot = frame.cursor->hotspot;
-@@ -269,17 +299,34 @@
+@@ -269,17 +301,34 @@
          }
      }
  
@@ -207,7 +209,7 @@ diff --git a/src/pipewireproduce.cpp b/src/pipewireproduce.cpp
          qCWarning(PIPEWIRERECORD_LOGGING) << "Filter queue is full, dropping frame" << pts;
          return;
      }
-@@ -289,6 +336,7 @@
+@@ -289,6 +338,7 @@
          return;
      }
  
@@ -215,7 +217,7 @@ diff --git a/src/pipewireproduce.cpp b/src/pipewireproduce.cpp
      m_pendingFilterFrames++;
      m_previousPts = pts;
  
-@@ -326,6 +374,7 @@
+@@ -326,6 +376,7 @@
  void PipeWireProduce::handleEncodedFramesChanged()
  {
      if (!m_deactivated) {
