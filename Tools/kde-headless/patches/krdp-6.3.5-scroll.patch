@@ -1,0 +1,18 @@
+--- a/src/PlasmaScreencastV1Session.cpp
++++ b/src/PlasmaScreencastV1Session.cpp
+@@ -230,11 +230,13 @@
+     case QEvent::Wheel: {
+         auto we = std::static_pointer_cast<QWheelEvent>(event);
+         auto delta = we->angleDelta();
++        // Qt Wayland converts axis-only scroll distance to angleDelta by 12.
++        // Encode 10 logical pixels per 120-unit notch, retaining fractions.
+         if (delta.y() != 0) {
+-            d->remoteInterface->axis(WL_POINTER_AXIS_VERTICAL_SCROLL, delta.y() / 120);
++            d->remoteInterface->axis(WL_POINTER_AXIS_VERTICAL_SCROLL, wl_fixed_from_double(delta.y() / 12.0));
+         }
+         if (delta.x() != 0) {
+-            d->remoteInterface->axis(WL_POINTER_AXIS_HORIZONTAL_SCROLL, delta.x() / 120);
++            d->remoteInterface->axis(WL_POINTER_AXIS_HORIZONTAL_SCROLL, wl_fixed_from_double(delta.x() / 12.0));
+         }
+         break;
+     }
