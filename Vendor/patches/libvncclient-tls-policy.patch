@@ -481,3 +481,107 @@
                  origAuthScheme=tAuth[loop];
                  authScheme=t;
              }
+--- a/src/common/crypto_openssl.c
++++ b/src/common/crypto_openssl.c
+@@ -78,24 +78,30 @@
+     unsigned char mungedkey[8];
+     int i;
+ #if (OPENSSL_VERSION_NUMBER >= 0x30000000L)
++    OSSL_LIB_CTX *libctx = NULL;
+     OSSL_PROVIDER *providerLegacy = NULL;
+-    OSSL_PROVIDER *providerDefault = NULL;
++    EVP_CIPHER *cipher = NULL;
++#else
++    const EVP_CIPHER *cipher = EVP_des_ecb();
+ #endif
+ 
+     for (i = 0; i < 8; i++)
+       mungedkey[i] = reverseByte(key[i]);
+ 
+ #if (OPENSSL_VERSION_NUMBER >= 0x30000000L)
+-    /* Load Multiple providers into the default (NULL) library context */
+-    if (!(providerLegacy = OSSL_PROVIDER_load(NULL, "legacy")))
+-    	goto out;
+-    if (!(providerDefault = OSSL_PROVIDER_load(NULL, "default")))
+-    	goto out;
++    /* DES belongs to this operation, not the application's shared TLS/RDP
++     * context. Loading and unloading global providers disables its fallback. */
++    if (!(libctx = OSSL_LIB_CTX_new()))
++        goto out;
++    if (!(providerLegacy = OSSL_PROVIDER_load(libctx, "legacy")))
++        goto out;
++    if (!(cipher = EVP_CIPHER_fetch(libctx, "DES-ECB", "provider=legacy")))
++        goto out;
+ #endif
+ 
+     if(!(des = EVP_CIPHER_CTX_new()))
+ 	goto out;
+-    if(!EVP_EncryptInit_ex(des, EVP_des_ecb(), NULL, mungedkey, NULL))
++    if(!EVP_EncryptInit_ex(des, cipher, NULL, mungedkey, NULL))
+ 	goto out;
+     if(!EVP_EncryptUpdate(des, out, out_len, in, in_len))
+ 	goto out;
+@@ -106,10 +112,10 @@
+     if (des)
+       EVP_CIPHER_CTX_free(des);
+ #if (OPENSSL_VERSION_NUMBER >= 0x30000000L)
++    EVP_CIPHER_free(cipher);
+     if (providerLegacy)
+       OSSL_PROVIDER_unload(providerLegacy);
+-    if (providerDefault)
+-      OSSL_PROVIDER_unload(providerDefault);
++    OSSL_LIB_CTX_free(libctx);
+ #endif
+     return result;
+ }
+@@ -121,24 +127,29 @@
+     unsigned char mungedkey[8];
+     int i;
+ #if (OPENSSL_VERSION_NUMBER >= 0x30000000L)
++    OSSL_LIB_CTX *libctx = NULL;
+     OSSL_PROVIDER *providerLegacy = NULL;
+-    OSSL_PROVIDER *providerDefault = NULL;
++    EVP_CIPHER *cipher = NULL;
++#else
++    const EVP_CIPHER *cipher = EVP_des_ecb();
+ #endif
+ 
+     for (i = 0; i < 8; i++)
+       mungedkey[i] = reverseByte(key[i]);
+ 
+ #if (OPENSSL_VERSION_NUMBER >= 0x30000000L)
+-    /* Load Multiple providers into the default (NULL) library context */
+-    if (!(providerLegacy = OSSL_PROVIDER_load(NULL, "legacy")))
+-	goto out;
+-    if (!(providerDefault = OSSL_PROVIDER_load(NULL, "default")))
+-	goto out;
++    /* Keep legacy DES providers out of the application's shared context. */
++    if (!(libctx = OSSL_LIB_CTX_new()))
++        goto out;
++    if (!(providerLegacy = OSSL_PROVIDER_load(libctx, "legacy")))
++        goto out;
++    if (!(cipher = EVP_CIPHER_fetch(libctx, "DES-ECB", "provider=legacy")))
++        goto out;
+ #endif
+ 
+     if(!(des = EVP_CIPHER_CTX_new()))
+ 	goto out;
+-    if(!EVP_DecryptInit_ex(des, EVP_des_ecb(), NULL, mungedkey, NULL))
++    if(!EVP_DecryptInit_ex(des, cipher, NULL, mungedkey, NULL))
+ 	goto out;
+     if(!EVP_CIPHER_CTX_set_padding(des, 0))
+ 	goto out;
+@@ -151,10 +162,10 @@
+     if (des)
+ 	EVP_CIPHER_CTX_free(des);
+ #if (OPENSSL_VERSION_NUMBER >= 0x30000000L)
++    EVP_CIPHER_free(cipher);
+     if (providerLegacy)
+-	OSSL_PROVIDER_unload(providerLegacy);
+-    if (providerDefault)
+-	OSSL_PROVIDER_unload(providerDefault);
++        OSSL_PROVIDER_unload(providerLegacy);
++    OSSL_LIB_CTX_free(libctx);
+ #endif
+     return result;
+ }
