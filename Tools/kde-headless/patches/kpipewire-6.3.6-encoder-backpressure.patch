@@ -144,7 +144,7 @@ diff --git a/src/pipewireproduce.cpp b/src/pipewireproduce.cpp
 +    m_pendingFilterFrames++;
 +    m_passthroughCondition.notify_all();
  }
-
+ 
  Fraction PipeWireProduce::maxFramerate() const
 @@ -127,6 +159,9 @@
  
@@ -156,19 +156,33 @@ diff --git a/src/pipewireproduce.cpp b/src/pipewireproduce.cpp
      qCDebug(PIPEWIRERECORD_LOGGING) << "Setting up stream";
      disconnect(m_stream.get(), &PipeWireSourceStream::streamParametersChanged, this, &PipeWireProduce::setupStream);
  
-@@ -258,6 +293,7 @@
-     auto f = frame;
-
-     m_lastFrame = frame;
-+    m_repeatPending = false;
-     m_frameRepeatTimer->start();
-
+@@ -255,11 +290,6 @@
+ 
+ void PipeWireProduce::processFrame(const PipeWireFrame &frame)
+ {
+-    auto f = frame;
+-
+-    m_lastFrame = frame;
+-    m_frameRepeatTimer->start();
+-
      if (frame.cursor) {
-@@ -269,17 +305,24 @@
+         m_cursor.position = frame.cursor->position;
+         m_cursor.hotspot = frame.cursor->hotspot;
+@@ -269,17 +299,34 @@
          }
      }
  
++    // KWin sends cursor-only packets without video data. They must not replace
++    // a retained image or postpone the one-shot flush of the last video frame.
++    if (!frame.dataFrame && !frame.dmabuf) {
++        return;
++    }
++
++    auto f = frame;
++    m_lastFrame = frame;
 +    m_lastDroppedFrame = frame;
++    m_repeatPending = false;
++    m_frameRepeatTimer->start();
 +    if (m_encoderPaused) {
 +        return;
 +    }
@@ -193,20 +207,19 @@ diff --git a/src/pipewireproduce.cpp b/src/pipewireproduce.cpp
          qCWarning(PIPEWIRERECORD_LOGGING) << "Filter queue is full, dropping frame" << pts;
          return;
      }
-@@ -289,6 +332,7 @@
+@@ -289,6 +336,7 @@
          return;
      }
-
+ 
 +    m_lastDroppedFrame = {};
      m_pendingFilterFrames++;
      m_previousPts = pts;
-
-@@ -326,7 +370,8 @@
+ 
+@@ -326,6 +374,7 @@
  void PipeWireProduce::handleEncodedFramesChanged()
  {
      if (!m_deactivated) {
 +        retryPendingFrame();
          return;
      }
-
-     // If we're deactivating but still have frames in the queue, we want to
+ 

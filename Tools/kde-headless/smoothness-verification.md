@@ -262,6 +262,32 @@ and `motion-metrics.json`. GDM and the system GNOME remote-desktop service
 remained active, port 3389 remained listening, and NVIDIA remained 615.71.09 on
 the GTX 1660 Ti. No system package, service, or driver was changed.
 
+## Cursor-only frame recovery correction
+
+The review of `1226006` found that a cursor-only PipeWire packet could replace
+both the retained source image and the image awaiting a codec flush. KWin marks
+these packets with `SPA_CHUNK_FLAG_CORRUPTED`, meaning their video contents must
+not be read. KPipeWire forwards their cursor metadata without an image. If one
+arrived after the final desktop update while the encoder budget was full,
+capacity recovery had no image left to submit. The desktop could retain older
+pixels until another video update arrived.
+
+The producer now processes cursor metadata before checking for video data.
+Packets without video leave retained images, pending flush work, and the repeat
+timer intact. The `source-cursor` and `repeat-cursor` scenarios in
+`verification/producer-recovery.py SOURCE BUILD` reproduced the failure on the
+pre-fix implementation: only timestamps 100 and 120 decoded, while final source
+160 or final flush 140 was absent. Both scenarios pass after the correction,
+along with the original five scenarios. The fixture also checks cursor position
+and hotspot delivery, decoded pixels, the pending budget, and settled output.
+
+The check compiled a disposable producer copy against the existing Debian 13
+KPipeWire build. All seven archived server patches applied with zero fuzz to
+the Debian sources and reproduced the reviewed files. The clipboard fixture
+was rebuilt from the tracked sources and passed. This correction was verified
+offline; it was not installed into the active private desktop or tested through
+Remora.
+
 ## Limits
 
 These results show a specific KDE throughput and dispatch-delay improvement.

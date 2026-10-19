@@ -28,6 +28,8 @@ public:
     int maxPending = 0;
     bool filterFrame(const PipeWireFrame &frame) override
     {
+        // SoftwareEncoder rejects cursor-only packets without image data.
+        if (!frame.dataFrame) return false;
         maxPending = std::max(maxPending, int(m_produce->m_pendingFilterFrames + m_produce->m_pendingEncodeFrames + 1));
         // Replace only the PipeWire image download. Filtering and encoding are real.
         auto image = frame.dataFrame->toImage();
@@ -88,6 +90,14 @@ public:
             images.back().bits(), images.back().size(), images.back().bytesPerLine(), new PipeWireFrameCleanupFunction([] {}));
         processFrame(f);
     }
+    void cursorOnly(int pts)
+    {
+        PipeWireFrame f{};
+        f.presentationTimestamp = std::chrono::milliseconds(pts);
+        f.cursor = PipeWireCursor{QPoint(7, 9), QPoint(1, 2), {}};
+        processFrame(f);
+        if (m_cursor.position != QPoint(7, 9) || m_cursor.hotspot != QPoint(1, 2)) qFatal("cursor metadata lost");
+    }
     void release()
     {
         // Drive the exact worker operations synchronously: time/worker scheduling
@@ -107,15 +117,16 @@ int main(int argc, char **argv)
     QCoreApplication app(argc, argv);
     av_log_set_level(AV_LOG_ERROR);
     bool all = true;
-    for (const auto scenario : {"source", "resume-full", "repeat", "stay-paused", "repeat-paused"}) {
+    for (const auto scenario : {"source", "resume-full", "repeat", "stay-paused", "repeat-paused", "source-cursor", "repeat-cursor"}) {
         Produce p;
         p.source(100); p.source(120); p.source(140);
-        const bool repeat = std::string(scenario) == "repeat" || std::string(scenario) == "repeat-paused";
+        const bool repeat = std::string(scenario) == "repeat" || std::string(scenario) == "repeat-paused" || std::string(scenario) == "repeat-cursor";
         const bool pause = std::string(scenario) == "resume-full" || std::string(scenario) == "stay-paused" || std::string(scenario) == "repeat-paused";
         const bool stayPaused = std::string(scenario) == "stay-paused" || std::string(scenario) == "repeat-paused";
         if (pause) p.setEncoderPaused(true);
         if (!repeat) p.source(160);
         if (pause && !stayPaused) p.setEncoderPaused(false);
+        if (std::string(scenario) == "source-cursor" || std::string(scenario) == "repeat-cursor") p.cursorOnly(180);
         waitMs(250); // The real single-shot repeat interval is 100 ms.
         const bool held = p.m_pendingFilterFrames + p.m_pendingEncodeFrames == 3 && p.submissions() == 3;
         p.release();
