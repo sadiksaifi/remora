@@ -17,6 +17,10 @@ public enum ConnectionResolution: Codable, Sendable, Hashable {
 public struct Connection: Codable, Sendable, Identifiable, Hashable {
     public enum Kind: String, Codable, Sendable {
         case rdp
+        case vnc
+
+        public var defaultPort: Int { self == .rdp ? 3389 : 5900 }
+        public var requiresUsername: Bool { self == .rdp }
     }
 
     /// The standard RDP port.
@@ -36,7 +40,7 @@ public struct Connection: Codable, Sendable, Identifiable, Hashable {
         id: UUID = UUID(),
         name: String,
         host: String,
-        port: Int = Connection.defaultPort,
+        port: Int? = nil,
         username: String,
         domain: String? = nil,
         kind: Kind = .rdp,
@@ -46,7 +50,7 @@ public struct Connection: Codable, Sendable, Identifiable, Hashable {
         self.id = id
         self.name = name
         self.host = host
-        self.port = port
+        self.port = port ?? kind.defaultPort
         self.username = username
         self.domain = domain
         self.kind = kind
@@ -71,7 +75,9 @@ public struct Connection: Codable, Sendable, Identifiable, Hashable {
         resolution = try values.decodeIfPresent(ConnectionResolution.self, forKey: .resolution) ?? .fitToWindow
     }
 
+    public var defaultPort: Int { kind.defaultPort }
+
     public var displayAddress: String {
-        port == Self.defaultPort ? host : "\(host):\(port)"
+        port == kind.defaultPort ? host : "\(host):\(port)"
     }
 }

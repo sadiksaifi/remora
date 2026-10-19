@@ -2,29 +2,9 @@ import CFreeRDPBridge
 import Foundation
 import RemoraCore
 
-public struct AgentInputCapabilities: OptionSet, Sendable {
-    public let rawValue: UInt8
-    public init(rawValue: UInt8) { self.rawValue = rawValue }
-    public static let unicode = Self(rawValue: 1)
-    public static let extendedButtons = Self(rawValue: 2)
-    public static let horizontalWheel = Self(rawValue: 4)
-}
-
-public enum AgentInputEvent: Sendable {
-    case key(PhysicalKey, down: Bool)
-    case pointer(RemotePoint, PointerButtons)
-    case wheel(WheelInput)
-    case unicode(Unicode.Scalar)
-    case pause
-}
-
-public enum AgentInputFailure: Error, Sendable {
-    case sessionEnded, cancelled, submissionFailed, timedOut
-}
-
 /// One admitted request. Call finish before admitting its successor. At most one
 /// event is queued by send, so text and drags cannot flood the session queue.
-public final class AgentInputRequest: Sendable {
+final class RDPAgentInputRequest: AgentInputRequest {
     private let session: RDPSession
     private let id: UInt64
 

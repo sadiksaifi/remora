@@ -102,6 +102,8 @@ public struct SessionCredentials: Sendable {
 }
 
 public struct CredentialsChallenge: Sendable {
+    public enum Fields: Sendable { case usernamePassword, password }
+    public let fields: Fields
     public enum Reason: Sendable {
         case missing
         case rejected
@@ -115,8 +117,9 @@ public struct CredentialsChallenge: Sendable {
 
     public init(
         username: String, domain: String, reason: Reason,
-        responder: SessionResponder<SessionCredentials?>
+        responder: SessionResponder<SessionCredentials?>, fields: Fields = .usernamePassword
     ) {
+        self.fields = fields
         self.username = username
         self.domain = domain
         self.reason = reason
@@ -210,7 +213,7 @@ public struct DirtyRectangle: Sendable, Equatable {
     }
 }
 
-/// Borrowed pixels in FreeRDP PIXEL_FORMAT_BGRA32 byte order: B, G, R, A.
+/// Borrowed pixels in BGRA32 byte order: B, G, R, A.
 /// Ignore alpha. The pointer is valid only during FrameSink.consume.
 /// Copy all pixels you need before returning, including before dispatching work.
 public struct BorrowedFrame {

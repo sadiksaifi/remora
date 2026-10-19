@@ -1,5 +1,4 @@
 import Foundation
-import RDPSession
 import RemoraControl
 import RemoraCore
 
@@ -110,7 +109,7 @@ extension CommandLineController {
             }
             try check()
             finished = true
-            guard await input.finish() else { throw ControlFailure(.backendFailed, "The RDP input release failed. The transport was closed.") }
+            guard await input.finish() else { throw ControlFailure(.backendFailed, "The remote input release failed. The transport was closed.") }
             try check()
             return .object(["session": .string(id.uuidString), "submittedActions": .number(Double(completed)),
                 "submittedEvents": .number(Double(submitted)), "acknowledgment": .string("protocol-submission")])
@@ -128,9 +127,9 @@ extension CommandLineController {
                 case .timedOut: failure = ControlFailure(.timeout, "The input command timed out.")
                 case .sessionEnded: failure = ControlFailure(.sessionEnded, "The session ended during input.")
                 case .cancelled: failure = ControlFailure(.cancelled, "The input request was cancelled.")
-                case .submissionFailed: failure = ControlFailure(.backendFailed, "The RDP input submission failed.")
+                case .submissionFailed: failure = ControlFailure(.backendFailed, "The remote input submission failed.")
                 }
-            } else { failure = ControlFailure(.backendFailed, "The RDP input submission failed.") }
+            } else { failure = ControlFailure(.backendFailed, "The remote input submission failed.") }
             throw ControlFailure(failure.code, failure.message, hint: failure.hint,
                 details: .object(["submittedActions": .number(Double(completed)), "submittedEvents": .number(Double(submitted))]))
         }
@@ -308,7 +307,7 @@ private struct InputPlan {
             if dx != 0, !capabilities.contains(.horizontalWheel) { throw ControlFailure(.unsupported, "The server did not negotiate a horizontal wheel.") }
             let h = (dx * 120).rounded(), v = (-dy * 120).rounded()
             guard h >= Double(Int32.min), h <= Double(Int32.max), v >= Double(Int32.min), v <= Double(Int32.max) else {
-                throw ControlFailure(.invalidArgument, "The wheel deltas exceed the RDP range.")
+                throw ControlFailure(.invalidArgument, "The wheel deltas exceed the protocol range.")
             }
             let horizontal = Int32(h), vertical = Int32(v)
             guard horizontal != 0 || vertical != 0 else { throw ControlFailure(.invalidArgument, "Scroll must move at least 1/120 notch.") }

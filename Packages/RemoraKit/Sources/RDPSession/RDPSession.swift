@@ -9,7 +9,7 @@ private let rdpLog = Logger(subsystem: "dev.sadiksaifi.Remora", category: "RDP")
 /// Invariant: stored properties are immutable except for the lock-protected StateBox.
 /// The owned Thread creates, runs and frees FreeRDP. Other threads enqueue or abort.
 /// Channel callbacks may arrive on FreeRDP workers; they never dispatch a Task.
-public final class RDPSession: RemoteSession, @unchecked Sendable {
+public final class RDPSession: AgentInputSession, @unchecked Sendable {
     public let events: AsyncStream<SessionEvent>
     private let continuation: AsyncStream<SessionEvent>.Continuation
     private let configuration: SessionConfiguration
@@ -137,9 +137,9 @@ public final class RDPSession: RemoteSession, @unchecked Sendable {
         AgentInputCapabilities(rawValue: agentHandle { rm_rdp_input_capabilities($0) } ?? 0)
     }
 
-    public func beginAgentInput() -> AgentInputRequest? {
+    public func beginAgentInput() -> (any AgentInputRequest)? {
         guard let id = agentHandle({ rm_rdp_agent_begin($0) }) else { return nil }
-        return AgentInputRequest(session: self, id: id)
+        return RDPAgentInputRequest(session: self, id: id)
     }
 
     func agentHandle<T>(_ operation: (OpaquePointer) -> T) -> T? {
