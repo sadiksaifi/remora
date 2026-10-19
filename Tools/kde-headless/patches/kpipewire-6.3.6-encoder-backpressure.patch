@@ -1,0 +1,143 @@
+diff --git a/src/pipewirebaseencodedstream.h b/src/pipewirebaseencodedstream.h
+--- a/src/pipewirebaseencodedstream.h
++++ b/src/pipewirebaseencodedstream.h
+@@ -53,6 +53,12 @@
+     Fraction maxFramerate() const;
+     void setMaxFramerate(const Fraction &framerate);
+     void setMaxFramerate(quint32 numerator, quint32 denominator = 1);
++
++    /** Drop source frames before encoding while keeping the source stream alive.
++     * On resume, submit the latest dropped frame. Encoded packets remain intact.
++     */
++    void setEncoderPaused(bool paused);
++    bool encoderPaused() const;
+ 
+     /**
+      * Defines how many frames are kept in the encoding buffer.
+diff --git a/src/pipewirebaseencodedstream.cpp b/src/pipewirebaseencodedstream.cpp
+--- a/src/pipewirebaseencodedstream.cpp
++++ b/src/pipewirebaseencodedstream.cpp
+@@ -28,6 +28,7 @@
+     Fraction m_maxFramerate;
+     int m_maxPendingFrames = 50;
+     bool m_active = false;
++    bool m_encoderPaused = false;
+     PipeWireBaseEncodedStream::Encoder m_encoder = PipeWireBaseEncodedStream::NoEncoder;
+     std::optional<quint8> m_quality;
+     PipeWireBaseEncodedStream::EncodingPreference m_encodingPreference;
+@@ -119,6 +120,19 @@
+     setMaxFramerate({numerator, denominator});
+ }
+ 
++void PipeWireBaseEncodedStream::setEncoderPaused(bool paused)
++{
++    d->m_encoderPaused = paused;
++    if (d->m_produce) {
++        d->m_produce->setEncoderPaused(paused);
++    }
++}
++
++bool PipeWireBaseEncodedStream::encoderPaused() const
++{
++    return d->m_encoderPaused;
++}
++
+ void PipeWireBaseEncodedStream::setMaxPendingFrames(int maxPendingFrames)
+ {
+     if (d->m_maxPendingFrames == maxPendingFrames) {
+@@ -167,6 +181,7 @@
+     d->m_produceThread = std::make_unique<QThread>();
+     d->m_produceThread->setObjectName("PipeWireProduce::input");
+     d->m_produce = makeProduce();
++    d->m_produce->setEncoderPaused(d->m_encoderPaused);
+     d->m_produce->setQuality(d->m_quality);
+     d->m_produce->setMaxPendingFrames(d->m_maxPendingFrames);
+     d->m_produce->setEncodingPreference(d->m_encodingPreference);
+diff --git a/src/pipewireproduce_p.h b/src/pipewireproduce_p.h
+--- a/src/pipewireproduce_p.h
++++ b/src/pipewireproduce_p.h
+@@ -64,6 +64,10 @@
+     Fraction maxFramerate() const;
+     void setMaxFramerate(const Fraction &framerate);
+ 
++    // The flag is atomic; cached frames stay on the producer thread.
++    void setEncoderPaused(bool paused);
++    bool encoderPaused() const { return m_encoderPaused.load(); }
++
+     int maxPendingFrames() const;
+     void setMaxPendingFrames(int newMaxBufferSize);
+ 
+@@ -124,6 +128,8 @@
+ 
+     QScopedPointer<QTimer> m_frameRepeatTimer;
+     PipeWireFrame m_lastFrame;
++    PipeWireFrame m_lastDroppedFrame;
++    std::atomic_bool m_encoderPaused = false;
+ 
+     std::thread m_passthroughThread;
+     std::thread m_outputThread;
+diff --git a/src/pipewireproduce.cpp b/src/pipewireproduce.cpp
+--- a/src/pipewireproduce.cpp
++++ b/src/pipewireproduce.cpp
+@@ -81,6 +81,9 @@
+     m_frameRepeatTimer->setSingleShot(true);
+     m_frameRepeatTimer->setInterval(100);
+     connect(m_frameRepeatTimer.data(), &QTimer::timeout, this, [this]() {
++        if (m_encoderPaused || m_pendingFilterFrames + m_pendingEncodeFrames >= m_maxPendingFrames) {
++            return;
++        }
+         auto f = m_lastFrame;
+         m_lastFrame = {};
+         aboutToEncode(f);
+@@ -93,6 +96,21 @@
+     });
+ }
+ 
++void PipeWireProduce::setEncoderPaused(bool paused)
++{
++    if (m_encoderPaused.exchange(paused) == paused) {
++        return;
++    }
++    if (!paused) {
++        QMetaObject::invokeMethod(this, [this]() {
++            if (m_lastDroppedFrame.dataFrame || m_lastDroppedFrame.dmabuf) {
++                const auto frame = m_lastDroppedFrame;
++                processFrame(frame);
++            }
++        });
++    }
++}
++
+ Fraction PipeWireProduce::maxFramerate() const
+ {
+     return m_maxFramerate;
+@@ -127,6 +145,7 @@
+ 
+ void PipeWireProduce::setupStream()
+ {
++    m_lastDroppedFrame = {};
+     qCDebug(PIPEWIRERECORD_LOGGING) << "Setting up stream";
+     disconnect(m_stream.get(), &PipeWireSourceStream::streamParametersChanged, this, &PipeWireProduce::setupStream);
+ 
+@@ -269,6 +288,12 @@
+         }
+     }
+ 
++    if (m_encoderPaused) {
++        m_lastDroppedFrame = frame;
++        return;
++    }
++    m_lastDroppedFrame = {};
++
+     auto pts = framePts(frame.presentationTimestamp);
+     if (m_previousPts >= 0 && pts <= m_previousPts) {
+         return;
+@@ -279,7 +304,7 @@
+         return;
+     }
+ 
+-    if (m_pendingFilterFrames + 1 > m_maxPendingFrames) {
++    if (m_pendingFilterFrames + m_pendingEncodeFrames + 1 > m_maxPendingFrames) {
+         qCWarning(PIPEWIRERECORD_LOGGING) << "Filter queue is full, dropping frame" << pts;
+         return;
+     }

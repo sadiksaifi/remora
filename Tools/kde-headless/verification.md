@@ -2,7 +2,7 @@
 
 These patches preserve the server changes used to test Remora on Debian 13 with
 a headless NVIDIA desktop. They target Debian's KWin 6.3.6-1 and KRdp 6.3.5-1
-sources. Remora's build does not apply or bundle them.
+sources, plus KPipeWire 6.3.6-1. Remora's build does not apply or bundle them.
 
 The app fix enables network detection, clears disabled multitransport flags,
 and builds the fake rdpsnd backend required by FreeRDP's channel dependencies.
@@ -16,10 +16,15 @@ capability negotiation.
 | `patches/kwin-6.3.6-nvidia-egl.patch` | Use explicit EGL modifiers so the virtual backend renders on NVIDIA. |
 | `patches/krdp-6.3.5-input.patch` | Authenticate native input, encode Wayland pointer coordinates correctly, and correct FreeRDP 3 key handling. |
 | `patches/kwin-6.3.6-cursor-free-screencast.patch` | Render the workspace separately for capture so the virtual output's software cursor does not enter desktop video. |
+| `patches/kpipewire-6.3.6-encoder-backpressure.patch` | Pause before encoding, retain the latest source frame, and bound encoder work. |
+| `patches/krdp-6.3.5-bounded-flow.patch` | Replace the RTT source-rate heuristic and sender polling with bounded ACK and encoder backpressure. |
 
 Apply the KWin patches in the listed order with `patch -p1` from its source
-directory. Apply the KRdp patch from its source directory. Build each project
-into a private prefix to retain the system desktop packages.
+directory. Apply the KRdp input patch before its flow-control patch. Build the
+patched KPipeWire first, then rebuild both the KRdp library and server against
+it. Use private prefixes to retain the system desktop packages. Application
+order, build requirements, and measured motion results are in
+[smoothness-verification.md](smoothness-verification.md).
 
 The EGL patch comes from KWin commit
 [`60b39e6`](https://github.com/KDE/kwin/commit/60b39e6fdaa8e1c8f54e5c9bc919dae5d6c0cd43).
@@ -61,8 +66,9 @@ Loading a private executable with the system capture plugin does not test the fi
 
 The setup is temporary and has no login or reboot service. Global KDE shortcuts
 are disabled in the isolated launcher. The capture backport renders a complete
-output scene; sustained performance has not been benchmarked. The user reports
-that KDE remains less smooth than GNOME and Windows.
+output scene. The flow-control backport approximately doubled distinct desktop
+updates in the measured animation and drag workloads. Delivered motion remains
+below 60 updates per second. GNOME/Windows parity has not been measured.
 
 Runtime checks covered KRdp's workspace capture on one NVIDIA virtual output.
 The output-capture path compiled but was not tested separately. Multi-monitor
