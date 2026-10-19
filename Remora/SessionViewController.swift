@@ -3,6 +3,7 @@ import RDPSession
 import RemoraCore
 import RemoraControl
 import SwiftUI
+import VNCSession
 import os
 
 private let sessionLog = Logger(subsystem: "dev.sadiksaifi.Remora", category: "Session")
@@ -126,11 +127,11 @@ final class SessionViewController: NSViewController {
     }
 
 
-    var inputBackend: RDPSession? { session as? RDPSession }
+    var inputBackend: (any AgentInputSession)? { session as? any AgentInputSession }
     private(set) var control = SessionControl()
     static let controlDidChange = Notification.Name("SessionControlDidChange")
     private var controlFrameDemand = false
-    var activeAgentInput: AgentInputRequest?
+    var activeAgentInput: (any AgentInputRequest)?
     var agentInputCancellation: ControlFailure?
 
     /// Take Over and Stop can cancel even events detached by the C drain loop.
@@ -413,7 +414,7 @@ final class SessionViewController: NSViewController {
                 currentCredentials = credentials
             } else {
                 currentCredentials = SessionCredentials(
-                    username: connection.username, domain: connection.domain ?? "",
+                    username: connection.username, domain: connection.kind == .rdp ? connection.domain ?? "" : "",
                     password: try credentialStore.password(for: connection.id) ?? ""
                 )
                 credentials = currentCredentials
@@ -452,8 +453,13 @@ final class SessionViewController: NSViewController {
             let inputOverlays = inputOverlays
             overlayScale = scaleFactor
             refreshOverlaySettings()
-            let session = RDPSession(configuration: configuration, frameSink: renderer,
-                inputFeedback: { source, event in inputOverlays.receive(source, event) })
+            let inputFeedback: @Sendable (InputSource, SessionInputFeedback) -> Void = { source, event in
+                inputOverlays.receive(source, event)
+            }
+            let session: any RemoteSession = switch connection.kind {
+            case .rdp: RDPSession(configuration: configuration, frameSink: renderer, inputFeedback: inputFeedback)
+            case .vnc: VNCSession(configuration: configuration, frameSink: renderer, inputFeedback: inputFeedback)
+            }
             let desktopView = RemoteDesktopView(renderer: renderer)
             desktopView.allowsHumanInput = control.allowsHumanInput
             desktopView.onHumanInput = { [weak self] kind in self?.control.record(kind) }
@@ -611,7 +617,7 @@ final class SessionViewController: NSViewController {
         guard let credentialDraft else { return }
         let form = SessionCredentialsView(
             challenge: challenge, computerName: connection.name, address: connection.displayAddress,
-            draft: credentialDraft,
+            showsDomain: attemptConnection.kind == .rdp, draft: credentialDraft,
             onCancel: { [weak self] in
                 guard let self, let promptID, pendingPrompt?.id == promptID else { return }
                 try? respondToPrompt(promptID, credentials: nil)
@@ -635,10 +641,11 @@ final class SessionViewController: NSViewController {
     }
 
     private func showTrust(_ challenge: TrustChallenge, on window: NSWindow) {
-        let address = challenge.port == UInt16(Connection.defaultPort)
+        let address = Int(challenge.port) == attemptConnection.defaultPort
             ? challenge.host : "\(challenge.host):\(challenge.port)"
         let alert = NSAlert()
         var details = [("Subject", challenge.subject), ("Issuer", challenge.issuer), ("SHA-256", challenge.fingerprint)]
+            .filter { !$0.1.isEmpty }
         let connectButton: NSApplication.ModalResponse
         if case .changed(let oldFingerprint) = challenge.status {
             alert.alertStyle = .critical

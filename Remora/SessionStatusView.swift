@@ -120,7 +120,7 @@ struct SessionStatusView: View {
     private var message: String {
         switch status {
         case .connecting: address
-        case .awaitingCredentials: "Enter a username and password to connect to \(address)."
+        case .awaitingCredentials: "Enter your credentials to connect to \(address)."
         case .awaitingTrust: "Review the certificate for \(address) to continue."
         case .reconnecting(let attempt): "Attempt \(attempt) of \(Self.reconnectAttemptLimit)"
         case .disconnected(let reason): message(for: reason)
