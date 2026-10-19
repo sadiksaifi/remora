@@ -1,6 +1,6 @@
 --- a/include/rfb/rfbclient.h
 +++ b/include/rfb/rfbclient.h
-@@ -506,6 +506,12 @@
+@@ -506,6 +506,13 @@
          rfbBool isUpdateRectManagedByLib;
  
          GetX509CertFingerprintMismatchDecisionProc GetX509CertFingerprintMismatchDecision;
@@ -10,6 +10,7 @@
 +        rfbBool remoraResizeProhibited;
 +        uint16_t remoraLastResizeWidth, remoraLastResizeHeight;
 +        void (*RemoraDesktopSize)(struct _rfbClient*, rfbBool requested);
++        void (*RemoraResizeReply)(struct _rfbClient*, unsigned int result, uint16_t width, uint16_t height);
  } rfbClient;
  
  /* cursor.c */
@@ -214,7 +215,7 @@
  	rfbClientLog("Got new framebuffer size: %dx%d\n", rect.r.w, rect.r.h);
  	continue;
        }
-@@ -2165,24 +2107,41 @@
+@@ -2165,24 +2107,44 @@
          }
  
          screens = eds.numberOfScreens;
@@ -244,7 +245,7 @@
 -        if (!invalidScreen && (client->width != rect.r.w || client->height != rect.r.h)) {
 +        /* Status 4 means forwarded, not rejected. It carries requested geometry,
 +         * not confirmed framebuffer dimensions, and preserves the capability. */
-+        if (!forwardedResize)
++        if (!forwardedResize || screens != 1 || invalidScreen)
 +          client->remoraResizeSupported = screens == 1 && !rejectedResize && !invalidScreen && !client->remoraResizeProhibited;
 +        if (appliedResize && !invalidScreen && (client->width != rect.r.w || client->height != rect.r.h)) {
            if(!ResizeClientBuffer(client, rect.r.w, rect.r.h)) {
@@ -252,6 +253,9 @@
            }
            rfbClientLog("Updated desktop size: %dx%d\n", rect.r.w, rect.r.h);
          }
++        /* Report the wire reply independently of applied framebuffer geometry. */
++        if (rect.r.x == 1 && client->RemoraResizeReply)
++          client->RemoraResizeReply(client, rect.r.y, rect.r.w, rect.r.h);
 +        /* Confirm even an unchanged layout: allocation is not an acknowledgement. */
 +        if (appliedResize && !invalidScreen && client->RemoraDesktopSize)
 +          client->RemoraDesktopSize(client, rect.r.x == 1);

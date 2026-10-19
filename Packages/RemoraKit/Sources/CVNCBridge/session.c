@@ -23,6 +23,12 @@ struct RMVNC {
     int fd, wake[2], error;
     char *host;
     uint16_t port;
+    /* Worker-owned resize intent. Wire replies and actual geometry are distinct:
+     * forwarded requests may apply after a newer request already matched. */
+    uint16_t resizeWidth, resizeHeight, wireResizeWidth, wireResizeHeight;
+    int confirmedWidth, confirmedHeight;
+    bool resizeActive, resizeQueued, resizeReplyPending, resizeCorrectionUsed, geometryChanged;
+    double resizeDeadline;
 };
 static char client_tag;
 static RMVNC *owner(rfbClient *c) { return rfbClientGetClientData(c, &client_tag); }
@@ -37,8 +43,19 @@ static rfbBool allocate(rfbClient *c) {
     c->frameBuffer = pixels;
     return true;
 }
+static void cancel_resize(RMVNC *s) {
+    s->resizeActive = s->resizeQueued = s->geometryChanged = s->resizeReplyPending = false;
+}
+static void resize_reply(rfbClient *c, unsigned int result, uint16_t width, uint16_t height) {
+    RMVNC *s = owner(c);
+    if (width == s->wireResizeWidth && height == s->wireResizeHeight) s->resizeReplyPending = false;
+    if ((result != 0 && result != 4) || !c->remoraResizeSupported) cancel_resize(s);
+}
 static void size(rfbClient *c, rfbBool requested) {
     RMVNC *s = owner(c);
+    if (s->confirmedWidth != c->width || s->confirmedHeight != c->height) s->geometryChanged = true;
+    s->confirmedWidth = c->width; s->confirmedHeight = c->height;
+    if (!c->remoraResizeSupported) cancel_resize(s);
     if (s->cb.size) s->cb.size(s->user, c->width, c->height, requested);
 }
 static void frame(rfbClient *c, int x, int y, int w, int h) {
@@ -190,7 +207,7 @@ bool rm_vnc_connect(RMVNC *s) {
     c->format.bigEndian=false; c->format.trueColour=true;
     c->format.redShift=16; c->format.greenShift=8; c->format.blueShift=0;
     c->format.redMax=c->format.greenMax=c->format.blueMax=255;
-    c->RemoraDesktopSize=size;
+    c->RemoraDesktopSize=size; c->RemoraResizeReply=resize_reply;
     c->MallocFrameBuffer=allocate; c->GotFrameBufferUpdate=frame; c->GotCursorShape=cursor;
     c->GotXCutText=clipboard; c->GotXCutTextUTF8=clipboard_utf8;
     c->GetPassword=password; c->GetCredential=credential; c->GetX509CertFingerprintMismatchDecision=trust;
@@ -203,10 +220,30 @@ bool rm_vnc_connect(RMVNC *s) {
     s->error=0;
     return !atomic_load(&s->cancelled);
 }
+/* One corrective request per distinct explicit target, within three seconds.
+ * Matches and repeated notifications never renew either bound. */
+static bool reconcile_resize(RMVNC *s) {
+    rfbClient *c = s->client;
+    if (!c->remoraResizeSupported || now() >= s->resizeDeadline) cancel_resize(s);
+    if (!s->resizeActive || s->resizeReplyPending) return true;
+    bool correct = s->geometryChanged && !s->resizeCorrectionUsed &&
+        (c->width != s->resizeWidth || c->height != s->resizeHeight);
+    if (!s->resizeQueued && !correct) { s->geometryChanged = false; return true; }
+    if (!s->resizeQueued) s->resizeCorrectionUsed = true;
+    s->resizeQueued = s->geometryChanged = false;
+    /* The library suppresses an already-confirmed, already-sent size. That
+     * no-op has no wire reply to await. */
+    s->resizeReplyPending = c->screen.width != htons(s->resizeWidth) ||
+        c->screen.height != htons(s->resizeHeight) ||
+        (c->remoraLastResizeWidth && (c->remoraLastResizeWidth != s->resizeWidth || c->remoraLastResizeHeight != s->resizeHeight));
+    s->wireResizeWidth = s->resizeWidth; s->wireResizeHeight = s->resizeHeight;
+    return SendExtDesktopSize(c, s->resizeWidth, s->resizeHeight);
+}
 bool rm_vnc_step(RMVNC *s) {
     if (atomic_load(&s->cancelled)) return false;
     int ready=WaitForMessage(s->client,10000);
-    return ready>=0 && (!ready || HandleRFBServerMessage(s->client));
+    if (ready < 0 || (ready && !HandleRFBServerMessage(s->client))) { cancel_resize(s); return false; }
+    return !atomic_load(&s->cancelled) && reconcile_resize(s);
 }
 int rm_vnc_error(RMVNC *s) { return s->error; }
 const char *rm_vnc_security(RMVNC *s) {
@@ -224,7 +261,15 @@ const char *rm_vnc_security(RMVNC *s) {
     }
 }
 bool rm_vnc_resize_supported(RMVNC *s) { return s->client->remoraResizeSupported; }
-bool rm_vnc_resize(RMVNC *s,uint16_t w,uint16_t h) { return SendExtDesktopSize(s->client,w,h); }
+bool rm_vnc_resize(RMVNC *s,uint16_t w,uint16_t h) {
+    if (atomic_load(&s->cancelled) || !s->client->remoraResizeSupported) return true;
+    if (s->resizeWidth == w && s->resizeHeight == h) return true;
+    s->resizeWidth = w; s->resizeHeight = h;
+    s->resizeActive = s->resizeQueued = true;
+    s->resizeCorrectionUsed = s->geometryChanged = false;
+    s->resizeDeadline = now() + 3;
+    return reconcile_resize(s);
+}
 bool rm_vnc_refresh(RMVNC *s) { return SendFramebufferUpdateRequest(s->client,0,0,s->client->width,s->client->height,false); }
 bool rm_vnc_key(RMVNC *s,uint32_t sym,uint32_t code,bool down) {
     if (code && SupportsClient2Server(s->client,rfbQemuEvent)) return SendExtendedKeyEvent(s->client,sym,code,down);

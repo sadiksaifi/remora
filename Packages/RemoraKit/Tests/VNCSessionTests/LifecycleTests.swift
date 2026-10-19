@@ -59,9 +59,13 @@ private final class StalledPeer: @unchecked Sendable {
             }
         }.start()
     }
-    func sendLayout(width: UInt8, origin: UInt8, result: UInt8) {
-        let bytes: [UInt8] = [0,0,0,1, 0,origin,0,result,0,width,0,16, 255,255,254,204,
-            1,0,0,0, 0,0,0,1, 0,0,0,0, 0,width,0,16, 0,0,0,0]
+    func sendLayout(width: UInt8, origin: UInt8, result: UInt8, screens: UInt8 = 1) {
+        var bytes: [UInt8] = [0,0,0,1, 0,origin,0,result,0,width,0,16, 255,255,254,204,
+            screens,0,0,0, 0,0,0,1, 0,0,0,0, 0,width,0,16, 0,0,0,0]
+        if screens == 2 { bytes += [0,0,0,2, 0,0,0,0, 0,width,0,16, 0,0,0,0] }
+        send(bytes)
+    }
+    private func send(_ bytes: [UInt8]) {
         lock.withLock {
             if accepted >= 0 { bytes.withUnsafeBytes { _ = Darwin.send(accepted, $0.baseAddress, $0.count, 0) } }
         }
@@ -252,29 +256,91 @@ private struct DiscardFrames: FrameSink { func consume(_ frame: BorrowedFrame) {
 }
 
 
-@Test @MainActor func vncResizeBackToConfirmedSizeIsSentWhileEarlierResizeIsForwarded() async throws {
+private func waitForResizes(_ count: Int, from peer: StalledPeer) async throws -> [DesktopSize] {
+    let deadline = ContinuousClock.now.advanced(by: .seconds(1))
+    while peer.resizeRequests().count < count, ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(5)) }
+    return peer.resizeRequests()
+}
+
+@Test @MainActor func vncLatestResizeConvergesOnceAfterAnOlderForwardedRequestAppliesLate() async throws {
     let peer = try StalledPeer(partialFrame: true, stallRectangle: false)
     defer { peer.stop() }
     let session = VNCSession(configuration: .init(host: "127.0.0.1", port: peer.port, username: "", desktopSize: .init(width: 16, height: 16)), frameSink: DiscardFrames())
-    let fallback = Task { do { try await Task.sleep(for: .seconds(3)); peer.stop(); session.disconnect() } catch {} }
+    let fallback = Task { do { try await Task.sleep(for: .seconds(5)); peer.stop(); session.disconnect() } catch {} }
     defer { fallback.cancel() }
-    var requests: [DesktopSize] = []
+    var sizes: [DesktopSize] = []
+    var exercised = false
     session.connect()
     for await event in session.events {
         switch event {
         case .stateChanged(.connected): peer.sendLayout(width: 16, origin: 0, result: 0)
-        case .dynamicResizeChanged(true):
+        case .dynamicResizeChanged(true) where !exercised:
+            exercised = true
             session.requestResize(.init(width: 32, height: 16), scale: 1)
-            let firstDeadline = ContinuousClock.now.advanced(by: .seconds(1))
-            while peer.resizeRequests().isEmpty, ContinuousClock.now < firstDeadline { try await Task.sleep(for: .milliseconds(5)) }
-            peer.sendLayout(width: 32, origin: 1, result: 4)
+            #expect(try await waitForResizes(1, from: peer) == [.init(width: 32, height: 16)])
+            // B is queued while A still awaits a wire reply.
             session.requestResize(.init(width: 16, height: 16), scale: 1)
-            let deadline = ContinuousClock.now.advanced(by: .milliseconds(250))
-            while peer.resizeRequests().count < 2, ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(5)) }
-            requests = peer.resizeRequests()
+            try await Task.sleep(for: .milliseconds(40))
+            #expect(peer.resizeRequests().count == 1)
+            peer.sendLayout(width: 32, origin: 1, result: 4)
+            #expect(try await waitForResizes(2, from: peer) == [.init(width: 32, height: 16), .init(width: 16, height: 16)])
+            peer.sendLayout(width: 16, origin: 1, result: 4)
+            peer.sendLayout(width: 16, origin: 0, result: 0)
+            try await Task.sleep(for: .milliseconds(40))
+            #expect(peer.resizeRequests().count == 2) // An unchanged layout is not a retry trigger.
+            peer.sendLayout(width: 32, origin: 0, result: 0) // A applies after B.
+            #expect(try await waitForResizes(3, from: peer) == [.init(width: 32, height: 16), .init(width: 16, height: 16), .init(width: 16, height: 16)])
+            peer.sendLayout(width: 16, origin: 1, result: 4)
+            peer.sendLayout(width: 16, origin: 0, result: 0)
+            // Neither a match nor another changed/unchanged layout renews the budget.
+            peer.sendLayout(width: 32, origin: 0, result: 0)
+            peer.sendLayout(width: 32, origin: 0, result: 0)
+            session.requestResize(.init(width: 16, height: 16), scale: 1)
+            try await Task.sleep(for: .milliseconds(100))
+            #expect(peer.resizeRequests().count == 3)
+            peer.sendLayout(width: 16, origin: 0, result: 0)
+            try await Task.sleep(for: .milliseconds(40))
             session.disconnect()
+        case .desktopSizeChanged(let size, _): sizes.append(size)
         default: break
         }
     }
-    #expect(requests == [.init(width: 32, height: 16), .init(width: 16, height: 16)])
+    #expect(exercised)
+    #expect(sizes.contains(.init(width: 32, height: 16)))
+    #expect(sizes.last == .init(width: 16, height: 16))
+}
+
+@Test @MainActor func vncResizeReconciliationStopsAfterDenialMultiheadOrDeadline() async throws {
+    for stop in ["denial", "multihead", "deadline"] {
+        let peer = try StalledPeer(partialFrame: true, stallRectangle: false)
+        defer { peer.stop() }
+        let session = VNCSession(configuration: .init(host: "127.0.0.1", port: peer.port, username: "", desktopSize: .init(width: 16, height: 16)), frameSink: DiscardFrames())
+        let fallback = Task { do { try await Task.sleep(for: .seconds(5)); peer.stop(); session.disconnect() } catch {} }
+        defer { fallback.cancel() }
+        var exercised = false
+        session.connect()
+        for await event in session.events {
+            switch event {
+            case .stateChanged(.connected): peer.sendLayout(width: 16, origin: 0, result: 0)
+            case .dynamicResizeChanged(true) where !exercised:
+                exercised = true
+                session.requestResize(.init(width: 32, height: 16), scale: 1)
+                #expect(try await waitForResizes(1, from: peer).count == 1)
+                peer.sendLayout(width: 32, origin: 1, result: stop == "denial" ? 1 : 4)
+                if stop == "multihead" { peer.sendLayout(width: 24, origin: 0, result: 0, screens: 2) }
+                if stop == "deadline" { try await Task.sleep(for: .milliseconds(3150)) }
+                peer.sendLayout(width: 24, origin: 0, result: 0)
+                try await Task.sleep(for: .milliseconds(100))
+                #expect(peer.resizeRequests().count == 1, "Reconciliation must stop after \(stop).")
+                if stop == "deadline" {
+                    // Expiry abandons the old wire wait; a new explicit target still works.
+                    session.requestResize(.init(width: 48, height: 16), scale: 1)
+                    #expect(try await waitForResizes(2, from: peer).last == .init(width: 48, height: 16))
+                }
+                session.disconnect()
+            default: break
+            }
+        }
+        #expect(exercised)
+    }
 }
