@@ -156,3 +156,13 @@ final class ConnectionCellView: NSTableCellView {
         detailField.isHidden = isHovered || detailField.stringValue.isEmpty
     }
 }
+
+extension Connection.Kind {
+    /// The protocol's short name in the editor and the connections list.
+    var title: String {
+        switch self {
+        case .rdp: "RDP"
+        case .vnc: "VNC"
+        }
+    }
+}
