@@ -102,7 +102,7 @@ public final class VNCSession: AgentInputSession, @unchecked Sendable {
     }
     public func sendKey(_ key: KeyInput) { enqueue(.humanKey(key)) }
     public func sendPointer(position: RemotePoint, buttons: PointerButtons) { enqueue(.human(.pointer(position, PointerButtons(rawValue: buttons.rawValue & 7)))) }
-    public func sendWheel(_ wheel: WheelInput) { enqueue(.human(.wheel(wheel))) }
+    public func sendWheel(_ wheel: WheelInput, at position: RemotePoint) { enqueue(.humanWheel(wheel, position)) }
     public func synchronize(locks: LockKeys) {
         // RFB has no portable lock-state synchronize message. Caps Lock key
         // pulses still travel through normal keyboard input.
@@ -206,6 +206,8 @@ public final class VNCSession: AgentInputSession, @unchecked Sendable {
                 if case .pointer(_, let buttons) = event, !buttons.intersection([.back, .forward]).isEmpty { continue }
                 failed = !workerInput.apply(event, source: .human, wire: wire)
                 if !failed { feedback(event, source: .human) }
+            case .humanWheel(let wheel, let position):
+                failed = !workerInput.humanWheel(wheel, at: position, wire: wire)
             case .releaseHuman:
                 failed = !workerInput.release(.human, wire: wire)
                 if !failed { inputFeedback(.human, .release) }
@@ -463,7 +465,7 @@ public final class VNCSession: AgentInputSession, @unchecked Sendable {
 
 private extension VNCSession {
     enum Command {
-        case humanKey(KeyInput), human(AgentInputEvent), releaseHuman
+        case humanKey(KeyInput), human(AgentInputEvent), humanWheel(WheelInput, RemotePoint), releaseHuman
         case agent(UInt64, AgentInputEvent?, Receipt)
     }
     final class State: @unchecked Sendable {

@@ -104,6 +104,12 @@ struct VNCInputState {
         }
     }
 
+    /// Wheel pulses are pointer events, so they also move the pointer to `point`.
+    mutating func humanWheel(_ wheel: WheelInput, at point: RemotePoint, wire: any VNCInputTransport) -> Bool {
+        position = point
+        return apply(.wheel(wheel), source: .human, wire: wire)
+    }
+
     mutating func humanKey(scan: UInt32, down: Bool, characters: String?, wire: any VNCInputTransport) -> Bool {
         guard let physical = PhysicalKey(scancode: scan), var mapped = VNCKey(physical: physical) else { return true }
         let shortcutHeld = human.keys.contains { [0x1d,0x11d,0x38,0x138,0x15b,0x15c].contains($0) }

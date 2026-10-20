@@ -74,7 +74,7 @@ private final class LoggingSession: RemoteSession, Sendable {
         NSLog("ShortcutCaptureDemo key=0x%02x down=%@", key.keyCode, key.isDown.description)
     }
     func sendPointer(position: RemotePoint, buttons: PointerButtons) {}
-    func sendWheel(_ wheel: WheelInput) {}
+    func sendWheel(_ wheel: WheelInput, at position: RemotePoint) {}
     func synchronize(locks: LockKeys) {}
     func releaseHumanInput() { NSLog("ShortcutCaptureDemo releaseHumanInput") }
     func setLocalClipboard(text: String) {}

@@ -1,3 +1,4 @@
+import Foundation
 import RemoraCore
 import Testing
 @testable import VNCSession
@@ -51,4 +52,20 @@ private final class Wire: VNCInputTransport {
     #expect(wire.pointers.count == 1)
     #expect({ input.apply(.wheel(.init(vertical: 60, horizontal: -120)), source: .human, wire: wire) }())
     #expect(wire.pointers == [1, 9, 1, 33, 1])
+}
+
+@Test @MainActor func vncWheelTurnsAtItsOwnPositionAndKeepsHeldButtons() async throws {
+    let peer = try SessionPeer()
+    defer { peer.stop() }
+    let pins = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: pins) }
+    let session = VNCSession(configuration: .init(host: "127.0.0.1", port: peer.port, username: "", desktopSize: .init(width: 16, height: 16)), frameSink: MarkerFrames(), certificateStoreURL: pins)
+    defer { session.disconnect() }
+    session.connect()
+    _ = try await peer.wait("request")
+    session.sendPointer(position: .init(x: 1, y: 2), buttons: .left)
+    session.sendWheel(.init(vertical: 120, horizontal: 0), at: .init(x: 9, y: 7))
+    _ = try await peer.wait("pointer", count: 3)
+    let pointers = peer.events("pointer").map { [$0["x"] as? Int, $0["y"] as? Int, $0["mask"] as? Int] }
+    #expect(pointers == [[1, 2, 1], [9, 7, 9], [9, 7, 1]])
 }

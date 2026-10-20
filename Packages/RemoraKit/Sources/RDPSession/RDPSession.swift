@@ -103,7 +103,7 @@ public final class RDPSession: AgentInputSession, @unchecked Sendable {
         }
     }
 
-    public func sendWheel(_ wheel: WheelInput) {
+    public func sendWheel(_ wheel: WheelInput, at position: RemotePoint) {
         enqueue { rm_rdp_wheel($0, wheel.vertical, wheel.horizontal) }
     }
 

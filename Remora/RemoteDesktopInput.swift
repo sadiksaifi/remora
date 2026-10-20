@@ -234,10 +234,15 @@ final class RemoteDesktopInput: NSObject {
 
     func scrollWheel(_ event: NSEvent) {
         guard allowsHumanInput, connected, let input, let view,
-              view.remotePoint(for: view.convert(event.locationInWindow, from: nil)) != nil else { return }
+              let point = view.remotePoint(for: view.convert(event.locationInWindow, from: nil)) else { return }
         onHumanInput?(.scroll)
         let wheel = scroll.accumulate(x: event.scrollingDeltaX, y: event.scrollingDeltaY,
                                       precise: event.hasPreciseScrollingDeltas)
-        if wheel.vertical != 0 || wheel.horizontal != 0 { input.sendWheel(wheel) }
+        guard wheel.vertical != 0 || wheel.horizontal != 0 else { return }
+        // Pointer motion is not tracked while the window is inactive, so the
+        // last pointer position can be stale. The wheel turns under the cursor.
+        let position = RemotePoint(x: UInt16(clamping: Int(point.x)), y: UInt16(clamping: Int(point.y)))
+        lastPosition = position
+        input.sendWheel(wheel, at: position)
     }
 }
