@@ -88,6 +88,8 @@ def serve_once(offer_mode, outcome, port):
             connection, _ = listener.accept()
             report['attempts'] = 1
             with connection:
+                if outcome in ('fragmented-small', 'fragmented-large'):
+                    connection.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
                 def exact(count):
                     data = bytearray()
                     while len(data) < count:
@@ -170,7 +172,8 @@ def serve_once(offer_mode, outcome, port):
                     report['stage'] = 'intentional_server_init_eof'
                     return report
                 name = b'synthetic-ard-peer'
-                send(struct.pack('>HHBBBBHHHBBBBBBI', 16, 16, 32, 24, 0, 1,
+                dimension = 256 if outcome == 'fragmented-large' else 16
+                send(struct.pack('>HHBBBBHHHBBBBBBI', dimension, dimension, 32, 24, 0, 1,
                                  255, 255, 255, 16, 8, 0, 0, 0, 0, len(name)) + name)
                 report['stage'] = 'framebuffer_request'
                 for _ in range(8):
@@ -185,7 +188,35 @@ def serve_once(offer_mode, outcome, port):
                         exact(count * 4)
                     elif kind == 3:
                         exact(9)
-                        if outcome == 'runtime-message':
+                        if outcome in ('fragmented-small', 'fragmented-large'):
+                            # Real ZRLE raw tiles, entirely synthetic pixels. A
+                            # deterministic PRNG keeps the large case incompressible.
+                            import random
+                            import zlib
+                            randomizer = random.Random(314159)
+                            tiles = bytearray()
+                            for ty in range(0, dimension, 64):
+                                for tx in range(0, dimension, 64):
+                                    tiles.append(0)
+                                    tiles.extend(randomizer.randbytes(min(64, dimension-tx) * min(64, dimension-ty) * 3))
+                            compressor = zlib.compressobj()
+                            compressed = compressor.compress(tiles) + compressor.flush(zlib.Z_SYNC_FLUSH)
+                            report['compressed_bytes'] = len(compressed)
+                            send(struct.pack('>BBHHHHHiI', 0, 0, 1, 0, 0, dimension, dimension, 16, len(compressed)))
+                            chunk = 4 if dimension == 16 else 512
+                            began = time.monotonic()
+                            report['sent_bytes'] = 0
+                            try:
+                                for offset in range(0, len(compressed), chunk):
+                                    send(compressed[offset:offset+chunk])
+                                    report['sent_bytes'] += len(compressed[offset:offset+chunk])
+                                    time.sleep(0.005)
+                            finally:
+                                report['delivery_ms'] = round((time.monotonic() - began) * 1000)
+                            if exact(1) != bytes([3]):
+                                raise ValueError('incremental request required')
+                            exact(9)
+                        elif outcome == 'runtime-message':
                             send(bytes([199]))
                         elif outcome == 'runtime-encoding':
                             send(struct.pack('>BBHHHHHi', 0, 0, 1, 0, 0, 16, 16, 123456))

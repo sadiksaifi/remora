@@ -797,10 +797,28 @@
      return FALSE;
 --- a/src/libvncclient/sockets.c
 +++ b/src/libvncclient/sockets.c
-@@ -45,6 +45,17 @@
+@@ -34,6 +34,7 @@
+ #include <unistd.h>
+ #endif
+ #include <errno.h>
++#include <time.h>
+ #include <fcntl.h>
+ #include <assert.h>
+ #include <rfb/rfbclient.h>
+@@ -44,6 +45,26 @@
+ void PrintInHex(char *buf, int len);
  
  rfbBool errorMessageOnReadFailure = TRUE;
- 
++
++/* Timeouts are elapsed time, not a count of readiness wakeups. A fragmented
++ * transfer can wake select hundreds of times within one second. */
++static double monotonic_seconds(void)
++{
++  struct timespec time;
++  clock_gettime(CLOCK_MONOTONIC, &time);
++  return time.tv_sec + time.tv_nsec / 1000000000.0;
++}
++
 +/* During an exact read, existing buffered bytes are insufficient. Do not let
 + * WaitForMessage treat those same bytes as new socket readiness, otherwise
 + * a partial message burns through its timeout in a busy loop. */
@@ -811,21 +829,33 @@
 +  WaitForMessage(client, usecs);
 +  client->buffered = buffered;
 +}
-+
+ 
  /*
   * ReadFromRFBServer is called whenever we want to read some data from the RFB
-  * server.  It is non-trivial for two reasons:
-@@ -63,6 +74,7 @@
+@@ -63,7 +84,8 @@
  ReadFromRFBServer(rfbClient* client, char *out, unsigned int n)
  {
    const int USECS_WAIT_PER_RETRY = 100000;
+-  int retries = 0;
 +  rfbRemoraRuntimeOperation(client, RFB_REMORA_READ_OP);
-   int retries = 0;
++  double readDeadline;
  #undef DEBUG_READ_EXACT
  #ifdef DEBUG_READ_EXACT
-@@ -156,20 +168,23 @@
+ 	char* oout=out;
+@@ -122,6 +144,7 @@
+     return TRUE;
+   }
+ 
++  readDeadline = monotonic_seconds() + client->readTimeout;
+   memcpy(out, client->bufoutptr, client->buffered);
+ 
+   out += client->buffered;
+@@ -154,22 +177,25 @@
+ 	if (i < 0) {
+ 	  if (errno == EWOULDBLOCK || errno == EAGAIN) {
  	    if (client->readTimeout > 0 &&
- 		++retries > (client->readTimeout * 1000 * 1000 / USECS_WAIT_PER_RETRY))
+-		++retries > (client->readTimeout * 1000 * 1000 / USECS_WAIT_PER_RETRY))
++		monotonic_seconds() >= readDeadline)
  	    {
 -	      rfbClientLog("Connection timed out\n");
 +	      rfbRemoraDiagnosticFail(client, RFB_REMORA_TIMEOUT, 0, 0);
@@ -851,9 +881,12 @@
  	    rfbClientLog("VNC server closed connection\n");
  	  }
  	  return FALSE;
-@@ -205,20 +220,23 @@
+@@ -203,22 +229,25 @@
+ #endif
+ 	  if (errno == EWOULDBLOCK || errno == EAGAIN) {
  	    if (client->readTimeout > 0 &&
- 		++retries > (client->readTimeout * 1000 * 1000 / USECS_WAIT_PER_RETRY))
+-		++retries > (client->readTimeout * 1000 * 1000 / USECS_WAIT_PER_RETRY))
++		monotonic_seconds() >= readDeadline)
  	    {
 -		rfbClientLog("Connection timed out\n");
 +		rfbRemoraDiagnosticFail(client, RFB_REMORA_TIMEOUT, 0, 0);
@@ -879,7 +912,7 @@
  	    rfbClientLog("VNC server closed connection\n");
  	  }
  	  return FALSE;
-@@ -250,6 +268,7 @@
+@@ -250,6 +279,7 @@
  WriteToRFBServer(rfbClient* client, const char *buf, unsigned int n)
  {
    fd_set fds;
@@ -887,7 +920,7 @@
    int i = 0;
    int j;
    const char *obuf = buf;
-@@ -265,7 +284,7 @@
+@@ -265,7 +295,7 @@
    if (client->tlsSession) {
      /* WriteToTLS() will guarantee either everything is written, or error/eof returns */
      i = WriteToTLS(client, buf, n);
@@ -896,7 +929,7 @@
  
      return TRUE;
    }
-@@ -298,6 +317,7 @@
+@@ -298,6 +328,7 @@
  		errno == EAGAIN) {
            if(client->sock == RFB_INVALID_SOCKET) {
                errno = EBADF;
@@ -904,7 +937,7 @@
                rfbClientErr("socket invalid\n");
                return FALSE;
            }
-@@ -306,16 +326,19 @@
+@@ -306,16 +337,19 @@
  	  FD_SET(client->sock,&fds);
  
  	  if (select(client->sock+1, NULL, &fds, NULL, NULL) <= 0) {
@@ -927,7 +960,7 @@
  	return FALSE;
        }
      }
-@@ -873,6 +896,8 @@
+@@ -873,6 +907,8 @@
  
    if(client->sock == RFB_INVALID_SOCKET) {
        errno = EBADF;
@@ -936,7 +969,7 @@
        return -1;
    }
  
-@@ -884,6 +909,8 @@
+@@ -884,6 +920,8 @@
  #ifdef WIN32
      errno=WSAGetLastError();
  #endif

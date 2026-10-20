@@ -200,3 +200,49 @@ private final class DiagnosticFrames: FrameSink, @unchecked Sendable {
         for forbidden in ["fixture-user", "fixture-password", "synthetic-ard-peer", "127.0.0.1"] { #expect(!message.contains(forbidden)) }
     }
 }
+
+
+@Test @MainActor func vncFragmentedZRLEProgressDoesNotSpendAnElapsedTimeoutBudgetPerPacket() async throws {
+    // Both buffered and direct exact-read branches must tolerate more than 100
+    // readiness cycles while the complete valid payload arrives within 10 s.
+    for outcome in ["fragmented-small", "fragmented-large"] {
+        let peer = Process()
+        peer.executableURL = URL(fileURLWithPath: "/usr/bin/python3")
+        let script = try #require(Bundle.module.url(forResource: "ard_peer", withExtension: "py", subdirectory: "Fixtures"))
+        peer.arguments = ["-u", script.path, "ard-only", outcome]
+        let output = Pipe()
+        peer.standardOutput = output
+        try peer.run()
+        defer { if peer.isRunning { peer.terminate(); peer.waitUntilExit() } }
+        var line = Data()
+        while let byte = try output.fileHandleForReading.read(upToCount: 1), !byte.isEmpty, byte != Data([10]) { line.append(byte) }
+        let hello = try #require(JSONSerialization.jsonObject(with: line) as? [String: Int])
+        let port = UInt16(try #require(hello["loopback_port"]))
+        let frames = DiagnosticFrames()
+        let pins = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: pins) }
+        let session = VNCSession(configuration: .init(host: "127.0.0.1", port: port, username: "fixture-user", password: "fixture-password", desktopSize: .init(width: 16, height: 16)), frameSink: frames, certificateStoreURL: pins)
+        let fallback = Task { do { try await Task.sleep(for: .seconds(8)); session.disconnect() } catch {} }
+        defer { fallback.cancel(); session.disconnect() }
+        let started = ContinuousClock.now
+        session.connect()
+        var connected = false
+        for await event in session.events {
+            if case .stateChanged(.connected) = event { connected = true }
+        }
+        #expect(connected)
+        #expect(frames.count == 1)
+        #expect(started.duration(to: .now) < .seconds(8))
+        peer.waitUntilExit()
+        let result = try #require(JSONSerialization.jsonObject(with: output.fileHandleForReading.readDataToEndOfFile()) as? [String: Any])
+        let bytes = try #require(result["compressed_bytes"] as? Int)
+        let sent = try #require(result["sent_bytes"] as? Int)
+        let deliveryMS = try #require(result["delivery_ms"] as? Int)
+        print("Fragmented ZRLE outcome=\(outcome) sent_bytes=\(sent) required_bytes=\(bytes) delivery_ms=\(deliveryMS) callbacks=\(frames.count)")
+        #expect(peer.terminationStatus == 0)
+        #expect(result["error_class"] == nil)
+        #expect(sent == bytes)
+        #expect(deliveryMS < 8_000)
+        #expect(outcome == "fragmented-large" ? bytes > 8192 : bytes <= 8192)
+    }
+}

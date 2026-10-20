@@ -375,3 +375,27 @@ private func waitForResizes(_ count: Int, from peer: StalledPeer) async throws -
     }
     #expect(cursors == [.image(pixels: Data([0,0,255,255]), width: 1, height: 1, hotspot: .init(x: 0, y: 0)), .hidden])
 }
+
+
+@Test @MainActor func vncIncompleteFrameStillExpiresAtItsElapsedReadDeadline() async throws {
+    let peer = try StalledPeer(partialFrame: true)
+    defer { peer.stop() }
+    let pins = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: pins) }
+    let session = VNCSession(configuration: .init(host: "127.0.0.1", port: peer.port, username: "", desktopSize: .init(width: 16, height: 16)), frameSink: DiscardFrames(), certificateStoreURL: pins)
+    let fallback = Task { do { try await Task.sleep(for: .seconds(13)); peer.stop(); session.disconnect() } catch {} }
+    defer { fallback.cancel(); session.disconnect() }
+    let started = ContinuousClock.now
+    session.connect()
+    var connected = false
+    var reason: DisconnectReason?
+    for await event in session.events {
+        if case .stateChanged(.connected) = event { connected = true }
+        if case .stateChanged(.disconnected(let failure)) = event { reason = failure }
+    }
+    let elapsed = started.duration(to: .now)
+    print("Stalled exact-read elapsed=\(elapsed)")
+    #expect(connected)
+    #expect(elapsed >= .seconds(9) && elapsed < .seconds(12))
+    if case .serverEndedSession = reason {} else { Issue.record("A stalled read must still terminate at the existing deadline.") }
+}
