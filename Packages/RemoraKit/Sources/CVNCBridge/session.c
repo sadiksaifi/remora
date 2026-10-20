@@ -13,11 +13,14 @@
 #include <string.h>
 #include <errno.h>
 #include <time.h>
+#include <os/signpost.h>
+#include <dispatch/dispatch.h>
 
 struct RMVNC {
     rfbClient *client;
     RMVNCDiagnostic diagnostic;
     double started;
+    os_signpost_id_t performanceID;
     RMVNCCallbacks cb;
     void *user;
     pthread_mutex_t lock;
@@ -37,6 +40,68 @@ struct RMVNC {
 static char client_tag;
 static RMVNC *owner(rfbClient *c) { return rfbClientGetClientData(c, &client_tag); }
 static double now(void) { struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t); return t.tv_sec + t.tv_nsec / 1e9; }
+/* DynamicTracing is recording-only. No per-read clocks or counters run when
+ * disabled. This state is independent of remoraRuntime's first-failure context. */
+static os_log_t performance_log(void) {
+    static os_log_t log;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{ log = os_log_create("dev.sadiksaifi.Remora", OS_LOG_CATEGORY_DYNAMIC_TRACING); });
+    return log;
+}
+static uint64_t performance_clock(void) { return clock_gettime_nsec_np(CLOCK_UPTIME_RAW); }
+static uint64_t performance_cpu(void) {
+    struct timespec t;
+    return clock_gettime(CLOCK_THREAD_CPUTIME_ID, &t) == 0 ? (uint64_t)t.tv_sec * 1000000000 + t.tv_nsec : 0;
+}
+static long long performance_us(uint64_t end, uint64_t start) { return end >= start && start ? (long long)((end-start)/1000) : -1; }
+static void performance(rfbClient *c, unsigned event) {
+    rfbRemoraPerformance *p = &c->remoraPerf;
+    bool recording = os_signpost_enabled(performance_log());
+    if (!recording) { p->enabled = false; p->lastRequest = p->requestStart = 0; return; }
+    if (event == RFB_REMORA_PERF_REQUEST_BEGIN) {
+        p->requestStart = performance_clock();
+        return;
+    }
+    if (event == RFB_REMORA_PERF_PARSED) {
+        if (!p->enabled) return;
+        p->end = performance_clock(); p->cpuEnd = performance_cpu();
+        p->bufferedEnd = c->buffered; p->ended = true;
+        return;
+    }
+    bool ok = event == RFB_REMORA_PERF_REQUEST_OK;
+    uint64_t end = performance_clock();
+    os_signpost_event_emit(performance_log(), owner(c)->performanceID, "VNCRequest",
+        "seq=%{public}llu incremental=%{public}u full_area=%{public}u write_us=%{public}lld ok=%{public}d",
+        p->sequence, p->requestIncremental, p->requestFull, performance_us(end,p->requestStart), ok);
+    if (p->enabled && p->active && !p->ended) p->requestsDuring++;
+    p->lastRequest = ok ? end : 0;
+}
+static void performance_input(RMVNC *s, unsigned kind, bool ok) {
+    rfbRemoraPerformance *p = &s->client->remoraPerf;
+    if (!os_signpost_enabled(performance_log())) { p->enabled = false; return; }
+    if (ok && p->enabled && p->active && !p->ended) p->inputsDuring++;
+    os_signpost_event_emit(performance_log(), s->performanceID, "VNCInput",
+        "seq=%{public}llu kind=%{public}u ok=%{public}d", p->sequence, kind, ok);
+}
+static void performance_update(RMVNC *s, bool ok) {
+    rfbRemoraPerformance *p = &s->client->remoraPerf;
+    if (!p->enabled || !p->active || !os_signpost_enabled(performance_log())) return;
+    ok = ok && p->ended;
+    os_signpost_event_emit(performance_log(), s->performanceID, "VNCUpdate",
+        "seq=%{public}llu ok=%{public}d declared_rects=%{public}u header_known=%{public}d wire_rects=%{public}u callbacks=%{public}u "
+        "request_known=%{public}d prefetched_start=%{public}d req_to_ready_us=%{public}lld ready_to_header_us=%{public}lld message_us=%{public}lld "
+        "read_wait_us=%{public}lld logical_bytes=%{public}lld buffered_end=%{public}lld cpu_us=%{public}lld callback_us=%{public}lld "
+        "area_sum=%{public}llu area_max=%{public}llu enc_mask=%{public}llu requests_during=%{public}u inputs_during=%{public}u",
+        p->sequence, ok, p->declaredRects, p->header != 0, p->wireRects, p->callbacks,
+        p->requestAtReady != 0 && !p->prefetched, p->prefetched,
+        ok && !p->prefetched ? performance_us(p->ready,p->requestAtReady) : -1,
+        ok ? performance_us(p->header,p->ready) : -1,
+        ok ? performance_us(p->end,p->ready) : -1,
+        ok ? (long long)(p->waitNS/1000) : -1, ok ? (long long)p->logicalBytes : -1,
+        ok ? (long long)p->bufferedEnd : -1, ok ? performance_us(p->cpuEnd,p->cpuStart) : -1,
+        ok ? (long long)(p->callbackNS/1000) : -1,
+        p->areaSum, p->areaMax, p->encMask, p->requestsDuring, p->inputsDuring);
+}
 static bool failed(RMVNC *s, int error) {
     if (!s->error) s->error = error;
     if (s->client) rfbRemoraDiagnosticFail(s->client, RFB_REMORA_PROTOCOL, 0, 0);
@@ -46,8 +111,9 @@ static bool failed(RMVNC *s, int error) {
 void rm_vnc_set_input_pending(RMVNC *s, bool pending) { atomic_store(&s->inputPending, pending); }
 static rfbBool service_input(rfbClient *c) {
     RMVNC *s = owner(c);
-    if (atomic_load(&s->cancelled)) return FALSE;
-    if (s->inputBusy || !atomic_load(&s->inputPending) || now() < s->inputServiceAt) return TRUE;
+    if (atomic_load(&s->cancelled)) return false;
+    if (c->remoraPerf.enabled && !os_signpost_enabled(performance_log())) c->remoraPerf.enabled = false;
+    if (s->inputBusy || !atomic_load(&s->inputPending) || now() < s->inputServiceAt) return true;
     s->inputServiceAt = now() + 0.005;
     rfbRemoraRuntimeDiagnostic context = c->remoraRuntime;
     s->inputBusy++;
@@ -104,7 +170,31 @@ static void frame(rfbClient *c, int x, int y, int w, int h) {
     RMVNC *s = owner(c);
     if (s->cb.frame && !atomic_load(&s->cancelled)) {
         if (!c->remoraRuntime.failure && c->remoraRuntime.callbacks < UINT32_MAX) c->remoraRuntime.callbacks++;
+        rfbRemoraPerformance *p = &c->remoraPerf;
+        bool recording = p->enabled && p->active && os_signpost_enabled(performance_log());
+        uint64_t began = recording ? performance_clock() : 0;
+        if (recording) {
+            uint64_t area = (uint64_t)w*h;
+            unsigned bit;
+            switch ((int32_t)c->remoraRuntime.encoding) {
+                case rfbEncodingRaw: bit=0; break; case rfbEncodingCopyRect: bit=1; break;
+                case rfbEncodingHextile: bit=2; break; case rfbEncodingZlib: bit=3; break;
+                case rfbEncodingZRLE: bit=4; break; case rfbEncodingTight: bit=5; break; default: bit=6;
+            }
+            p->callbacks++; p->areaSum += area; if (area > p->areaMax) p->areaMax = area;
+            p->encMask |= (uint64_t)1 << bit;
+            os_signpost_event_emit(performance_log(), s->performanceID, "VNCPixelRect",
+                "seq=%{public}llu index=%{public}d x=%{public}d y=%{public}d w=%{public}d h=%{public}d encoding=%{public}lld "
+                "rect_bytes=%{public}llu zrle_len=%{public}lld header_to_len_us=%{public}lld len_to_body_us=%{public}lld body_to_callback_us=%{public}lld rect_wait_us=%{public}llu",
+                p->sequence, c->remoraRuntime.rectIndex, x,y,w,h,(long long)c->remoraRuntime.encoding,
+                p->logicalBytes-p->rectBytesStart, (long long)p->zrleLength,
+                performance_us(p->zrleLengthAt,p->rectHeader), performance_us(p->bodyAt,p->zrleLengthAt),
+                performance_us(began,p->bodyAt), (p->waitNS-p->rectWaitStart)/1000);
+        }
         s->cb.frame(s->user, c->frameBuffer, c->width, c->height, x, y, w, h);
+        if (recording) {
+            p->lastCallback = performance_clock(); p->callbackNS += p->lastCallback-began;
+        }
     }
 }
 static void cursor(rfbClient *c, int x, int y, int w, int h, int bpp) {
@@ -166,6 +256,7 @@ RMVNC *rm_vnc_create(const char *host, uint16_t port, RMVNCCallbacks cb, void *u
     RMVNC *s = calloc(1, sizeof(*s));
     if (!s) return NULL;
     s->started = now();
+    s->performanceID = os_signpost_id_generate(performance_log());
     s->fd = -1; s->wake[0] = s->wake[1] = -1;
     pthread_mutex_init(&s->lock, NULL);
     atomic_init(&s->cancelled, false);
@@ -254,6 +345,7 @@ bool rm_vnc_connect(RMVNC *s) {
     s->error=0;
     rfbClient *c=s->client=rfbGetClient(8,3,4);
     if (!c) return failed(s,6);
+    c->RemoraPerformance = performance; c->RemoraPerformanceClock = performance_clock;
     c->remoraDiagnostic.phase = c->remoraDiagnostic.lastSuccess = RFB_REMORA_TCP;
     rfbClientSetClientData(c,&client_tag,s);
     c->sock=s->fd;
@@ -301,8 +393,21 @@ static bool reconcile_resize(RMVNC *s) {
 bool rm_vnc_step(RMVNC *s) {
     if (atomic_load(&s->cancelled)) return false;
     rfbRemoraRuntimeMessage(s->client, RFB_REMORA_WAIT);
-    int ready=WaitForMessage(s->client,10000);
-    if (ready < 0 || (ready && !HandleRFBServerMessage(s->client))) {
+    rfbClient *c = s->client;
+    rfbRemoraPerformance *p = &c->remoraPerf;
+    uint64_t sequence = p->sequence, lastRequest = p->lastRequest;
+    memset(p,0,sizeof(*p)); p->sequence = sequence; p->lastRequest = lastRequest;
+    p->enabled = os_signpost_enabled(performance_log());
+    if (!p->enabled) p->lastRequest = lastRequest = 0;
+    p->prefetched = c->buffered > 0;
+    int ready=WaitForMessage(c,10000);
+    if (ready > 0 && p->enabled) {
+        p->ready = performance_clock(); p->cpuStart = performance_cpu(); p->requestAtReady = lastRequest;
+    }
+    bool handled = ready > 0 ? HandleRFBServerMessage(c) : true;
+    performance_update(s,handled);
+    p->enabled = false;
+    if (ready < 0 || !handled) {
         rfbRemoraRuntimeOperation(s->client, 0);
         if (!atomic_load(&s->cancelled)) rfbRemoraRuntimeFail(s->client, RFB_REMORA_DECODER, 0, 0);
         cancel_resize(s); return false;
@@ -378,13 +483,13 @@ bool rm_vnc_key(RMVNC *s,uint32_t sym,uint32_t code,bool down) {
     s->inputBusy++;
     bool sent = code && SupportsClient2Server(s->client,rfbQemuEvent)
         ? SendExtendedKeyEvent(s->client,sym,code,down) : SendKeyEvent(s->client,sym,down);
-    s->inputBusy--; return sent;
+    s->inputBusy--; performance_input(s,1,sent); return sent;
 }
 bool rm_vnc_pointer(RMVNC *s,uint16_t x,uint16_t y,uint8_t mask) {
     rfbRemoraRuntimeMessage(s->client, RFB_REMORA_WRITE);
     s->inputBusy++;
     bool sent = SendPointerEvent(s->client,x,y,mask);
-    s->inputBusy--; return sent;
+    s->inputBusy--; performance_input(s,2,sent); return sent;
 }
 bool rm_vnc_clipboard_utf8(RMVNC *s) { return s->client->extendedClipboardServerCapabilities != 0; }
 bool rm_vnc_clipboard(RMVNC *s,const char *text,int len,bool utf8) {

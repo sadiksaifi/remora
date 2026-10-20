@@ -28,7 +28,7 @@ OFFERS = [30, 33, 36, 2, 35]
 SERVER_EXPONENT = int.from_bytes(hashlib.sha256(b'ARD synthetic server exponent').digest(), 'big')
 
 
-def synthetic_zrle(dimension):
+def synthetic_zrle(dimension, compressor=None):
     """Independent legal raw-tile ZRLE stream; no captured desktop content."""
     import random
     import zlib
@@ -38,7 +38,7 @@ def synthetic_zrle(dimension):
         for tx in range(0, dimension, 64):
             tiles.append(0)
             tiles.extend(randomizer.randbytes(min(64, dimension-tx) * min(64, dimension-ty) * 3))
-    compressor = zlib.compressobj()
+    compressor = compressor or zlib.compressobj()
     return compressor.compress(tiles) + compressor.flush(zlib.Z_SYNC_FLUSH)
 
 

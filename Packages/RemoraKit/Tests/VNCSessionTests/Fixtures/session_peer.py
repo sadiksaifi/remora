@@ -19,7 +19,7 @@ def report(event, **fields):
 def serve():
     mode = sys.argv[1] if len(sys.argv) > 1 else 'refresh'
     dimension = 256 if mode == 'paced-large' else 16
-    target_width, target_height = (map(int, sys.argv[2:4]) if mode.startswith('size') else (dimension, dimension))
+    target_width, target_height = (map(int, sys.argv[2:4]) if mode.startswith('size') else ((32, 16) if mode == 'perf' else (dimension, dimension)))
     width, height = (target_width, target_height) if mode == 'size' else (dimension, dimension)
     began = None
     intentional_close = threading.Event()
@@ -55,6 +55,7 @@ def serve():
             full = incremental = 0
             pending = False
             marker = 1
+            perf_started = False
             def update(full_frame=False):
                 nonlocal pending
                 if pending:
@@ -93,6 +94,32 @@ def serve():
                             pending = False
                             send(struct.pack('>BBHHHHHi', 0, 0, 1, 0, 0, target_width, target_height, -223))
                             width, height = target_width, target_height
+                        elif command['action'] == 'perf':
+                            assert mode == 'perf' and full+incremental == 3
+                            import zlib
+                            from ard_peer import synthetic_zrle
+                            compressor = zlib.compressobj()
+                            first = synthetic_zrle(16, compressor)
+                            second = synthetic_zrle(16, compressor)
+                            began = time.monotonic()
+                            prefix = struct.pack('>BBHHHHHiI', 0, 0, 65535, 0, 0, 16, 16, 16, len(first))
+                            tail = (struct.pack('>HHHHiI', 16, 0, 16, 16, 16, len(second)) + second +
+                                    struct.pack('>HHHHi', 0, 0, 0, 0, -239) +
+                                    struct.pack('>HHHHi', 0, 0, 0, 0, -224) + bytes(4))
+                            report('expected', first=len(first), second=len(second), logical=4+16+len(first)+16+len(second)+24)
+                            perf_started = True
+                            def perf_writer():
+                                try:
+                                    send(prefix)
+                                    for offset in range(0, len(first)-4, 4):
+                                        send(first[offset:min(offset+4, len(first)-4)])
+                                        if offset == 0: report('body_started')
+                                        time.sleep(0.007)
+                                    send(first[-4:] + tail)
+                                    report('body_done', ms=round((time.monotonic()-began)*1000))
+                                except Exception:
+                                    if not intentional_close.is_set(): report('error', code='writer')
+                            threading.Thread(target=perf_writer, daemon=True).start()
                         elif command['action'] == 'start':
                             assert pending
                             pending = False
@@ -132,6 +159,14 @@ def serve():
                             full += 1
                             if mode in ('refresh', 'size', 'size-resize'):
                                 update(full_frame=True)
+                        if mode == 'perf' and full+incremental == 1:
+                            # Legal resize metadata causes a full request inside
+                            # the parser plus its normal trailing incremental.
+                            send(struct.pack('>BBHHHHHi', 0, 0, 1, 0, 0, 32, 16, -223))
+                        if mode == 'perf' and perf_started and full+incremental == 5:
+                            send(struct.pack('>BBHHHHHi', 0, 0, 1, 0, 0, 16, 16, 0) + bytes(2))
+                            intentional_close.set()
+                            connection.shutdown(socket.SHUT_WR)
                         report('request', full=full, incremental=incremental)
                     elif kind == 4:
                         key_event = exact(7)

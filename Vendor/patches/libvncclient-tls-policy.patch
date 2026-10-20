@@ -1,6 +1,6 @@
 --- a/include/rfb/rfbclient.h
 +++ b/include/rfb/rfbclient.h
-@@ -253,6 +253,55 @@
+@@ -253,6 +253,72 @@
  typedef char* (*GetSASLMechanismProc)(struct _rfbClient* client, char* mechlist);
  #endif /* LIBVNCSERVER_HAVE_SASL */
  
@@ -53,16 +53,36 @@
 +  uint32_t callbacks;
 +} rfbRemoraRuntimeDiagnostic;
 +
++/* Recording-only performance context. Separate from the first-failure record,
++ * which the input service restores after successful writes. All fields are
++ * worker-owned; no payload or identity is retained. */
++typedef struct {
++  rfbBool enabled, active, ended, prefetched;
++  uint64_t sequence, ready, cpuStart, header, end, cpuEnd;
++  uint64_t logicalBytes, waitNS, callbackNS, lastCallback, areaSum, areaMax, encMask;
++  uint64_t rectBytesStart, rectWaitStart, rectHeader, zrleLengthAt, bodyAt;
++  uint64_t lastRequest, requestStart, requestAtReady;
++  unsigned int declaredRects, wireRects, callbacks, requestsDuring, inputsDuring;
++  unsigned int requestIncremental, requestFull, bufferedEnd;
++  int64_t zrleLength;
++} rfbRemoraPerformance;
++
++enum { RFB_REMORA_PERF_REQUEST_BEGIN=1, RFB_REMORA_PERF_REQUEST_OK,
++       RFB_REMORA_PERF_REQUEST_FAILED, RFB_REMORA_PERF_PARSED };
++
  typedef struct _rfbClient {
  	uint8_t* frameBuffer;
  	int width, height;
-@@ -506,7 +555,26 @@
+@@ -506,7 +572,29 @@
          rfbBool isUpdateRectManagedByLib;
  
          GetX509CertFingerprintMismatchDecisionProc GetX509CertFingerprintMismatchDecision;
 +        /* Remora adapter metadata. Set only by parsed protocol results. */
 +        rfbRemoraDiagnostic remoraDiagnostic;
 +        rfbRemoraRuntimeDiagnostic remoraRuntime;
++        rfbRemoraPerformance remoraPerf;
++        void (*RemoraPerformance)(struct _rfbClient*, unsigned int);
++        uint64_t (*RemoraPerformanceClock)(void);
 +        rfbBool (*RemoraServiceInput)(struct _rfbClient*);
 +        rfbBool remoraAuthFailed;
 +        rfbBool remoraResizeSupported;
@@ -573,7 +593,27 @@
    rfbFramebufferUpdateRequestMsg fur;
  
    if (!SupportsClient2Server(client, rfbFramebufferUpdateRequest)) return TRUE;
-@@ -1701,15 +1771,24 @@
+@@ -1508,9 +1578,16 @@
+   fur.w = rfbClientSwap16IfLE(w);
+   fur.h = rfbClientSwap16IfLE(h);
+ 
+-  if (!WriteToRFBServer(client, (char *)&fur, sz_rfbFramebufferUpdateRequestMsg))
+-    return FALSE;
+-
++  if (client->RemoraPerformance) {
++    client->remoraPerf.requestIncremental = incremental ? 1 : 0;
++    client->remoraPerf.requestFull = x == 0 && y == 0 && w == client->width && h == client->height;
++    client->RemoraPerformance(client, RFB_REMORA_PERF_REQUEST_BEGIN);
++  }
++  if (!WriteToRFBServer(client, (char *)&fur, sz_rfbFramebufferUpdateRequestMsg)) {
++    if (client->RemoraPerformance) client->RemoraPerformance(client, RFB_REMORA_PERF_REQUEST_FAILED);
++    return FALSE;
++  }
++  if (client->RemoraPerformance) client->RemoraPerformance(client, RFB_REMORA_PERF_REQUEST_OK);
+   return TRUE;
+ }
+ 
+@@ -1701,15 +1778,24 @@
  rfbBool
  SendExtDesktopSize(rfbClient* client, uint16_t width, uint16_t height)
  {
@@ -599,7 +639,7 @@
      rfbClientLog("Sending dimensions %dx%d\n", width, height);
      sdm.type = rfbSetDesktopSize;
      sdm.width = rfbClientSwap16IfLE(width);
-@@ -1729,8 +1808,9 @@
+@@ -1729,8 +1815,9 @@
      if (!WriteToRFBServer(client, (char *)&sdm, sz_rfbSetDesktopSizeMsg)) return FALSE;
      if (!WriteToRFBServer(client, (char *)&screen, sz_rfbExtDesktopScreen)) return FALSE;
  
@@ -611,7 +651,7 @@
  
      client->requestedResize = FALSE;
  
-@@ -2054,11 +2134,14 @@
+@@ -2054,11 +2141,14 @@
  {
    rfbServerToClientMsg msg;
  
@@ -626,17 +666,24 @@
    switch (msg.type) {
  
    case rfbSetColourMapEntries:
-@@ -2097,29 +2180,42 @@
+@@ -2097,29 +2187,58 @@
      int bytesPerLine;
      int i;
  
++    client->remoraPerf.sequence++;
++    client->remoraPerf.active = client->remoraPerf.enabled;
 +    rfbRemoraRuntimeStage(client, RFB_REMORA_UPDATE);
      if (!ReadFromRFBServer(client, ((char *)&msg.fu) + 1,
  			   sz_rfbFramebufferUpdateMsg - 1))
        return FALSE;
  
      msg.fu.nRects = rfbClientSwap16IfLE(msg.fu.nRects);
- 
+-
++    if (client->remoraPerf.enabled) {
++      client->remoraPerf.declaredRects = msg.fu.nRects;
++      client->remoraPerf.header = client->RemoraPerformanceClock();
++    }
++
 +    if (!client->remoraRuntime.failure) client->remoraRuntime.rectCount = msg.fu.nRects;
      for (i = 0; i < msg.fu.nRects; i++) {
 +      rfbRemoraRuntimeStage(client, RFB_REMORA_RECT_HEADER);
@@ -645,9 +692,19 @@
 +        client->remoraRuntime.encoding = -2147483649LL;
 +        client->remoraRuntime.x = client->remoraRuntime.y = client->remoraRuntime.width = client->remoraRuntime.height = 0;
 +      }
++      if (client->remoraPerf.enabled) {
++        client->remoraPerf.rectBytesStart = client->remoraPerf.logicalBytes;
++        client->remoraPerf.rectWaitStart = client->remoraPerf.waitNS;
++        client->remoraPerf.zrleLength = -1;
++        client->remoraPerf.zrleLengthAt = client->remoraPerf.bodyAt = 0;
++      }
        if (!ReadFromRFBServer(client, (char *)&rect, sz_rfbFramebufferUpdateRectHeader))
  	return FALSE;
  
++      if (client->remoraPerf.enabled) {
++        client->remoraPerf.wireRects++;
++        client->remoraPerf.rectHeader = client->RemoraPerformanceClock();
++      }
        rect.encoding = rfbClientSwap32IfLE(rect.encoding);
 -      if (rect.encoding == rfbEncodingLastRect)
 -	break;
@@ -672,7 +729,7 @@
  	if (!HandleCursorShape(client,
  			       rect.r.x, rect.r.y, rect.r.w, rect.r.h,
  			       rect.encoding)) {
-@@ -2149,6 +2245,7 @@
+@@ -2149,6 +2268,7 @@
  	if(!ResizeClientBuffer(client, rect.r.w, rect.r.h))
  	  return FALSE;
  	SendFramebufferUpdateRequest(client, 0, 0, rect.r.w, rect.r.h, FALSE);
@@ -680,7 +737,7 @@
  	rfbClientLog("Got new framebuffer size: %dx%d\n", rect.r.w, rect.r.h);
  	continue;
        }
-@@ -2165,24 +2262,44 @@
+@@ -2165,24 +2285,44 @@
          }
  
          screens = eds.numberOfScreens;
@@ -727,7 +784,7 @@
          client->requestedResize = FALSE;
  
          continue;
-@@ -2249,9 +2366,11 @@
+@@ -2249,9 +2389,11 @@
        /* rfbEncodingUltraZip is a collection of subrects.   x = # of subrects, and h is always 0 */
        if (rect.encoding != rfbEncodingUltraZip)
        {
@@ -739,7 +796,7 @@
  	      rfbClientLog("Rect too large: %dx%d at (%d, %d)\n",
  	  	  rect.r.w, rect.r.h, rect.r.x, rect.r.y);
  	      return FALSE;
-@@ -2272,6 +2391,7 @@
+@@ -2272,6 +2414,7 @@
          client->SoftCursorLockArea(client, rect.r.x, rect.r.y, rect.r.w, rect.r.h);
        }
  
@@ -747,7 +804,7 @@
        switch (rect.encoding) {
  
        case rfbEncodingRaw: {
-@@ -2556,6 +2676,8 @@
+@@ -2556,6 +2699,8 @@
  	       handled = TRUE;
  
  	   if(!handled) {
@@ -756,15 +813,17 @@
  	     rfbClientLog("Unknown rect encoding %d\n",
  		 (int)rect.encoding);
  	     return FALSE;
-@@ -2569,6 +2691,7 @@
+@@ -2569,6 +2714,9 @@
        client->GotFrameBufferUpdate(client, rect.r.x, rect.r.y, rect.r.w, rect.r.h);
      }
  
++    if (client->remoraPerf.enabled && client->RemoraPerformance)
++      client->RemoraPerformance(client, RFB_REMORA_PERF_PARSED);
 +    rfbRemoraRuntimeStage(client, RFB_REMORA_WRITE);
      if (!SendIncrementalFramebufferUpdateRequest(client))
        return FALSE;
  
-@@ -2587,6 +2710,7 @@
+@@ -2587,6 +2735,7 @@
  
    case rfbServerCutText:
    {
@@ -772,7 +831,7 @@
      char *buffer;
  #ifdef LIBVNCSERVER_HAVE_LIBZ
      int32_t ilen; /* also as a flag, if ilen < 0, it is ext clipboard text */
-@@ -2732,6 +2856,8 @@
+@@ -2732,6 +2881,8 @@
  
        if(!handled) {
  	char buffer[256];
@@ -806,7 +865,7 @@
  #include <fcntl.h>
  #include <assert.h>
  #include <rfb/rfbclient.h>
-@@ -44,6 +45,26 @@
+@@ -44,6 +45,29 @@
  void PrintInHex(char *buf, int len);
  
  rfbBool errorMessageOnReadFailure = TRUE;
@@ -826,18 +885,22 @@
 +static void wait_for_more_bytes(rfbClient *client, unsigned int usecs)
 +{
 +  unsigned int buffered = client->buffered;
++  uint64_t began = client->remoraPerf.enabled ? client->RemoraPerformanceClock() : 0;
 +  client->buffered = 0;
 +  WaitForMessage(client, usecs);
 +  client->buffered = buffered;
++  if (began && client->remoraPerf.enabled)
++    client->remoraPerf.waitNS += client->RemoraPerformanceClock() - began;
 +}
  
  /*
   * ReadFromRFBServer is called whenever we want to read some data from the RFB
-@@ -63,13 +84,20 @@
+@@ -63,13 +87,21 @@
  ReadFromRFBServer(rfbClient* client, char *out, unsigned int n)
  {
    const int USECS_WAIT_PER_RETRY = 100000;
 -  int retries = 0;
++  const unsigned int requested = n;
 +  rfbRemoraRuntimeOperation(client, RFB_REMORA_READ_OP);
 +  double readDeadline;
  #undef DEBUG_READ_EXACT
@@ -855,7 +918,14 @@
  
    /* Handle attempts to write to NULL out buffer that might occur
       when an outside malloc() fails. For instance, memcpy() to NULL
-@@ -122,6 +150,7 @@
+@@ -116,12 +148,14 @@
+     memcpy(out, client->bufoutptr, n);
+     client->bufoutptr += n;
+     client->buffered -= n;
++    if (client->remoraPerf.enabled) client->remoraPerf.logicalBytes += requested;
+ #ifdef DEBUG_READ_EXACT
+     goto hexdump;
+ #endif
      return TRUE;
    }
  
@@ -863,7 +933,7 @@
    memcpy(out, client->bufoutptr, client->buffered);
  
    out += client->buffered;
-@@ -134,6 +163,8 @@
+@@ -134,6 +168,8 @@
  
      while (client->buffered < n) {
        int i;
@@ -872,7 +942,7 @@
        if (client->tlsSession)
          i = ReadFromTLS(client, client->buf + client->buffered, RFB_BUF_SIZE - client->buffered);
        else
-@@ -154,22 +185,25 @@
+@@ -154,22 +190,25 @@
  	if (i < 0) {
  	  if (errno == EWOULDBLOCK || errno == EAGAIN) {
  	    if (client->readTimeout > 0 &&
@@ -903,7 +973,7 @@
  	    rfbClientLog("VNC server closed connection\n");
  	  }
  	  return FALSE;
-@@ -186,6 +220,8 @@
+@@ -186,6 +225,8 @@
  
      while (n > 0) {
        int i;
@@ -912,7 +982,7 @@
        if (client->tlsSession)
          i = ReadFromTLS(client, out, n);
        else
-@@ -203,22 +239,25 @@
+@@ -203,22 +244,25 @@
  #endif
  	  if (errno == EWOULDBLOCK || errno == EAGAIN) {
  	    if (client->readTimeout > 0 &&
@@ -943,7 +1013,15 @@
  	    rfbClientLog("VNC server closed connection\n");
  	  }
  	  return FALSE;
-@@ -250,6 +289,7 @@
+@@ -229,6 +273,7 @@
+     }
+   }
+ 
++  if (client->remoraPerf.enabled) client->remoraPerf.logicalBytes += requested;
+ #ifdef DEBUG_READ_EXACT
+ hexdump:
+   { unsigned int ii;
+@@ -250,6 +295,7 @@
  WriteToRFBServer(rfbClient* client, const char *buf, unsigned int n)
  {
    fd_set fds;
@@ -951,7 +1029,7 @@
    int i = 0;
    int j;
    const char *obuf = buf;
-@@ -265,7 +305,7 @@
+@@ -265,7 +311,7 @@
    if (client->tlsSession) {
      /* WriteToTLS() will guarantee either everything is written, or error/eof returns */
      i = WriteToTLS(client, buf, n);
@@ -960,7 +1038,7 @@
  
      return TRUE;
    }
-@@ -298,6 +338,7 @@
+@@ -298,6 +344,7 @@
  		errno == EAGAIN) {
            if(client->sock == RFB_INVALID_SOCKET) {
                errno = EBADF;
@@ -968,7 +1046,7 @@
                rfbClientErr("socket invalid\n");
                return FALSE;
            }
-@@ -306,16 +347,19 @@
+@@ -306,16 +353,19 @@
  	  FD_SET(client->sock,&fds);
  
  	  if (select(client->sock+1, NULL, &fds, NULL, NULL) <= 0) {
@@ -991,7 +1069,7 @@
  	return FALSE;
        }
      }
-@@ -873,6 +917,8 @@
+@@ -873,6 +923,8 @@
  
    if(client->sock == RFB_INVALID_SOCKET) {
        errno = EBADF;
@@ -1000,7 +1078,7 @@
        return -1;
    }
  
-@@ -884,6 +930,8 @@
+@@ -884,6 +936,8 @@
  #ifdef WIN32
      errno=WSAGetLastError();
  #endif
@@ -1449,3 +1527,25 @@
    return TRUE;
  }
  
+--- a/src/libvncclient/zrle.c
++++ b/src/libvncclient/zrle.c
+@@ -112,6 +112,11 @@
+ 		return FALSE;
+ 
+ 	remaining = rfbClientSwap32IfLE(header.length);
++        if (client->remoraPerf.enabled) {
++            client->remoraPerf.zrleLength = remaining;
++            client->remoraPerf.zrleLengthAt = client->RemoraPerformanceClock();
++            client->remoraPerf.bodyAt = client->remoraPerf.zrleLengthAt;
++        }
+ 
+ 	/* Need to initialize the decompressor state. */
+ 	client->decompStream.next_in   = ( Bytef * )client->buffer;
+@@ -155,6 +160,7 @@
+ 		/* Fill the buffer, obtaining data from the server. */
+ 		if (!ReadFromRFBServer(client, client->buffer,toRead))
+ 			return FALSE;
++                if (client->remoraPerf.enabled) client->remoraPerf.bodyAt = client->RemoraPerformanceClock();
+ 
+ 		client->decompStream.next_in  = ( Bytef * )client->buffer;
+ 		client->decompStream.avail_in = toRead;
