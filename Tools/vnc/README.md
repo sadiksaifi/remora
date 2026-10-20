@@ -120,7 +120,15 @@ Supplemental native checks against TigerVNC 1.15.0 on Debian Linux verified clas
 
 The actual application CLI was then verified through an isolated development app rebuilt at 02:37:05 with the final backend and vendor aggregate. It created a connection without a saved password, connected in the background, reused the existing certificate pin, and answered its username/password prompt through stdin with `remember=false`. CLI input produced exactly `CLI Grüße äöüß €`, confirmed in both a fresh 1280x800 PNG and the remote fixture log. Application recording finalized a 2.376667-second HEVC movie at 1280x800; FFmpeg decoded 136 frames with 124 distinct pixel hashes. Only the test session was closed. Existing connections, the installed app, and Keychain were untouched. JSON receipts, PNGs, movie, build/process evidence, and decode results remain private under `.snap/vnc-app-cli/`.
 
-Visual credentials and trust-sheet interaction checks were separate from this CLI pass. The run did not test live certificate rotation, sustained network-loss recovery, every encoding individually, audio, or VNC servers on Windows or macOS. Authentication modes other than X509Plain and VncAuth remain unverified.
+Visual credentials and trust-sheet interaction checks were separate from this CLI pass. The Linux run did not test live certificate rotation, sustained network-loss recovery, every encoding individually, audio, or VNC servers on Windows or macOS.
+
+### macOS Screen Sharing
+
+A later signed application build at `850f577` connected to a real Mac through the user's saved connection. It selected ARD security type 30 from `[30,33,36,2,35]`, authenticated with a 4096-bit exchange, and displayed the 3024x1964 desktop. The desktop remained live for about 164 seconds and delivered 233 framebuffer callbacks before the operator intentionally disconnected. Pointer clicks, Escape, Command-space, and typing into the remote launcher were visually verified. No spontaneous runtime failure occurred. The final EOF record has `cancelled=1` from the intentional disconnect.
+
+This verification follows two fixes: accepting ARD alongside the known Apple security alternatives, and measuring exact-read timeouts with a monotonic deadline. Public regressions cover both fragmented read branches and a genuine ten-second stall. No codec change or timeout increase was needed.
+
+The operator did not positively identify a new TextEdit document, so document editing was not tested. Mac clipboard, recording, resize behavior, network-loss recovery, and other Mac versions remain unverified. Private receipts and sanitized logs are under `.snap/vnc-macos-research/mac-read-timeout-live/`. The signed app remains installed; no saved connection was manually changed.
 
 ## Stop and clean up
 
