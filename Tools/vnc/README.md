@@ -130,6 +130,8 @@ This verification follows two fixes: accepting ARD alongside the known Apple sec
 
 The operator did not positively identify a new TextEdit document, so document editing was not tested. Mac clipboard, recording, resize behavior, network-loss recovery, and other Mac versions remain unverified. Private receipts and sanitized logs are under `.snap/vnc-macos-research/mac-read-timeout-live/`. The signed app remains installed; no saved connection was manually changed.
 
+A signed `3011ac8` comparison verified the later display-demand and input-scheduling fixes. Ten input submissions had a median roundtrip of 93 ms, compared with 443 ms in the baseline. A comparable menu opening was visible by 856 ms, versus 2.34–2.75 seconds before. These are client-image observation bounds, not remote event or monitor timestamps. Some visible-window actions still had bounds approaching two seconds, and closing improvement was not established. The performance investigation remains open. Private measurements and their limits are under `.snap/vnc-macos-research/sluggishness-live-comparison/`.
+
 ## Stop and clean up
 
 Keep the target running while reviews need retesting. When retesting is complete:
