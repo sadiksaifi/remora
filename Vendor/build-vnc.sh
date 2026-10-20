@@ -49,7 +49,10 @@ common=(-G 'Unix Makefiles' -DCMAKE_MAKE_PROGRAM=/usr/bin/make -DCMAKE_C_COMPILE
     -DCMAKE_FIND_USE_CMAKE_ENVIRONMENT_PATH=OFF -DCMAKE_FIND_USE_SYSTEM_ENVIRONMENT_PATH=OFF
     -DCMAKE_FIND_USE_PACKAGE_REGISTRY=OFF -DCMAKE_FIND_USE_SYSTEM_PACKAGE_REGISTRY=OFF)
 rm -rf "$BUILD/jpeg" "$BUILD/jpeg-install" "$BUILD/vnc" "$BUILD/vnc-install" "$BUILD/vnc-package" "$BUILD/LibVNCClient.xcframework"
-{
+# Keep the build outside an OR-list so errexit applies to each command.
+set +e
+(
+    set -e
     "$REMORA_CMAKE" -S "$SOURCES/libjpeg-turbo-$JPEG_VERSION" -B "$BUILD/jpeg" "${common[@]}" \
         -DCMAKE_INSTALL_PREFIX="$BUILD/jpeg-install" -DCMAKE_INSTALL_LIBDIR=lib \
         -DENABLE_SHARED=OFF -DENABLE_STATIC=ON -DWITH_TURBOJPEG=OFF -DWITH_TOOLS=OFF -DWITH_TESTS=OFF
@@ -74,6 +77,12 @@ rm -rf "$BUILD/jpeg" "$BUILD/jpeg-install" "$BUILD/vnc" "$BUILD/vnc-install" "$B
     cp -R "$BUILD/vnc-install/include/rfb" "$BUILD/vnc-package/Headers/"
     /usr/bin/libtool -static -o "$BUILD/vnc-package/libLibVNCClient.a" "$BUILD/vnc-install/lib/libvncclient.a" "$BUILD/jpeg-install/lib/libjpeg.a"
     xcodebuild -create-xcframework -library "$BUILD/vnc-package/libLibVNCClient.a" -headers "$BUILD/vnc-package/Headers" -output "$BUILD/LibVNCClient.xcframework"
-} > "$BUILD/logs/vnc.log" 2>&1 || { tail -n 65 "$BUILD/logs/vnc.log" >&2; exit 1; }
+) > "$BUILD/logs/vnc.log" 2>&1
+build_status=$?
+set -e
+if [[ $build_status != 0 ]]; then
+    tail -n 65 "$BUILD/logs/vnc.log" >&2
+    exit "$build_status"
+fi
 echo "$fingerprint" > "$BUILD/.vnc-configuration"
 echo "Output: $BUILD/LibVNCClient.xcframework (LibVNCClient $VNC_COMMIT, JPEG $JPEG_VERSION; shared engine OpenSSL)"
