@@ -109,6 +109,21 @@ def serve():
                         command = json.loads(line)
                         if command['action'] == 'counts':
                             report('counts', full=full, incremental=incremental)
+                        elif command['action'] == 'clipboard':
+                            assert mode == 'clipboard'
+                            import zlib
+                            # Extended text sizes include exactly one protocol
+                            # terminator. Embedded NULs remain text bytes.
+                            for text in (b'hello\x00', b'\x00', 'hé\x00€'.encode('utf-8') + b'\x00'):
+                                encoder = zlib.compressobj()
+                                compressed = encoder.compress(struct.pack('>I', len(text)) + text)
+                                compressed += encoder.flush(zlib.Z_SYNC_FLUSH)
+                                payload = struct.pack('>I', 0x10000001) + compressed
+                                send(struct.pack('>B3xi', 3, -len(payload)) + payload)
+                            # Basic Latin-1 has only an explicit byte count.
+                            text = b'\xe9\x00B\x00'
+                            send(struct.pack('>B3xI', 3, len(text)) + text)
+                            report('clipboard_sent', count=4)
                         elif command['action'] == 'invalid':
                             send(struct.pack('>BBHHHHHiI', 0, 0, 1, 0, 0, 16, 16, 16, 4) + bytes([255])*4)
                         elif command['action'] == 'damage':
@@ -204,6 +219,10 @@ def serve():
                     elif kind == 2:
                         header = exact(3)
                         exact(int.from_bytes(header[1:], 'big')*4)
+                        if mode == 'clipboard':
+                            # Text Caps with Request, Notify and Provide support.
+                            caps = struct.pack('>II', 0x1b000001, 1048576)
+                            send(struct.pack('>B3xi', 3, -len(caps)) + caps)
                     elif kind == 3:
                         request = exact(9)
                         pending = True

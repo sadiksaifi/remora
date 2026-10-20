@@ -397,7 +397,9 @@ public final class VNCSession: AgentInputSession, @unchecked Sendable {
         }
         cb.clipboard = { user, text, length, utf8 in
             guard let text else { return }
-            let data = Data(bytes: text, count: Int(length))
+            var data = Data(bytes: text, count: Int(length))
+            // Extended UTF-8 text includes one terminal NUL in its wire size.
+            if utf8, data.last == 0 { data.removeLast() }
             let value = String(data: data, encoding: utf8 ? .utf8 : .isoLatin1)
             owner(user).clipboard(value.map(RemoteClipboard.Status.text) ?? .failed)
         }
