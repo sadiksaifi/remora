@@ -4,6 +4,16 @@
 #include <stdint.h>
 #include <stddef.h>
 typedef struct RMVNC RMVNC;
+/* Fixed numeric handshake summary. Only the owning worker reads this record. */
+typedef struct {
+    uint32_t phase, lastSuccess, failure;
+    int systemError;
+    uint64_t opensslError, elapsedMS;
+    uint32_t serverMajor, serverMinor, negotiatedMajor, negotiatedMinor;
+    uint32_t offeredCount, offered[32], selected;
+    uint32_t subofferedCount, suboffered[32], subtype, ardBits;
+    bool cancelled;
+} RMVNCDiagnostic;
 typedef struct {
     void (*size)(void *, int, int, bool);
     void (*frame)(void *, const uint8_t *, int, int, int, int, int, int);
@@ -21,6 +31,7 @@ bool rm_vnc_connect(RMVNC *);
 void rm_vnc_abort(RMVNC *);
 void rm_vnc_free(RMVNC *);
 bool rm_vnc_step(RMVNC *);
+RMVNCDiagnostic rm_vnc_diagnostic(RMVNC *);
 int rm_vnc_error(RMVNC *); /* 1 DNS, 2 refused, 3 timeout, 4 auth, 5 certificate, 6 protocol */
 const char *rm_vnc_security(RMVNC *);
 bool rm_vnc_resize_supported(RMVNC *);

@@ -17,7 +17,7 @@ let package = Package(
         .binaryTarget(name: "LibVNCClient", path: "../../Vendor/build/LibVNCClient.xcframework"),
         .target(name: "CVNCBridge", dependencies: ["LibVNCClient", "FreeRDP"], linkerSettings: [.linkedLibrary("z")]),
         .target(name: "VNCSession", dependencies: ["RemoraCore", "CVNCBridge", "CFreeRDPBridge"]),
-        .testTarget(name: "VNCSessionTests", dependencies: ["VNCSession"]),
+        .testTarget(name: "VNCSessionTests", dependencies: ["VNCSession"], resources: [.copy("Fixtures")]),
         .binaryTarget(name: "FreeRDP", path: "../../Vendor/build/FreeRDP.xcframework"),
         .target(
             name: "CFreeRDPBridge",

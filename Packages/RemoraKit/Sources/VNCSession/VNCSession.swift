@@ -18,6 +18,7 @@ public final class VNCSession: AgentInputSession, @unchecked Sendable {
     private let certificateStoreURL: URL
     private let isoKeyboard: Bool
     private let state = State()
+    let handshakeAttemptID = UUID().uuidString
 
     @MainActor
     public init(configuration: SessionConfiguration, frameSink: any FrameSink,
@@ -147,6 +148,24 @@ public final class VNCSession: AgentInputSession, @unchecked Sendable {
         state.lock.withLock { if state.agent == id { state.agentCancelled = true } }
     }
 
+    private func logHandshake(_ handle: OpaquePointer, connected: Bool) {
+        var diagnostic = rm_vnc_diagnostic(handle)
+        let offeredCount = min(Int(diagnostic.offeredCount), 32)
+        let subofferedCount = min(Int(diagnostic.subofferedCount), 32)
+        let offered = withUnsafeBytes(of: &diagnostic.offered) { bytes in
+            bytes.bindMemory(to: UInt32.self).prefix(offeredCount).map(String.init).joined(separator: ",")
+        }
+        let suboffered = withUnsafeBytes(of: &diagnostic.suboffered) { bytes in
+            bytes.bindMemory(to: UInt32.self).prefix(subofferedCount).map(String.init).joined(separator: ",")
+        }
+        let cancelled = diagnostic.cancelled || state.lock.withLock { state.reason == .cancelledByUser }
+        // Every interpolated value is local numeric state or a random attempt ID.
+        // Never route upstream's variadic logs or peer-controlled strings here.
+        let summary = "Handshake attempt=\(handshakeAttemptID) elapsed_ms=\(diagnostic.elapsedMS) connected=\(connected ? 1 : 0) native_error=\(rm_vnc_error(handle)) phase=\(diagnostic.phase) last_success=\(diagnostic.lastSuccess) failure=\(diagnostic.failure) errno=\(diagnostic.systemError) openssl=\(diagnostic.opensslError) server=\(diagnostic.serverMajor).\(diagnostic.serverMinor) negotiated=\(diagnostic.negotiatedMajor).\(diagnostic.negotiatedMinor) offered=\(offered) offered_count=\(diagnostic.offeredCount) selected=\(diagnostic.selected) suboffered=\(suboffered) suboffered_count=\(diagnostic.subofferedCount) subtype=\(diagnostic.subtype) ard_bits=\(diagnostic.ardBits) cancelled=\(cancelled ? 1 : 0)"
+        if connected { log.info("\(summary, privacy: .public)") }
+        else { log.error("\(summary, privacy: .public)") }
+    }
+
     private func run() {
         autoreleasepool {
             var handle: OpaquePointer?
@@ -171,7 +190,9 @@ public final class VNCSession: AgentInputSession, @unchecked Sendable {
                     state.handle = created
                     if state.stopping { rm_vnc_abort(created) }
                 }
-                guard rm_vnc_connect(created) else {
+                let connected = rm_vnc_connect(created)
+                logHandshake(created, connected: connected)
+                guard connected else {
                     let reason: DisconnectReason = switch rm_vnc_error(created) {
                     case 1: .hostNotFound
                     case 2: .connectionRefused

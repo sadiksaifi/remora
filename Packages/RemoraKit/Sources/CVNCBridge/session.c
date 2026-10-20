@@ -16,6 +16,8 @@
 
 struct RMVNC {
     rfbClient *client;
+    RMVNCDiagnostic diagnostic;
+    double started;
     RMVNCCallbacks cb;
     void *user;
     pthread_mutex_t lock;
@@ -33,7 +35,12 @@ struct RMVNC {
 static char client_tag;
 static RMVNC *owner(rfbClient *c) { return rfbClientGetClientData(c, &client_tag); }
 static double now(void) { struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t); return t.tv_sec + t.tv_nsec / 1e9; }
-static bool failed(RMVNC *s, int error) { if (!s->error) s->error = error; return false; }
+static bool failed(RMVNC *s, int error) {
+    if (!s->error) s->error = error;
+    if (s->client) rfbRemoraDiagnosticFail(s->client, RFB_REMORA_PROTOCOL, 0, 0);
+    else if (!s->diagnostic.failure) s->diagnostic.failure = error == 6 ? RFB_REMORA_MEMORY : error == 3 ? RFB_REMORA_TIMEOUT : RFB_REMORA_IO;
+    return false;
+}
 static rfbBool allocate(rfbClient *c) {
     /* Limit remote-controlled allocations to 256 MiB. */
     if (c->width < 1 || c->height < 1 || (uint64_t)c->width * c->height > 67108864) return false;
@@ -120,6 +127,7 @@ static rfbBool trust(rfbClient *c, const char *subject, time_t before, time_t af
 RMVNC *rm_vnc_create(const char *host, uint16_t port, RMVNCCallbacks cb, void *user) {
     RMVNC *s = calloc(1, sizeof(*s));
     if (!s) return NULL;
+    s->started = now();
     s->fd = -1; s->wake[0] = s->wake[1] = -1;
     pthread_mutex_init(&s->lock, NULL);
     atomic_init(&s->cancelled, false);
@@ -169,7 +177,10 @@ static bool resolve(RMVNC *s, Resolution *r) {
 }
 static bool connect_socket(RMVNC *s) {
     Resolution r={0};
+    s->diagnostic.phase = RFB_REMORA_DNS;
     if (!resolve(s,&r)) return false;
+    s->diagnostic.lastSuccess = RFB_REMORA_DNS;
+    s->diagnostic.phase = RFB_REMORA_TCP;
     double deadline=now()+10;
     for (int i=0; i<r.count && !atomic_load(&s->cancelled) && now()<deadline; i++) {
         struct sockaddr *addr=(void*)&r.address[i];
@@ -189,17 +200,22 @@ static bool connect_socket(RMVNC *s) {
             struct pollfd fds[2]={{fd,POLLOUT,0},{s->wake[0],POLLIN,0}};
             if (poll(fds,2,100)>0 && fds[0].revents) { socklen_t n=sizeof(error); getsockopt(fd,SOL_SOCKET,SO_ERROR,&error,&n); break; }
         }
-        if (!error && !atomic_load(&s->cancelled)) return true;
+        if (!error && !atomic_load(&s->cancelled)) { s->diagnostic.lastSuccess = RFB_REMORA_TCP; return true; }
         pthread_mutex_lock(&s->lock); s->fd=-1; close(fd); pthread_mutex_unlock(&s->lock);
+        s->diagnostic.systemError = error;
         s->error=error==ECONNREFUSED ? 2 : 3;
     }
     return false;
 }
 bool rm_vnc_connect(RMVNC *s) {
-    if (!connect_socket(s)) return false;
+    if (!connect_socket(s)) {
+        if (!s->diagnostic.failure) s->diagnostic.failure = s->error == 3 ? RFB_REMORA_TIMEOUT : RFB_REMORA_IO;
+        return false;
+    }
     s->error=0;
     rfbClient *c=s->client=rfbGetClient(8,3,4);
     if (!c) return failed(s,6);
+    c->remoraDiagnostic.phase = c->remoraDiagnostic.lastSuccess = RFB_REMORA_TCP;
     rfbClientSetClientData(c,&client_tag,s);
     c->sock=s->fd;
     free(c->serverHost); c->serverHost=strdup(s->host); c->serverPort=s->port;
@@ -244,6 +260,22 @@ bool rm_vnc_step(RMVNC *s) {
     int ready=WaitForMessage(s->client,10000);
     if (ready < 0 || (ready && !HandleRFBServerMessage(s->client))) { cancel_resize(s); return false; }
     return !atomic_load(&s->cancelled) && reconcile_resize(s);
+}
+RMVNCDiagnostic rm_vnc_diagnostic(RMVNC *s) {
+    RMVNCDiagnostic result = s->diagnostic;
+    if (s->client) {
+        const rfbRemoraDiagnostic *d = &s->client->remoraDiagnostic;
+        result.phase = d->phase; result.lastSuccess = d->lastSuccess; result.failure = d->failure;
+        result.systemError = d->systemError; result.opensslError = d->opensslError;
+        result.serverMajor = d->serverMajor; result.serverMinor = d->serverMinor;
+        result.negotiatedMajor = d->negotiatedMajor; result.negotiatedMinor = d->negotiatedMinor;
+        result.offeredCount = d->offeredCount; result.selected = d->selected;
+        result.subofferedCount = d->subofferedCount; result.subtype = d->subtype; result.ardBits = d->ardBits;
+        for (unsigned i = 0; i < 32; i++) { result.offered[i] = d->offered[i]; result.suboffered[i] = d->suboffered[i]; }
+    }
+    result.elapsedMS = (uint64_t)((now() - s->started) * 1000);
+    result.cancelled = atomic_load(&s->cancelled);
+    return result;
 }
 int rm_vnc_error(RMVNC *s) { return s->error; }
 const char *rm_vnc_security(RMVNC *s) {
