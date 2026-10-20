@@ -199,7 +199,10 @@ public final class VNCSession: AgentInputSession, @unchecked Sendable {
                     case 3: .connectionTimedOut
                     case 4: .authenticationFailed
                     case 5: .certificateRejected
-                    default: .protocolError("The VNC handshake didn't complete. Remora doesn't support RSA-AES or anonymous TLS security.")
+                    // Diagnostic failure 2 is the vendor's local security-policy refusal.
+                    default: .protocolError(rm_vnc_diagnostic(created).failure == 2
+                        ? "Remora couldn't negotiate a supported security method with the VNC server."
+                        : "The VNC connection couldn't be set up.")
                     }
                     state.lock.withLock { if state.reason == nil { state.reason = reason } }
                     return
