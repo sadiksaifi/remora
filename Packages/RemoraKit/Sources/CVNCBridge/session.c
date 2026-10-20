@@ -134,6 +134,11 @@ static rfbBool service_input(rfbClient *c) {
     return accepted && !atomic_load(&s->cancelled);
 }
 void rm_vnc_enable_input_service(RMVNC *s) { s->client->RemoraServiceInput = service_input; }
+static rfbBool update_allowed(rfbClient *c, rfbBool early) {
+    RMVNC *s = owner(c);
+    return c->remoraDiagnostic.phase == RFB_REMORA_READY && !atomic_load(&s->cancelled) &&
+        (!early || (!s->resizeActive && !s->resizeReplyPending && !c->requestedResize));
+}
 static rfbBool allocate(rfbClient *c) {
     /* MetalDesktop accepts at most 16384 pixels per axis and 256 MiB total. */
     if (c->width > 16384 || c->height > 16384 ||
@@ -361,6 +366,7 @@ bool rm_vnc_connect(RMVNC *s) {
     c->format.redShift=16; c->format.greenShift=8; c->format.blueShift=0;
     c->format.redMax=c->format.greenMax=c->format.blueMax=255;
     c->RemoraDesktopSize=size; c->RemoraResizeReply=resize_reply;
+    c->RemoraUpdateAllowed=update_allowed;
     c->MallocFrameBuffer=allocate; c->GotFrameBufferUpdate=frame; c->GotCursorShape=cursor;
     c->GotXCutText=clipboard; c->GotXCutTextUTF8=clipboard_utf8;
     c->GetPassword=password; c->GetCredential=credential; c->GetX509CertFingerprintMismatchDecision=trust;

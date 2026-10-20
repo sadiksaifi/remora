@@ -18,11 +18,12 @@ def report(event, **fields):
 
 def serve():
     mode = sys.argv[1] if len(sys.argv) > 1 else 'refresh'
-    dimension = 256 if mode == 'paced-large' else 16
+    dimension = 256 if mode in ('paced-large', 'early-large') else 16
     target_width, target_height = (map(int, sys.argv[2:4]) if mode.startswith('size') else ((32, 16) if mode == 'perf' else (dimension, dimension)))
     width, height = (target_width, target_height) if mode == 'size' else (dimension, dimension)
     began = None
     intentional_close = threading.Event()
+    body_finished = threading.Event()
     deadline = time.monotonic() + 10
     with socket.socket() as listener:
         listener.bind(('127.0.0.1', 0))
@@ -56,6 +57,30 @@ def serve():
             pending = False
             marker = 1
             perf_started = False
+            request_set = []
+            preparation_index = 0
+            response_lock = threading.Lock()
+            if mode == 'prepare':
+                import zlib
+                from ard_peer import synthetic_zrle
+                encoder = zlib.compressobj()
+                prepared_payloads = [synthetic_zrle(16, encoder) for _ in range(3)]
+            def prepared_response(index):
+                started = time.monotonic()
+                report('preparation', index=index, at_us=round(started*1e6))
+                time.sleep(0.20)
+                with response_lock:
+                    try:
+                        payload = prepared_payloads[index-1]
+                        report('response_header', index=index, at_us=round(time.monotonic()*1e6))
+                        send(struct.pack('>BBHHHHHiI', 0, 0, 1, 0, 0, 16, 16, 16, len(payload)))
+                        for part in range(20):
+                            if part == 19: report('response_body_end', index=index, at_us=round(time.monotonic()*1e6))
+                            send(payload[len(payload)*part//20:len(payload)*(part+1)//20])
+                            time.sleep(0.015)
+                        report('response_done', index=index, at_us=round(time.monotonic()*1e6))
+                    except Exception:
+                        if not intentional_close.is_set(): report('error', code='preparation_writer')
             def update(full_frame=False):
                 nonlocal pending
                 if pending:
@@ -64,8 +89,14 @@ def serve():
                     w, h = (width, height) if full_frame else (1, 1)
                     pixels = bytes([1, 0, 0, 0]) * (w*h)
                     pixels = bytes([marker, 0, 0, 0]) + pixels[4:]
+                    if mode == 'early-geometry' and w == dimension+1:
+                        pixels = pixels[:-4] + bytes([7, 0, 0, 0])
                     send(struct.pack('>BBHHHHHi', 0, 0, 1, 0, 0, w, h, 0) + pixels)
-                    pending = False
+                    if mode == 'refresh-separate':
+                        request_set.remove(False) if full_frame else request_set.pop(0)
+                    else:
+                        request_set.clear()
+                    pending = bool(request_set)
             selector = selectors.DefaultSelector()
             selector.register(connection, selectors.EVENT_READ, 'network')
             selector.register(sys.stdin, selectors.EVENT_READ, 'command')
@@ -78,6 +109,11 @@ def serve():
                         command = json.loads(line)
                         if command['action'] == 'counts':
                             report('counts', full=full, incremental=incremental)
+                        elif command['action'] == 'invalid':
+                            send(struct.pack('>BBHHHHHiI', 0, 0, 1, 0, 0, 16, 16, 16, 4) + bytes([255])*4)
+                        elif command['action'] == 'damage':
+                            marker = 3
+                            update()
                         elif command['action'] == 'reset':
                             intentional_close.set()
                             connection.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack('ii', 1, 0))
@@ -123,23 +159,41 @@ def serve():
                         elif command['action'] == 'start':
                             assert pending
                             pending = False
+                            request_set.clear()
                             from ard_peer import synthetic_zrle
                             payload = synthetic_zrle(dimension)
+                            if mode.startswith('early-'):
+                                import zlib
+                                report('marker', value=zlib.decompressobj().decompress(payload)[1])
                             began = time.monotonic()
-                            send(struct.pack('>BBHHHHHiI', 0, 0, 1, 0, 0, dimension, dimension, 16, len(payload)))
+                            count = 65535 if mode == 'early-last' else (2 if mode in ('early-cursor', 'early-geometry') else 1)
+                            prefix = struct.pack('>BBH', 0, 0, count)
+                            if mode == 'early-cursor': prefix += struct.pack('>HHHHi', 0, 0, 0, 0, -239)
+                            prefix += struct.pack('>HHHHiI', 0, 0, dimension, dimension, 16, len(payload))
+                            if mode == 'early-empty':
+                                body_finished.set()
+                                send(bytes(4))
+                                report('body_done', ms=0)
+                                continue
+                            send(prefix)
                             def writer():
                                 try:
                                     chunk = len(payload) if mode == 'unpaced' else (4 if dimension == 16 else 512)
                                     for offset in range(0, len(payload), chunk):
+                                        if offset+chunk >= len(payload): body_finished.set()
                                         send(payload[offset:offset+chunk])
                                         if offset == 0:
                                             report('body_started')
                                         if mode != 'unpaced':
                                             time.sleep(0.007 if dimension == 16 else 0.004)
+                                    if mode == 'early-last': send(struct.pack('>HHHHi', 0, 0, 0, 0, -224))
+                                    if mode == 'early-geometry':
+                                        send(struct.pack('>HHHHi', 0, 0, dimension+1, dimension+1, -223))
                                     report('body_done', ms=round((time.monotonic()-began)*1000))
                                 except Exception as error:
                                     if not intentional_close.is_set():
                                         report('error', code=type(error).__name__)
+                            if mode == 'early-geometry': width = height = dimension+1
                             threading.Thread(target=writer, daemon=True).start()
                         elif command['action'] == 'stop':
                             return
@@ -153,11 +207,15 @@ def serve():
                     elif kind == 3:
                         request = exact(9)
                         pending = True
+                        request_set.append(bool(request[0]))
                         if request[0]:
                             incremental += 1
+                            if mode == 'prepare' and preparation_index < 3:
+                                preparation_index += 1
+                                threading.Thread(target=prepared_response, args=(preparation_index,), daemon=True).start()
                         else:
                             full += 1
-                            if mode in ('refresh', 'size', 'size-resize'):
+                            if mode in ('refresh', 'refresh-separate', 'prepare', 'size', 'size-resize') or mode.startswith('early-'):
                                 update(full_frame=True)
                         if mode == 'perf' and full+incremental == 1:
                             # Legal resize metadata causes a full request inside
@@ -167,7 +225,7 @@ def serve():
                             send(struct.pack('>BBHHHHHi', 0, 0, 1, 0, 0, 16, 16, 0) + bytes(2))
                             intentional_close.set()
                             connection.shutdown(socket.SHUT_WR)
-                        report('request', full=full, incremental=incremental)
+                        report('request', full=full, incremental=incremental, body_finished=body_finished.is_set(), ms=round((time.monotonic()-began)*1000) if began else 0, x=int.from_bytes(request[1:3], 'big'), y=int.from_bytes(request[3:5], 'big'), w=int.from_bytes(request[5:7], 'big'), h=int.from_bytes(request[7:9], 'big'))
                     elif kind == 4:
                         key_event = exact(7)
                         if key_event[0] and mode == 'refresh':

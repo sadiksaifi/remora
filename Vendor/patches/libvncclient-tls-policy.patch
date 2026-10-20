@@ -73,7 +73,7 @@
  typedef struct _rfbClient {
  	uint8_t* frameBuffer;
  	int width, height;
-@@ -506,7 +572,29 @@
+@@ -506,7 +572,32 @@
          rfbBool isUpdateRectManagedByLib;
  
          GetX509CertFingerprintMismatchDecisionProc GetX509CertFingerprintMismatchDecision;
@@ -84,6 +84,9 @@
 +        void (*RemoraPerformance)(struct _rfbClient*, unsigned int);
 +        uint64_t (*RemoraPerformanceClock)(void);
 +        rfbBool (*RemoraServiceInput)(struct _rfbClient*);
++        rfbBool (*RemoraUpdateAllowed)(struct _rfbClient*, rfbBool early);
++        /* Conservative eligibility guard after a full write, not an ACK. */
++        rfbBool remoraSkipEarlyUpdate;
 +        rfbBool remoraAuthFailed;
 +        rfbBool remoraResizeSupported;
 +        rfbBool remoraResizeProhibited;
@@ -585,15 +588,19 @@
    client->desktopName[client->si.nameLength] = 0;
  
    rfbClientLog("Desktop name \"%s\"\n",client->desktopName);
-@@ -1492,6 +1561,7 @@
+@@ -1492,8 +1561,11 @@
  rfbBool
  SendFramebufferUpdateRequest(rfbClient* client, int x, int y, int w, int h, rfbBool incremental)
  {
 +  rfbRemoraRuntimeStage(client, RFB_REMORA_WRITE);
    rfbFramebufferUpdateRequestMsg fur;
  
++  if (client->remoraDiagnostic.phase == RFB_REMORA_READY && client->RemoraUpdateAllowed &&
++      !client->RemoraUpdateAllowed(client, FALSE)) return FALSE;
    if (!SupportsClient2Server(client, rfbFramebufferUpdateRequest)) return TRUE;
-@@ -1508,9 +1578,16 @@
+ 
+   if (client->requestedResize) {
+@@ -1508,9 +1580,17 @@
    fur.w = rfbClientSwap16IfLE(w);
    fur.h = rfbClientSwap16IfLE(h);
  
@@ -610,10 +617,11 @@
 +    return FALSE;
 +  }
 +  if (client->RemoraPerformance) client->RemoraPerformance(client, RFB_REMORA_PERF_REQUEST_OK);
++  if (!incremental && client->RemoraUpdateAllowed) client->remoraSkipEarlyUpdate = TRUE;
    return TRUE;
  }
  
-@@ -1701,15 +1778,24 @@
+@@ -1701,15 +1781,24 @@
  rfbBool
  SendExtDesktopSize(rfbClient* client, uint16_t width, uint16_t height)
  {
@@ -639,7 +647,7 @@
      rfbClientLog("Sending dimensions %dx%d\n", width, height);
      sdm.type = rfbSetDesktopSize;
      sdm.width = rfbClientSwap16IfLE(width);
-@@ -1729,8 +1815,9 @@
+@@ -1729,8 +1818,9 @@
      if (!WriteToRFBServer(client, (char *)&sdm, sz_rfbSetDesktopSizeMsg)) return FALSE;
      if (!WriteToRFBServer(client, (char *)&screen, sz_rfbExtDesktopScreen)) return FALSE;
  
@@ -651,7 +659,7 @@
  
      client->requestedResize = FALSE;
  
-@@ -2054,11 +2141,14 @@
+@@ -2054,11 +2144,14 @@
  {
    rfbServerToClientMsg msg;
  
@@ -666,10 +674,15 @@
    switch (msg.type) {
  
    case rfbSetColourMapEntries:
-@@ -2097,29 +2187,58 @@
+@@ -2096,30 +2189,62 @@
+     int linesToRead;
      int bytesPerLine;
      int i;
- 
+-
++    rfbBool earlyRequested = FALSE;
++    rfbBool skipEarly = client->remoraSkipEarlyUpdate;
++    client->remoraSkipEarlyUpdate = FALSE;
++
 +    client->remoraPerf.sequence++;
 +    client->remoraPerf.active = client->remoraPerf.enabled;
 +    rfbRemoraRuntimeStage(client, RFB_REMORA_UPDATE);
@@ -729,7 +742,7 @@
  	if (!HandleCursorShape(client,
  			       rect.r.x, rect.r.y, rect.r.w, rect.r.h,
  			       rect.encoding)) {
-@@ -2149,6 +2268,7 @@
+@@ -2149,6 +2274,7 @@
  	if(!ResizeClientBuffer(client, rect.r.w, rect.r.h))
  	  return FALSE;
  	SendFramebufferUpdateRequest(client, 0, 0, rect.r.w, rect.r.h, FALSE);
@@ -737,7 +750,7 @@
  	rfbClientLog("Got new framebuffer size: %dx%d\n", rect.r.w, rect.r.h);
  	continue;
        }
-@@ -2165,24 +2285,44 @@
+@@ -2165,24 +2291,44 @@
          }
  
          screens = eds.numberOfScreens;
@@ -784,7 +797,7 @@
          client->requestedResize = FALSE;
  
          continue;
-@@ -2249,9 +2389,11 @@
+@@ -2249,9 +2395,11 @@
        /* rfbEncodingUltraZip is a collection of subrects.   x = # of subrects, and h is always 0 */
        if (rect.encoding != rfbEncodingUltraZip)
        {
@@ -796,15 +809,27 @@
  	      rfbClientLog("Rect too large: %dx%d at (%d, %d)\n",
  	  	  rect.r.w, rect.r.h, rect.r.x, rect.r.y);
  	      return FALSE;
-@@ -2272,6 +2414,7 @@
+@@ -2272,6 +2420,19 @@
          client->SoftCursorLockArea(client, rect.r.x, rect.r.y, rect.r.w, rect.r.h);
        }
  
 +      rfbRemoraRuntimeStage(client, RFB_REMORA_DECODE);
++      /* Only a sole ZRLE pixel rectangle is eligible. Its header rules out
++       * later layout metadata in this message. Move, do not add, the normal
++       * request; full/resize paths retain their existing write behavior. */
++      if (msg.fu.nRects == 1 && rect.encoding == rfbEncodingZRLE &&
++          rect.r.w && rect.r.h && !skipEarly && !client->requestedResize &&
++          SupportsClient2Server(client, rfbFramebufferUpdateRequest) &&
++          client->RemoraUpdateAllowed && client->RemoraUpdateAllowed(client, TRUE)) {
++        rfbRemoraRuntimeDiagnostic context = client->remoraRuntime;
++        if (!SendIncrementalFramebufferUpdateRequest(client)) return FALSE;
++        if (!client->remoraRuntime.failure) client->remoraRuntime = context;
++        earlyRequested = TRUE;
++      }
        switch (rect.encoding) {
  
        case rfbEncodingRaw: {
-@@ -2556,6 +2699,8 @@
+@@ -2556,6 +2717,8 @@
  	       handled = TRUE;
  
  	   if(!handled) {
@@ -813,17 +838,22 @@
  	     rfbClientLog("Unknown rect encoding %d\n",
  		 (int)rect.encoding);
  	     return FALSE;
-@@ -2569,6 +2714,9 @@
+@@ -2569,8 +2732,12 @@
        client->GotFrameBufferUpdate(client, rect.r.x, rect.r.y, rect.r.w, rect.r.h);
      }
  
+-    if (!SendIncrementalFramebufferUpdateRequest(client))
+-      return FALSE;
 +    if (client->remoraPerf.enabled && client->RemoraPerformance)
 +      client->RemoraPerformance(client, RFB_REMORA_PERF_PARSED);
 +    rfbRemoraRuntimeStage(client, RFB_REMORA_WRITE);
-     if (!SendIncrementalFramebufferUpdateRequest(client))
-       return FALSE;
++    if (!earlyRequested) {
++      if (!SendIncrementalFramebufferUpdateRequest(client)) return FALSE;
++    }
  
-@@ -2587,6 +2735,7 @@
+     if (client->FinishedFrameBufferUpdate)
+       client->FinishedFrameBufferUpdate(client);
+@@ -2587,6 +2754,7 @@
  
    case rfbServerCutText:
    {
@@ -831,7 +861,7 @@
      char *buffer;
  #ifdef LIBVNCSERVER_HAVE_LIBZ
      int32_t ilen; /* also as a flag, if ilen < 0, it is ext clipboard text */
-@@ -2732,6 +2881,8 @@
+@@ -2732,6 +2900,8 @@
  
        if(!handled) {
  	char buffer[256];
