@@ -1,10 +1,14 @@
 """Capture the public session fixture and validate only numeric signpost fields.
 
 Run from the repository root after swift test has built the test products:
-python3 Packages/RemoraKit/Tests/VNCSessionTests/Fixtures/verify_performance_trace.py <private-output-directory>
+python3 Packages/RemoraKit/Tests/VNCSessionTests/Fixtures/verify_performance_trace.py <private-output-directory> [--attach]
 Raw tool output stays in that directory. No TOC or environment is exported.
 """
 import json
+import os
+import queue
+import threading
+import uuid
 from pathlib import Path
 import re
 import subprocess
@@ -52,13 +56,19 @@ def rows(path):
         event[field] = number
     return sorted(events.values(), key=lambda row: row['at_ns'])
 
-def verify(events, expected):
+def verify(events, expected, attached=False):
     updates = [e for e in events if e['name'] == 'VNCUpdate']
-    assert len(updates) == 4, f'Expected 4 updates, observed {len(updates)}'
-    assert [e['seq'] for e in updates] == [1, 2, 3, 4]
+    count = 3 if attached else 4
+    assert len(updates) == count, f'Expected {count} updates, observed {len(updates)}'
+    assert [e['seq'] for e in updates] == ([2, 3, 4] if attached else [1, 2, 3, 4])
     assert len({e['client'] for e in events}) == 1
-    resize, pixels, empty, failed = updates
-    assert (resize['declared_rects'], resize['wire_rects'], resize['callbacks'], resize['logical_bytes'], resize['requests_during']) == (1, 1, 0, 16, 1)
+    pixels, empty, failed = updates[-3:]
+    if not attached:
+        resize = updates[0]
+        assert (resize['declared_rects'], resize['wire_rects'], resize['callbacks'], resize['logical_bytes'], resize['requests_during']) == (1, 1, 0, 16, 1)
+        assert resize['request_known'] == 1 and resize['req_to_ready_us'] >= 0
+    else:
+        assert (pixels['request_known'], pixels['prefetched_start'], pixels['req_to_ready_us']) == (0, 0, -1)
     assert (pixels['declared_rects'], pixels['wire_rects'], pixels['callbacks'], pixels['logical_bytes']) == (65535, 4, 2, expected['logical'])
     assert (pixels['area_sum'], pixels['area_max'], pixels['enc_mask'], pixels['inputs_during'], pixels['requests_during']) == (512, 256, 16, 3, 0)
     assert pixels['read_wait_us'] >= 200000
@@ -77,16 +87,17 @@ def verify(events, expected):
         assert all(rect[key] >= 0 for key in ('header_to_len_us', 'len_to_body_us', 'body_to_callback_us', 'rect_wait_us'))
     assert rects[0]['len_to_body_us'] >= 200000
     requests = [e for e in events if e['name'] == 'VNCRequest']
-    assert [(e['seq'], e['incremental'], e['full_area'], e['ok']) for e in requests] == [(0,0,1,1),(1,0,1,1),(1,1,1,1),(2,1,1,1),(3,1,1,1)]
+    expected_requests = [(2,1,1,1),(3,1,1,1)]
+    if not attached: expected_requests = [(0,0,1,1),(1,0,1,1),(1,1,1,1)] + expected_requests
+    assert [(e['seq'], e['incremental'], e['full_area'], e['ok']) for e in requests] == expected_requests
     inputs = [e for e in events if e['name'] == 'VNCInput']
     assert [(e['seq'], e['kind'], e['ok']) for e in inputs] == [(2,1,1),(2,1,1),(2,2,1)]
     assert max(e['at_ns'] for e in inputs) < rects[0]['at_ns']
-    assert all(e['ok'] == 1 for e in updates[:3])
-    for update in updates[:3]:
+    assert all(e['ok'] == 1 for e in updates[:-1])
+    for update in updates[:-1]:
         assert update['header_known'] == 1
         for field in ('ready_to_header_us', 'read_wait_us', 'cpu_us', 'callback_us'):
             assert 0 <= update[field] <= update['message_us']
-    assert resize['request_known'] == 1 and resize['req_to_ready_us'] >= 0
 
 def main():
     out = Path(sys.argv[1]).resolve()
@@ -98,29 +109,57 @@ def main():
     helper = swift.parent.parent/'libexec/swift/pm/swiftpm-testing-helper'
     bundle = next(Path('Packages/RemoraKit/.build').glob('out/Products/Debug/VNCSessionTests.xctest/Contents/MacOS/VNCSessionTests')).resolve()
     platform = developer/'Platforms/MacOSX.platform/Developer'
+    attached = len(sys.argv) > 2 and sys.argv[2] == '--attach'
+    arguments = [str(helper), '--test-bundle-path', str(bundle), '--testing-library', 'swift-testing', '--filter', 'vncPerformanceTraceFixture']
+    environment = {'DYLD_FRAMEWORK_PATH': str(platform/'Library/Frameworks'), 'DYLD_LIBRARY_PATH': str(platform/'usr/lib'), 'CFFIXED_USER_HOME': str(out/'test-home')}
+    command = ['xcrun', 'xctrace', 'record', '--instrument', 'os_signpost', '--recording-options', str(options), '--time-limit', '8s', '--output', str(out/'capture.trace')]
     with (out/'capture.log').open('w') as log:
-        capture = subprocess.run(['xcrun', 'xctrace', 'record', '--instrument', 'os_signpost', '--recording-options', str(options),
-            '--time-limit', '8s', '--output', str(out/'capture.trace'), '--target-stdout', str(out/'test.log'),
-            '--env', 'DYLD_FRAMEWORK_PATH='+str(platform/'Library/Frameworks'),
-            '--env', 'DYLD_LIBRARY_PATH='+str(platform/'usr/lib'),
-            '--env', 'CFFIXED_USER_HOME='+str(out/'test-home'),
-            '--launch', '--', str(helper), '--test-bundle-path', str(bundle), '--testing-library', 'swift-testing', '--filter', 'vncPerformanceTraceFixture'],
-            stdout=log, stderr=subprocess.STDOUT, timeout=25)
+        if attached:
+            test = subprocess.Popen(arguments, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, env=dict(os.environ, **environment, REMORA_TEST_TRACE_ATTACH='1'))
+            ready = queue.Queue()
+            def reader():
+                with (out/'test.log').open('w') as output:
+                    for line in test.stdout:
+                        output.write(line); output.flush()
+                        match = re.fullmatch(r'VNC_TRACE_ATTACH_PID=(\d+)\n', line)
+                        if match: ready.put(int(match[1]))
+            worker = threading.Thread(target=reader, daemon=True)
+            worker.start()
+            notifier = capture = None
+            try:
+                pid = ready.get(timeout=10)
+                notification = 'dev.sadiksaifi.Remora.trace-test.'+uuid.uuid4().hex
+                notifier = subprocess.Popen(['/usr/bin/notifyutil', '-1', notification], stdout=log, stderr=subprocess.STDOUT)
+                capture = subprocess.Popen(command + ['--attach', str(pid), '--notify-tracing-started', notification], stdout=log, stderr=subprocess.STDOUT)
+                assert notifier.wait(timeout=10) == 0, 'Tracing-start notification failed'
+                test.stdin.write('\n'); test.stdin.flush(); test.stdin.close()
+                assert capture.wait(timeout=20) == 0, 'Attached recording failed'
+                assert test.wait(timeout=10) == 0, 'Public fixture process failed'
+                worker.join(timeout=2)
+            finally:
+                for process in (capture, notifier, test):
+                    if process is not None and process.poll() is None:
+                        process.terminate(); process.wait(timeout=5)
+        else:
+            command += ['--target-stdout', str(out/'test.log')]
+            for key, value in environment.items(): command += ['--env', key+'='+value]
+            capture = subprocess.run(command + ['--launch', '--'] + arguments, stdout=log, stderr=subprocess.STDOUT, timeout=25)
     assert capture.returncode == 0, f'xctrace exit {capture.returncode}'
     output = (out/'test.log').read_text()
     assert re.search(r'Test run with 1 test.*passed', output), 'Public session fixture did not pass'
+    if attached: assert 'VNC_TRACE_ATTACHED=1' in output, 'Recording did not enable after connection'
     expected = {key: int(value) for key, value in re.findall(r'(first|second|logical)=(\d+)', output)}
     with (out/'export.log').open('w') as log:
         exported = subprocess.run(['xcrun', 'xctrace', 'export', '--input', str(out/'capture.trace'), '--xpath', '/trace-toc/run[@number="1"]/data/table[@schema="os-signpost-arg"]', '--output', str(out/'arguments.xml')], stdout=log, stderr=subprocess.STDOUT, timeout=20)
     assert exported.returncode == 0, f'export exit {exported.returncode}'
     events = rows(out/'arguments.xml')
     (out/'numeric-events.json').write_text(json.dumps(events, indent=2)+'\n')
-    verify(events, expected)
-    print(json.dumps({'pass': True, 'events': len(events), 'updates': 4, 'pixel_callbacks': 2, 'requests': 5, 'inputs': 3}))
+    verify(events, expected, attached)
+    print(json.dumps({'pass': True, 'attached_after_connect': attached, 'events': len(events), 'updates': 3 if attached else 4, 'pixel_callbacks': 2, 'requests': 2 if attached else 5, 'inputs': 3}))
 
 if __name__ == '__main__':
     try:
         main()
-    except (AssertionError, subprocess.TimeoutExpired) as error:
+    except (AssertionError, subprocess.TimeoutExpired, queue.Empty) as error:
         print(json.dumps({'pass': False, 'error': str(error)}))
         sys.exit(1)

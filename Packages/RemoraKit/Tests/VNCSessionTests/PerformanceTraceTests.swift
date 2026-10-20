@@ -1,4 +1,6 @@
 import Foundation
+import OSLog
+import os
 import RemoraCore
 import Testing
 @testable import VNCSession
@@ -6,6 +8,9 @@ import Testing
 /// Public protocol fixture used by the external xctrace verifier. OSLogStore
 /// does not retain DynamicTracing signposts on this SDK, even during capture.
 @Test @MainActor func vncPerformanceTraceFixture() async throws {
+    let attaching = ProcessInfo.processInfo.environment["REMORA_TEST_TRACE_ATTACH"] == "1"
+    let tracing = OSLog(subsystem: "dev.sadiksaifi.Remora", category: "DynamicTracing")
+    if attaching { #expect(!tracing.signpostsEnabled) }
     let peer = try SessionPeer(arguments: ["perf"])
     defer { peer.stop() }
     let frames = MarkerFrames()
@@ -15,6 +20,14 @@ import Testing
     defer { session.disconnect() }
     session.connect()
     _ = try await peer.wait("request", count: 3)
+    if attaching {
+        // Test-driver stdin is released only after xctrace's actual start
+        // notification. Category enablement alone can precede collection.
+        try FileHandle.standardOutput.write(contentsOf: Data("VNC_TRACE_ATTACH_PID=\(ProcessInfo.processInfo.processIdentifier)\n".utf8))
+        #expect(try FileHandle.standardInput.read(upToCount: 1) == Data([10]))
+        #expect(tracing.signpostsEnabled)
+        try FileHandle.standardOutput.write(contentsOf: Data("VNC_TRACE_ATTACHED=1\n".utf8))
+    }
     try peer.command("perf")
     _ = try await peer.wait("body_started")
     let agent = try #require(session.beginAgentInput())

@@ -48,6 +48,13 @@ static os_log_t performance_log(void) {
     dispatch_once(&once, ^{ log = os_log_create("dev.sadiksaifi.Remora", OS_LOG_CATEGORY_DYNAMIC_TRACING); });
     return log;
 }
+/* A DynamicTracing ID generated before attachment is NULL. Generate lazily
+ * at enabled event sites; retain each valid ID for this client's lifetime. */
+static os_signpost_id_t performance_id(RMVNC *s) {
+    if (s->performanceID == OS_SIGNPOST_ID_NULL)
+        s->performanceID = os_signpost_id_generate(performance_log());
+    return s->performanceID;
+}
 static uint64_t performance_clock(void) { return clock_gettime_nsec_np(CLOCK_UPTIME_RAW); }
 static uint64_t performance_cpu(void) {
     struct timespec t;
@@ -70,7 +77,7 @@ static void performance(rfbClient *c, unsigned event) {
     }
     bool ok = event == RFB_REMORA_PERF_REQUEST_OK;
     uint64_t end = performance_clock();
-    os_signpost_event_emit(performance_log(), owner(c)->performanceID, "VNCRequest",
+    os_signpost_event_emit(performance_log(), performance_id(owner(c)), "VNCRequest",
         "seq=%{public}llu incremental=%{public}u full_area=%{public}u write_us=%{public}lld ok=%{public}d",
         p->sequence, p->requestIncremental, p->requestFull, performance_us(end,p->requestStart), ok);
     if (p->enabled && p->active && !p->ended) p->requestsDuring++;
@@ -80,14 +87,14 @@ static void performance_input(RMVNC *s, unsigned kind, bool ok) {
     rfbRemoraPerformance *p = &s->client->remoraPerf;
     if (!os_signpost_enabled(performance_log())) { p->enabled = false; return; }
     if (ok && p->enabled && p->active && !p->ended) p->inputsDuring++;
-    os_signpost_event_emit(performance_log(), s->performanceID, "VNCInput",
+    os_signpost_event_emit(performance_log(), performance_id(s), "VNCInput",
         "seq=%{public}llu kind=%{public}u ok=%{public}d", p->sequence, kind, ok);
 }
 static void performance_update(RMVNC *s, bool ok) {
     rfbRemoraPerformance *p = &s->client->remoraPerf;
     if (!p->enabled || !p->active || !os_signpost_enabled(performance_log())) return;
     ok = ok && p->ended;
-    os_signpost_event_emit(performance_log(), s->performanceID, "VNCUpdate",
+    os_signpost_event_emit(performance_log(), performance_id(s), "VNCUpdate",
         "seq=%{public}llu ok=%{public}d declared_rects=%{public}u header_known=%{public}d wire_rects=%{public}u callbacks=%{public}u "
         "request_known=%{public}d prefetched_start=%{public}d req_to_ready_us=%{public}lld ready_to_header_us=%{public}lld message_us=%{public}lld "
         "read_wait_us=%{public}lld logical_bytes=%{public}lld buffered_end=%{public}lld cpu_us=%{public}lld callback_us=%{public}lld "
@@ -183,7 +190,7 @@ static void frame(rfbClient *c, int x, int y, int w, int h) {
             }
             p->callbacks++; p->areaSum += area; if (area > p->areaMax) p->areaMax = area;
             p->encMask |= (uint64_t)1 << bit;
-            os_signpost_event_emit(performance_log(), s->performanceID, "VNCPixelRect",
+            os_signpost_event_emit(performance_log(), performance_id(s), "VNCPixelRect",
                 "seq=%{public}llu index=%{public}d x=%{public}d y=%{public}d w=%{public}d h=%{public}d encoding=%{public}lld "
                 "rect_bytes=%{public}llu zrle_len=%{public}lld header_to_len_us=%{public}lld len_to_body_us=%{public}lld body_to_callback_us=%{public}lld rect_wait_us=%{public}llu",
                 p->sequence, c->remoraRuntime.rectIndex, x,y,w,h,(long long)c->remoraRuntime.encoding,
@@ -256,7 +263,6 @@ RMVNC *rm_vnc_create(const char *host, uint16_t port, RMVNCCallbacks cb, void *u
     RMVNC *s = calloc(1, sizeof(*s));
     if (!s) return NULL;
     s->started = now();
-    s->performanceID = os_signpost_id_generate(performance_log());
     s->fd = -1; s->wake[0] = s->wake[1] = -1;
     pthread_mutex_init(&s->lock, NULL);
     atomic_init(&s->cancelled, false);
