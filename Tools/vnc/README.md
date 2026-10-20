@@ -132,6 +132,10 @@ The operator did not positively identify a new TextEdit document, so document ed
 
 A signed `3011ac8` comparison verified the later display-demand and input-scheduling fixes. Ten input submissions had a median roundtrip of 93 ms, compared with 443 ms in the baseline. A comparable menu opening was visible by 856 ms, versus 2.34–2.75 seconds before. These are client-image observation bounds, not remote event or monitor timestamps. Some visible-window actions still had bounds approaching two seconds, and closing improvement was not established. The performance investigation remains open. Private measurements and their limits are under `.snap/vnc-macos-research/sluggishness-live-comparison/`.
 
+Signed `5ad9c4e` also overlaps the next incremental request with transfer of an eligible single-rectangle ZRLE update. The live trace recorded 217 successful updates with exactly one early request each, no duplicate trailers, and no empty updates or runtime failures. Median callback spacing was 201 ms versus 310 ms in the earlier sequential sample. Scene activity differed, so these are callback measurements, not a controlled display-FPS comparison.
+
+A focused visible check collected ten consecutive observations per action before inspecting them. The menu was fully open by 681 ms and fully closed by 475 ms, including automation overhead, with no multi-second persistence in this pair. There is no matched old-build human-input baseline or broad workload latency distribution. The updated signed app remains installed. Private trace and visible evidence are under `.snap/vnc-macos-research/early-request-live-ab/` and `.snap/vnc-macos-research/early-request-visible-batch/`.
+
 ## Stop and clean up
 
 Keep the target running while reviews need retesting. When retesting is complete:
