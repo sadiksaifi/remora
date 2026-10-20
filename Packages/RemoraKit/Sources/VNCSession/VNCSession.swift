@@ -84,7 +84,7 @@ public final class VNCSession: AgentInputSession, @unchecked Sendable {
     public var negotiatedSecurity: String? { state.lock.withLock { state.security } }
 
     public func requestResize(_ size: DesktopSize, scale: Double) {
-        guard configuration.allowsDynamicResize, (1...65535).contains(size.width), (1...65535).contains(size.height),
+        guard configuration.allowsDynamicResize, (1...16384).contains(size.width), (1...16384).contains(size.height),
               UInt64(size.width) * UInt64(size.height) <= 67_108_864 else { return }
         state.lock.withLock {
             if state.connected, !state.stopping, state.resizeSupported { state.resize = size }
@@ -170,6 +170,11 @@ public final class VNCSession: AgentInputSession, @unchecked Sendable {
         let summary = "Handshake attempt=\(handshakeAttemptID) elapsed_ms=\(diagnostic.elapsedMS) connected=\(connected ? 1 : 0) native_error=\(rm_vnc_error(handle)) phase=\(diagnostic.phase) last_success=\(diagnostic.lastSuccess) failure=\(diagnostic.failure) errno=\(diagnostic.systemError) openssl=\(diagnostic.opensslError) server=\(diagnostic.serverMajor).\(diagnostic.serverMinor) negotiated=\(diagnostic.negotiatedMajor).\(diagnostic.negotiatedMinor) offered=\(offered) offered_count=\(diagnostic.offeredCount) selected=\(diagnostic.selected) suboffered=\(suboffered) suboffered_count=\(diagnostic.subofferedCount) subtype=\(diagnostic.subtype) ard_bits=\(diagnostic.ardBits) cancelled=\(cancelled ? 1 : 0)"
         if connected { log.info("\(summary, privacy: .public)") }
         else { log.error("\(summary, privacy: .public)") }
+    }
+
+    private func unsupportedSizeDetail(width: Int32, height: Int32) -> String {
+        guard width > 0, height > 0 else { return "The VNC desktop is larger than Remora can display." }
+        return "The VNC desktop is \(width) × \(height) pixels, which is larger than Remora can display."
     }
 
     private func logRuntimeFailure(_ handle: OpaquePointer) {
@@ -263,12 +268,14 @@ public final class VNCSession: AgentInputSession, @unchecked Sendable {
                 let connected = rm_vnc_connect(created)
                 logHandshake(created, connected: connected)
                 guard connected else {
+                    let diagnostic = rm_vnc_diagnostic(created)
                     let reason: DisconnectReason = switch rm_vnc_error(created) {
                     case 1: .hostNotFound
                     case 2: .connectionRefused
                     case 3: .connectionTimedOut
                     case 4: .authenticationFailed
                     case 5: .certificateRejected
+                    case 7: .protocolError(unsupportedSizeDetail(width: diagnostic.framebufferWidth, height: diagnostic.framebufferHeight))
                     // Diagnostic failure 2 is the vendor's local security-policy refusal.
                     default: .protocolError(rm_vnc_diagnostic(created).failure == 2
                         ? "Remora couldn't negotiate a supported security method with the VNC server."
@@ -301,7 +308,11 @@ public final class VNCSession: AgentInputSession, @unchecked Sendable {
                     if let size = pending.1, !rm_vnc_resize(created, UInt16(size.width), UInt16(size.height)) { throw Failure("The VNC resize submission failed.") }
                     if pending.2, !rm_vnc_refresh(created) { throw Failure("The VNC framebuffer refresh failed.") }
                     guard rm_vnc_step(created) else {
-                        state.lock.withLock { if state.reason == nil { state.reason = .serverEndedSession("The VNC connection closed or a framebuffer read failed.") } }
+                        let diagnostic = rm_vnc_runtime_diagnostic(created)
+                        let detail = diagnostic.failure == 18
+                            ? unsupportedSizeDetail(width: diagnostic.framebufferWidth, height: diagnostic.framebufferHeight)
+                            : "The VNC connection closed or a framebuffer read failed."
+                        state.lock.withLock { if state.reason == nil { state.reason = .serverEndedSession(detail) } }
                         break
                     }
                     let resize = configuration.allowsDynamicResize && rm_vnc_resize_supported(created)

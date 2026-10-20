@@ -19,7 +19,8 @@ def report(event, **fields):
 def serve():
     mode = sys.argv[1] if len(sys.argv) > 1 else 'refresh'
     dimension = 256 if mode == 'paced-large' else 16
-    width, height = dimension, dimension
+    target_width, target_height = (map(int, sys.argv[2:4]) if mode.startswith('size') else (dimension, dimension))
+    width, height = (target_width, target_height) if mode == 'size' else (dimension, dimension)
     began = None
     intentional_close = threading.Event()
     deadline = time.monotonic() + 10
@@ -87,6 +88,11 @@ def serve():
                             connection.shutdown(socket.SHUT_WR)
                             report('closed')
                             return
+                        elif command['action'] == 'resize':
+                            assert pending
+                            pending = False
+                            send(struct.pack('>BBHHHHHi', 0, 0, 1, 0, 0, target_width, target_height, -223))
+                            width, height = target_width, target_height
                         elif command['action'] == 'start':
                             assert pending
                             pending = False
@@ -124,7 +130,7 @@ def serve():
                             incremental += 1
                         else:
                             full += 1
-                            if mode == 'refresh':
+                            if mode in ('refresh', 'size', 'size-resize'):
                                 update(full_frame=True)
                         report('request', full=full, incremental=incremental)
                     elif kind == 4:

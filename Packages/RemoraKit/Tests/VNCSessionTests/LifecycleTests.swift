@@ -210,6 +210,10 @@ private struct DiscardFrames: FrameSink { func consume(_ frame: BorrowedFrame) {
             if capabilitySeen { #expect(supported) }
             if !capabilitySeen, supported {
                 capabilitySeen = true
+                session.requestResize(.init(width: 16385, height: 1), scale: 1)
+                session.requestResize(.init(width: 1, height: 16385), scale: 1)
+                try await Task.sleep(for: .milliseconds(30))
+                #expect(peer.resizeRequests().isEmpty)
                 session.requestResize(.init(width: 32, height: 16), scale: 1)
                 try await Task.sleep(for: .milliseconds(30))
                 peer.sendLayout(width: 32, origin: 1, result: 4)

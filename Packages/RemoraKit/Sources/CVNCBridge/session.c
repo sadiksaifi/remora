@@ -62,8 +62,15 @@ static rfbBool service_input(rfbClient *c) {
 }
 void rm_vnc_enable_input_service(RMVNC *s) { s->client->RemoraServiceInput = service_input; }
 static rfbBool allocate(rfbClient *c) {
-    /* Limit remote-controlled allocations to 256 MiB. */
-    if (c->width < 1 || c->height < 1 || (uint64_t)c->width * c->height > 67108864) {
+    /* MetalDesktop accepts at most 16384 pixels per axis and 256 MiB total. */
+    if (c->width > 16384 || c->height > 16384 ||
+        (c->width > 0 && c->height > 0 && (uint64_t)c->width * c->height > 67108864)) {
+        owner(c)->error = 7;
+        rfbRemoraRuntimeStage(c, RFB_REMORA_RUNTIME_ALLOCATE);
+        rfbRemoraDiagnosticFail(c, RFB_REMORA_DESKTOP_SIZE, 0, 0);
+        return false;
+    }
+    if (c->width < 1 || c->height < 1) {
         rfbRemoraRuntimeStage(c, RFB_REMORA_RUNTIME_ALLOCATE);
         rfbRemoraRuntimeFail(c, RFB_REMORA_ALLOCATION, 0, 0);
         return false;
@@ -308,6 +315,7 @@ RMVNCDiagnostic rm_vnc_diagnostic(RMVNC *s) {
         const rfbRemoraDiagnostic *d = &s->client->remoraDiagnostic;
         result.phase = d->phase; result.lastSuccess = d->lastSuccess; result.failure = d->failure;
         result.systemError = d->systemError; result.opensslError = d->opensslError;
+        result.framebufferWidth = s->client->width; result.framebufferHeight = s->client->height;
         result.serverMajor = d->serverMajor; result.serverMinor = d->serverMinor;
         result.negotiatedMajor = d->negotiatedMajor; result.negotiatedMinor = d->negotiatedMinor;
         result.offeredCount = d->offeredCount; result.selected = d->selected;
