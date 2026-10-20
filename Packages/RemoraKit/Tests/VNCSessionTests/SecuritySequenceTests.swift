@@ -34,14 +34,16 @@ def exact(c, count):
         data += part
     return data
 
-for mode in ['classic', 'tls', 'classic', 'tls']:
+for index, mode in enumerate(['classic', 'tls', 'classic', 'tls', 'tls-reject']):
     c, _ = listener.accept()
     c.settimeout(3)
     try:
         c.sendall(b'RFB 003.008\n')
         assert exact(c, 12) == b'RFB 003.008\n'
         scheme = 2 if mode == 'classic' else 19
-        c.sendall(bytes([1, scheme]))
+        offers = [2] if mode == 'classic' else [30, 33, 36, 2, 35, 19, 250]
+        if index == 3: offers.reverse()
+        c.sendall(bytes([len(offers)] + offers))
         assert exact(c, 1) == bytes([scheme])
         if mode == 'classic':
             c.sendall(bytes(range(16)))
@@ -58,6 +60,19 @@ for mode in ['classic', 'tls', 'classic', 'tls']:
             user_len, pass_len = struct.unpack('>II', exact(c, 8))
             assert exact(c, user_len) == b'synthetic'
             assert exact(c, pass_len) == b'test-only'
+        if mode == 'tls-reject':
+            reason = b'synthetic TLS rejection'
+            c.sendall(struct.pack('>II', 1, len(reason)) + reason)
+            assert c.recv(1) == b'' # No alternate security exchange on this connection.
+            listener.settimeout(0.25)
+            try:
+                extra, _ = listener.accept()
+            except socket.timeout:
+                pass
+            else:
+                extra.close()
+                raise AssertionError('unexpected fallback connection')
+            continue
         c.sendall(bytes(4)) # SecurityResult success
         exact(c, 1) # ClientInit
         c.sendall(struct.pack('>HHBBBBHHHBBBBBBI', 16, 16, 32, 24, 0, 1,
@@ -83,17 +98,19 @@ listener.close()
     let port = try #require(UInt16(portText.trimmingCharacters(in: .whitespacesAndNewlines)))
     var connected: [String] = []
     var trustDecisions = 0
-    for expected in ["VNC authentication (unencrypted desktop)", "VeNCrypt X509Plain", "VNC authentication (unencrypted desktop)", "VeNCrypt X509Plain"] {
+    for (index, expected) in ["VNC authentication (unencrypted desktop)", "VeNCrypt X509Plain", "VNC authentication (unencrypted desktop)", "VeNCrypt X509Plain", "TLS authentication rejection"].enumerated() {
         let session = VNCSession(configuration: .init(host: "127.0.0.1", port: port, username: "synthetic", password: "test-only", desktopSize: .init(width: 16, height: 16)), frameSink: SecuritySequenceFrames(), certificateStoreURL: directory.appendingPathComponent("pins"))
         let fallback = Task { do { try await Task.sleep(for: .seconds(3)); session.disconnect() } catch {} }
         defer { fallback.cancel(); session.disconnect() }
         var didConnect = false
+        var terminal: DisconnectReason?
         session.connect()
         for await event in session.events {
             switch event {
             case .trustChallenge(let challenge):
                 trustDecisions += 1
                 challenge.responder.respond(.trust)
+            case .stateChanged(.disconnected(let reason)): terminal = reason
             case .stateChanged(.connected):
                 didConnect = true
                 connected.append(try #require(session.negotiatedSecurity))
@@ -101,8 +118,13 @@ listener.close()
             default: break
             }
         }
-        #expect(didConnect, "Expected a complete \(expected) session after the preceding session closed.")
-        if !didConnect { break }
+        if index == 4 {
+            #expect(!didConnect)
+            #expect(terminal == .authenticationFailed)
+        } else {
+            #expect(didConnect, "Expected a complete \(expected) session after the preceding session closed.")
+            if !didConnect { break }
+        }
     }
     #expect(connected == ["VNC authentication (unencrypted desktop)", "VeNCrypt X509Plain", "VNC authentication (unencrypted desktop)", "VeNCrypt X509Plain"])
     #expect(trustDecisions == 1) // The second TLS connection uses the isolated saved pin.

@@ -72,7 +72,13 @@ def serve_once(offer_mode, outcome, port):
     known_answer_check()
     report = {'synthetic_only': True, 'attempts': 0, 'stage': 'listen', 'credentials_valid': False}
     deadline = time.monotonic() + 10
-    offers = OFFERS if offer_mode == 'apple-mixed' else [30]
+    offers = {
+        'apple-mixed': OFFERS,
+        'ard-only': [30],
+        'unknown-ard': [30, 250],
+        'apple-vnc': [33, 35, 36, 2],
+        'apple-none': [33, 35, 36, 1],
+    }[offer_mode]
     try:
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
             listener.bind(('127.0.0.1', port))

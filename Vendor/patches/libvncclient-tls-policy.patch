@@ -121,7 +121,7 @@
        if (client->major==3 && client->minor>7)
        {
          /* we have an error following */
-@@ -450,117 +488,57 @@
+@@ -450,117 +488,61 @@
        rfbClientLog("VNC authentication failed\n");
        return FALSE;
      case rfbVncAuthTooMany:
@@ -170,18 +170,22 @@
 +    rfbRemoraDiagnosticComplete(client, RFB_REMORA_OFFERS);
 +    rfbRemoraDiagnosticBegin(client, RFB_REMORA_SELECTION);
 +    uint8_t selected = 0;
-+    rfbBool unknown = FALSE, vnc = FALSE, none = FALSE, ard = FALSE;
++    rfbBool unknown = FALSE, vnc = FALSE, none = FALSE, ard = FALSE, apple = FALSE;
 +    for (unsigned i = 0; i < count; i++) {
 +        rfbClientLog("Offered security type %u\n", offers[i]);
 +        switch (offers[i]) {
 +            case rfbVeNCrypt: selected = rfbVeNCrypt; break;
 +            case rfbARD: ard = TRUE; break;
++            /* Known Apple alternatives may coexist with baseline ARD. They do
++             * not authorize classic VNC/None when ARD is unavailable. */
++            case 33: case 35: case 36: apple = TRUE; break;
 +            case rfbVncAuth: vnc = TRUE; break;
 +            case rfbNoAuth: none = TRUE; break;
 +            default: unknown = TRUE; break;
 +        }
 +    }
-+    if (!selected && !unknown) selected = ard ? rfbARD : vnc ? rfbVncAuth : none ? rfbNoAuth : 0;
++    if (!selected && !unknown && (!apple || ard))
++        selected = ard ? rfbARD : vnc ? rfbVncAuth : none ? rfbNoAuth : 0;
 +    if (!selected) {
 +        rfbRemoraDiagnosticFail(client, RFB_REMORA_POLICY, 0, 0);
 +        rfbClientLog("Unsupported security offer; refusing unencrypted fallback (RSA-AES/anonymous TLS are unsupported).\n");
@@ -275,7 +279,7 @@
      return TRUE;
  }
  
-@@ -571,6 +549,7 @@
+@@ -571,6 +553,7 @@
      char *passwd=NULL;
      int i;
  
@@ -283,7 +287,7 @@
      if (!ReadFromRFBServer(client, (char *)challenge, CHALLENGESIZE)) return FALSE;
  
      if (client->serverPort!=-1) { /* if not playing a vncrec file */
-@@ -578,6 +557,7 @@
+@@ -578,6 +561,7 @@
          passwd = client->GetPassword(client);
  
        if ((!passwd) || (strlen(passwd) == 0)) {
@@ -291,7 +295,7 @@
          rfbClientLog("Reading password failed\n");
          return FALSE;
        }
-@@ -585,6 +565,7 @@
+@@ -585,6 +569,7 @@
          passwd[8] = '\0';
        }
  
@@ -299,7 +303,7 @@
        rfbClientEncryptBytes(challenge, passwd);
  
        /* Lose the password from memory */
-@@ -815,6 +796,8 @@
+@@ -815,6 +800,8 @@
    rfbCredential *cred = NULL;
    rfbBool result = FALSE;
  
@@ -308,7 +312,7 @@
    /* Step 1: Read the authentication material from the socket.
       A two-byte generator value, a two-byte key length value. */
    if (!ReadFromRFBServer(client, (char *)gen, 2)) {
-@@ -826,10 +809,10 @@
+@@ -826,10 +813,10 @@
        goto out;
    }
    keylen = 256*len[0]+len[1]; /* convert from char[] to int */
@@ -321,7 +325,7 @@
  
    resp = mod+keylen;
    pub = resp+keylen;
-@@ -847,41 +830,59 @@
+@@ -847,41 +834,59 @@
        goto out;
    }
  
@@ -381,7 +385,7 @@
    passwordLen = strlen(cred->userCredential.password)+1;
    usernameLen = strlen(cred->userCredential.username)+1;
    if (passwordLen > sizeof(userpass)/2)
-@@ -895,10 +896,15 @@
+@@ -895,10 +900,15 @@
    /* Step 6: Encrypt the plaintext credentials with the 128-bit MD5 hash
       from step 4, using the AES 128-bit symmetric cipher in electronic
       codebook (ECB) mode. Use no further padding for this block cipher. */
@@ -397,7 +401,7 @@
  
    /* Step 7: Write the ciphertext from step 6 to the stream.
       Write the generated DH public key to the stream. */
-@@ -906,6 +912,8 @@
+@@ -906,6 +916,8 @@
        goto out;
    if (!WriteToRFBServer(client, (char *)pub, keylen))
        goto out;
@@ -406,7 +410,7 @@
  
    /* Handle the SecurityResult message */
    if (!rfbHandleAuthResult(client))
-@@ -975,6 +983,7 @@
+@@ -975,6 +987,7 @@
    if (client->listenSpecified)
      errorMessageOnReadFailure = FALSE;
  
@@ -414,7 +418,7 @@
    if (!ReadFromRFBServer(client, pv, sz_rfbProtocolVersionMsg)) return FALSE;
  
    errorMessageOnReadFailure = TRUE;
-@@ -982,11 +991,15 @@
+@@ -982,11 +995,15 @@
    pv[sz_rfbProtocolVersionMsg] = 0;
  
    if (sscanf(pv,rfbProtocolVersionFormat,&major,&minor) != 2) {
@@ -430,7 +434,7 @@
    DefaultSupportedMessages(client);
    client->major = major;
    client->minor = minor;
-@@ -1030,7 +1043,11 @@
+@@ -1030,7 +1047,11 @@
  
    sprintf(pv,rfbProtocolVersionFormat,client->major,client->minor);
  
@@ -442,7 +446,7 @@
  
  
    /* 3.7 and onwards sends a # of security types first */
-@@ -1040,8 +1057,19 @@
+@@ -1040,8 +1061,19 @@
    }
    else
    {
@@ -462,7 +466,7 @@
    }
    
    rfbClientLog("Selected Security Scheme %d\n", authScheme);
-@@ -1199,10 +1227,13 @@
+@@ -1199,10 +1231,13 @@
      return FALSE;
    }
  
@@ -476,7 +480,7 @@
    if (!ReadFromRFBServer(client, (char *)&client->si, sz_rfbServerInitMsg)) return FALSE;
  
    client->si.framebufferWidth = rfbClientSwap16IfLE(client->si.framebufferWidth);
-@@ -1213,12 +1244,14 @@
+@@ -1213,12 +1248,14 @@
    client->si.nameLength = rfbClientSwap32IfLE(client->si.nameLength);
  
    if (client->si.nameLength > 1<<20) {
@@ -491,7 +495,7 @@
      rfbClientLog("Error allocating memory for desktop name, %lu bytes\n",
              (unsigned long)client->si.nameLength);
      return FALSE;
-@@ -1226,6 +1259,7 @@
+@@ -1226,6 +1263,7 @@
  
    if (!ReadFromRFBServer(client, client->desktopName, client->si.nameLength)) return FALSE;
  
@@ -499,7 +503,7 @@
    client->desktopName[client->si.nameLength] = 0;
  
    rfbClientLog("Desktop name \"%s\"\n",client->desktopName);
-@@ -1704,12 +1738,20 @@
+@@ -1704,12 +1742,20 @@
    rfbSetDesktopSizeMsg sdm;
    rfbExtDesktopScreen screen;
  
@@ -521,7 +525,7 @@
      rfbClientLog("Sending dimensions %dx%d\n", width, height);
      sdm.type = rfbSetDesktopSize;
      sdm.width = rfbClientSwap16IfLE(width);
-@@ -1729,8 +1771,9 @@
+@@ -1729,8 +1775,9 @@
      if (!WriteToRFBServer(client, (char *)&sdm, sz_rfbSetDesktopSizeMsg)) return FALSE;
      if (!WriteToRFBServer(client, (char *)&screen, sz_rfbExtDesktopScreen)) return FALSE;
  
@@ -533,7 +537,7 @@
  
      client->requestedResize = FALSE;
  
-@@ -2149,6 +2192,7 @@
+@@ -2149,6 +2196,7 @@
  	if(!ResizeClientBuffer(client, rect.r.w, rect.r.h))
  	  return FALSE;
  	SendFramebufferUpdateRequest(client, 0, 0, rect.r.w, rect.r.h, FALSE);
@@ -541,7 +545,7 @@
  	rfbClientLog("Got new framebuffer size: %dx%d\n", rect.r.w, rect.r.h);
  	continue;
        }
-@@ -2165,24 +2209,44 @@
+@@ -2165,24 +2213,44 @@
          }
  
          screens = eds.numberOfScreens;

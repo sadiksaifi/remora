@@ -11,15 +11,18 @@ private final class DiagnosticFrames: FrameSink, @unchecked Sendable {
     var count: Int { lock.withLock { frames } }
 }
 
-@Test @MainActor func vncHandshakeFailureDiagnosticsReachTheLocalLogWithoutChangingPolicy() async throws {
+@Test @MainActor func vncAppleSelectionAndHandshakeDiagnosticsReachTheLocalLog() async throws {
     // Independently served protocol boundaries: policy, transport EOF, local
     // crypto failure, and a fully validated ARD exchange followed by init EOF.
-    for (offers, outcome, phase, lastSuccess, failure, selection) in [
-        ("apple-mixed", "expect-policy-reject", 6, 5, 2, 0),
-        ("ard-only", "close-after-selection", 9, 6, 9, 30),
-        ("ard-only", "crypto-failure", 10, 9, 5, 30),
-        ("ard-only", "server-init-eof", 18, 17, 9, 30),
-        ("ard-only", "success", 22, 22, 0, 30)
+    for (offers, outcome, phase, lastSuccess, failure, selection, expectedOffers) in [
+        ("apple-mixed", "success", 22, 22, 0, 30, "30,33,36,2,35"),
+        ("unknown-ard", "expect-policy-reject", 6, 5, 2, 0, "30,250"),
+        ("apple-vnc", "expect-policy-reject", 6, 5, 2, 0, "33,35,36,2"),
+        ("apple-none", "expect-policy-reject", 6, 5, 2, 0, "33,35,36,1"),
+        ("ard-only", "close-after-selection", 9, 6, 9, 30, "30"),
+        ("ard-only", "crypto-failure", 10, 9, 5, 30, "30"),
+        ("ard-only", "server-init-eof", 18, 17, 9, 30, "30"),
+        ("ard-only", "success", 22, 22, 0, 30, "30")
     ] {
         let started = Date()
         let peer = Process()
@@ -96,7 +99,7 @@ private final class DiagnosticFrames: FrameSink, @unchecked Sendable {
         #expect(Int(fields["selected"] ?? "") == selection)
         #expect(fields["server"] == "3.889")
         #expect(fields["negotiated"] == "3.8")
-        #expect(fields["offered"] == (offers == "apple-mixed" ? "30,33,36,2,35" : "30"))
+        #expect(fields["offered"] == expectedOffers)
         if outcome == "crypto-failure" {
             #expect(fields["ard_bits"] == "256")
             #expect(UInt64(fields["openssl"] ?? "") ?? 0 != 0)
