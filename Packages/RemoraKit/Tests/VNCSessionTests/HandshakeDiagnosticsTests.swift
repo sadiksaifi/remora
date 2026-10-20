@@ -71,7 +71,7 @@ private final class DiagnosticFrames: FrameSink, @unchecked Sendable {
         let attemptID = session.handshakeAttemptID
         // Unified-log enumeration is synchronous and can take seconds. Keep it
         // off MainActor so other public-session timing/cancellation tests run.
-        let messages = try await Task.detached {
+        let attemptMessages = try await Task.detached {
             let store = try OSLogStore(scope: .currentProcessIdentifier)
             let predicate = NSPredicate(format: "subsystem == %@ AND category == %@", "dev.sadiksaifi.Remora", "VNC")
             let deadline = ContinuousClock.now.advanced(by: .seconds(2))
@@ -79,12 +79,14 @@ private final class DiagnosticFrames: FrameSink, @unchecked Sendable {
             repeat {
                 messages = try store.getEntries(at: store.position(date: started), matching: predicate)
                     .compactMap { ($0 as? OSLogEntryLog)?.composedMessage }
-                    .filter { $0.contains("attempt=\(attemptID)") }
+                    .filter { $0.contains("attempt=\(attemptID) ") }
                 if !messages.isEmpty { break }
                 try await Task.sleep(for: .milliseconds(25))
             } while ContinuousClock.now < deadline
             return messages
         }.value
+        if outcome != "success" { #expect(!attemptMessages.contains(where: { $0.hasPrefix("Runtime failure ") })) }
+        let messages = attemptMessages.filter { $0.hasPrefix("Handshake ") }
         #expect(messages.count == 1)
         guard let message = messages.first else { continue }
         print("Observed VNC diagnostic: \(message)")
@@ -105,5 +107,96 @@ private final class DiagnosticFrames: FrameSink, @unchecked Sendable {
             #expect(UInt64(fields["openssl"] ?? "") ?? 0 != 0)
         }
         for forbidden in ["fixture-user", "fixture-password", "synthetic-ard-peer", "synthetic fixture rejection", "127.0.0.1"] { #expect(!message.contains(forbidden)) }
+    }
+}
+
+
+@Test @MainActor func vncRuntimeFailuresReachTheLocalLogWithoutLosingTheirFirstCause() async throws {
+    // Synthetic protocol faults prove diagnostic attribution, not Mac behavior.
+    for (outcome, failure, stage, operation, messageType, encoding, x, callbacks) in [
+        ("runtime-message", 11, 2, 0, 199, -2_147_483_649, 0, 0),
+        ("runtime-encoding", 12, 6, 0, 0, 123456, 0, 0),
+        ("runtime-bounds", 13, 5, 0, 0, 0, 12, 0),
+        ("runtime-partial", 9, 6, 1, 0, 0, 0, 0),
+        ("runtime-decoder", 14, 6, 0, 0, 7, 0, 0),
+        ("runtime-success", 9, 2, 1, -1, -2_147_483_649, 0, 1)
+    ] {
+        let started = Date()
+        let peer = Process()
+        peer.executableURL = URL(fileURLWithPath: "/usr/bin/python3")
+        let script = try #require(Bundle.module.url(forResource: "ard_peer", withExtension: "py", subdirectory: "Fixtures"))
+        peer.arguments = ["-u", script.path, "ard-only", outcome]
+        let output = Pipe()
+        peer.standardOutput = output
+        try peer.run()
+        defer { if peer.isRunning { peer.terminate(); peer.waitUntilExit() } }
+        var line = Data()
+        while let byte = try output.fileHandleForReading.read(upToCount: 1), !byte.isEmpty, byte != Data([10]) { line.append(byte) }
+        let hello = try #require(JSONSerialization.jsonObject(with: line) as? [String: Int])
+        let port = UInt16(try #require(hello["loopback_port"]))
+        let frames = DiagnosticFrames()
+        let pins = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: pins) }
+        let session = VNCSession(configuration: .init(host: "127.0.0.1", port: port, username: "fixture-user", password: "fixture-password", desktopSize: .init(width: 16, height: 16)), frameSink: frames, certificateStoreURL: pins)
+        let fallback = Task { do { try await Task.sleep(for: .seconds(3)); session.disconnect() } catch {} }
+        defer { fallback.cancel(); session.disconnect() }
+        var connected = false
+        var reason: DisconnectReason?
+        session.connect()
+        for await event in session.events {
+            switch event {
+            case .stateChanged(.connected): connected = true
+            case .stateChanged(.disconnected(let failure)): reason = failure
+            default: break
+            }
+        }
+        #expect(connected)
+        #expect(frames.count == callbacks)
+        if case .serverEndedSession = reason {} else { Issue.record("Runtime diagnostic must preserve the existing session-ended reason.") }
+        peer.waitUntilExit()
+        #expect(peer.terminationStatus == 0)
+        let attemptID = session.handshakeAttemptID
+        let messages = try await Task.detached {
+            let store = try OSLogStore(scope: .currentProcessIdentifier)
+            let predicate = NSPredicate(format: "subsystem == %@ AND category == %@", "dev.sadiksaifi.Remora", "VNC")
+            let deadline = ContinuousClock.now.advanced(by: .seconds(2))
+            var messages: [String] = []
+            repeat {
+                messages = try store.getEntries(at: store.position(date: started), matching: predicate)
+                    .compactMap { ($0 as? OSLogEntryLog)?.composedMessage }
+                    .filter { $0.contains("attempt=\(attemptID) ") }
+                if messages.contains(where: { $0.hasPrefix("Runtime failure ") }) { break }
+                try await Task.sleep(for: .milliseconds(25))
+            } while ContinuousClock.now < deadline
+            return messages
+        }.value
+        let handshakes = messages.filter { $0.hasPrefix("Handshake ") }
+        #expect(handshakes.count == 1)
+        #expect(handshakes.first?.contains("phase=22 last_success=22 failure=0") == true)
+        let runtime = messages.filter { $0.hasPrefix("Runtime failure ") }
+        #expect(runtime.count == 1)
+        guard let message = runtime.first else { continue }
+        print("Observed VNC runtime diagnostic: \(message)")
+        let fields = Dictionary(uniqueKeysWithValues: message.split(separator: " ").compactMap { token -> (String, String)? in
+            let pair = token.split(separator: "=", maxSplits: 1, omittingEmptySubsequences: false)
+            return pair.count == 2 ? (String(pair[0]), String(pair[1])) : nil
+        })
+        #expect(Int(fields["failure"] ?? "") == failure)
+        #expect(Int(fields["stage"] ?? "") == stage)
+        #expect(Int(fields["operation"] ?? "") == operation)
+        #expect(Int(fields["message"] ?? "") == messageType)
+        #expect(Int(fields["encoding"] ?? "") == encoding)
+        #expect(Int(fields["x"] ?? "") == x)
+        #expect(Int(fields["callbacks"] ?? "") == callbacks)
+        #expect(fields["fb_width"] == "16" && fields["fb_height"] == "16")
+        #expect(fields["cancelled"] == "0")
+        if outcome != "runtime-message" && outcome != "runtime-success" {
+            #expect(fields["rect_index"] == "0" && fields["rect_count"] == "1")
+            #expect(fields["width"] == "16" && fields["height"] == "16")
+        } else {
+            #expect(fields["rect_index"] == "-1" && fields["rect_count"] == "0")
+            #expect(fields["width"] == "0" && fields["height"] == "0")
+        }
+        for forbidden in ["fixture-user", "fixture-password", "synthetic-ard-peer", "127.0.0.1"] { #expect(!message.contains(forbidden)) }
     }
 }

@@ -185,7 +185,23 @@ def serve_once(offer_mode, outcome, port):
                         exact(count * 4)
                     elif kind == 3:
                         exact(9)
-                        send(struct.pack('>BBHHHHHi', 0, 0, 1, 0, 0, 16, 16, 0) + bytes(16 * 16 * 4))
+                        if outcome == 'runtime-message':
+                            send(bytes([199]))
+                        elif outcome == 'runtime-encoding':
+                            send(struct.pack('>BBHHHHHi', 0, 0, 1, 0, 0, 16, 16, 123456))
+                        elif outcome == 'runtime-bounds':
+                            send(struct.pack('>BBHHHHHi', 0, 0, 1, 12, 0, 16, 16, 0))
+                        elif outcome == 'runtime-partial':
+                            send(struct.pack('>BBHHHHHi', 0, 0, 1, 0, 0, 16, 16, 0) + bytes(7))
+                        elif outcome == 'runtime-decoder':
+                            # Tight control 12 is reserved, not a valid subencoding.
+                            send(struct.pack('>BBHHHHHi', 0, 0, 1, 0, 0, 16, 16, 7) + bytes([0xc0]))
+                        else:
+                            send(struct.pack('>BBHHHHHi', 0, 0, 1, 0, 0, 16, 16, 0) + bytes(16 * 16 * 4))
+                            if outcome == 'runtime-success':
+                                if exact(1) != bytes([3]):
+                                    raise ValueError('incremental request required')
+                                exact(9)
                         report['stage'] = 'synthetic_frame_sent'
                         return report
                     else:

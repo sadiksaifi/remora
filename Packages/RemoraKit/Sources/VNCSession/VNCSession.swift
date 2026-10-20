@@ -166,12 +166,20 @@ public final class VNCSession: AgentInputSession, @unchecked Sendable {
         else { log.error("\(summary, privacy: .public)") }
     }
 
+    private func logRuntimeFailure(_ handle: OpaquePointer) {
+        let diagnostic = rm_vnc_runtime_diagnostic(handle)
+        guard diagnostic.failure != 0 else { return }
+        // One fixed numeric snapshot. No upstream strings or payloads enter Logger.
+        let summary = "Runtime failure attempt=\(handshakeAttemptID) elapsed_ms=\(diagnostic.elapsedMS) stage=\(diagnostic.stage) failure=\(diagnostic.failure) operation=\(diagnostic.operation) errno=\(diagnostic.systemError) ssl=\(diagnostic.sslError) openssl=\(diagnostic.opensslError) message=\(diagnostic.messageType) rect_index=\(diagnostic.rectIndex) rect_count=\(diagnostic.rectCount) encoding=\(diagnostic.encoding) x=\(diagnostic.x) y=\(diagnostic.y) width=\(diagnostic.width) height=\(diagnostic.height) fb_width=\(diagnostic.framebufferWidth) fb_height=\(diagnostic.framebufferHeight) callbacks=\(diagnostic.callbacks) cancelled=\(diagnostic.cancelled ? 1 : 0)"
+        log.error("\(summary, privacy: .public)")
+    }
+
     private func run() {
         autoreleasepool {
             var handle: OpaquePointer?
             defer {
                 state.lock.withLock { state.connected = false; state.handle = nil }
-                if let handle { rm_vnc_free(handle) }
+                if let handle { logRuntimeFailure(handle); rm_vnc_free(handle) }
                 finish()
             }
             do {

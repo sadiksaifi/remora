@@ -43,9 +43,17 @@ static bool failed(RMVNC *s, int error) {
 }
 static rfbBool allocate(rfbClient *c) {
     /* Limit remote-controlled allocations to 256 MiB. */
-    if (c->width < 1 || c->height < 1 || (uint64_t)c->width * c->height > 67108864) return false;
+    if (c->width < 1 || c->height < 1 || (uint64_t)c->width * c->height > 67108864) {
+        rfbRemoraRuntimeStage(c, RFB_REMORA_RUNTIME_ALLOCATE);
+        rfbRemoraRuntimeFail(c, RFB_REMORA_ALLOCATION, 0, 0);
+        return false;
+    }
     uint8_t *pixels = calloc((size_t)c->width * c->height, 4);
-    if (!pixels) return false;
+    if (!pixels) {
+        rfbRemoraRuntimeStage(c, RFB_REMORA_RUNTIME_ALLOCATE);
+        rfbRemoraRuntimeFail(c, RFB_REMORA_ALLOCATION, 0, 0);
+        return false;
+    }
     free(c->frameBuffer);
     c->frameBuffer = pixels;
     return true;
@@ -67,7 +75,10 @@ static void size(rfbClient *c, rfbBool requested) {
 }
 static void frame(rfbClient *c, int x, int y, int w, int h) {
     RMVNC *s = owner(c);
-    if (s->cb.frame && !atomic_load(&s->cancelled)) s->cb.frame(s->user, c->frameBuffer, c->width, c->height, x, y, w, h);
+    if (s->cb.frame && !atomic_load(&s->cancelled)) {
+        if (!c->remoraRuntime.failure && c->remoraRuntime.callbacks < UINT32_MAX) c->remoraRuntime.callbacks++;
+        s->cb.frame(s->user, c->frameBuffer, c->width, c->height, x, y, w, h);
+    }
 }
 static void cursor(rfbClient *c, int x, int y, int w, int h, int bpp) {
     RMVNC *s = owner(c);
@@ -253,12 +264,18 @@ static bool reconcile_resize(RMVNC *s) {
         c->screen.height != htons(s->resizeHeight) ||
         (c->remoraLastResizeWidth && (c->remoraLastResizeWidth != s->resizeWidth || c->remoraLastResizeHeight != s->resizeHeight));
     s->wireResizeWidth = s->resizeWidth; s->wireResizeHeight = s->resizeHeight;
+    rfbRemoraRuntimeMessage(c, RFB_REMORA_WRITE);
     return SendExtDesktopSize(c, s->resizeWidth, s->resizeHeight);
 }
 bool rm_vnc_step(RMVNC *s) {
     if (atomic_load(&s->cancelled)) return false;
+    rfbRemoraRuntimeMessage(s->client, RFB_REMORA_WAIT);
     int ready=WaitForMessage(s->client,10000);
-    if (ready < 0 || (ready && !HandleRFBServerMessage(s->client))) { cancel_resize(s); return false; }
+    if (ready < 0 || (ready && !HandleRFBServerMessage(s->client))) {
+        rfbRemoraRuntimeOperation(s->client, 0);
+        rfbRemoraRuntimeFail(s->client, RFB_REMORA_DECODER, 0, 0);
+        cancel_resize(s); return false;
+    }
     return !atomic_load(&s->cancelled) && reconcile_resize(s);
 }
 RMVNCDiagnostic rm_vnc_diagnostic(RMVNC *s) {
@@ -272,6 +289,21 @@ RMVNCDiagnostic rm_vnc_diagnostic(RMVNC *s) {
         result.offeredCount = d->offeredCount; result.selected = d->selected;
         result.subofferedCount = d->subofferedCount; result.subtype = d->subtype; result.ardBits = d->ardBits;
         for (unsigned i = 0; i < 32; i++) { result.offered[i] = d->offered[i]; result.suboffered[i] = d->suboffered[i]; }
+    }
+    result.elapsedMS = (uint64_t)((now() - s->started) * 1000);
+    result.cancelled = atomic_load(&s->cancelled);
+    return result;
+}
+RMVNCRuntimeDiagnostic rm_vnc_runtime_diagnostic(RMVNC *s) {
+    RMVNCRuntimeDiagnostic result = {0};
+    if (s->client) {
+        const rfbRemoraRuntimeDiagnostic *d = &s->client->remoraRuntime;
+        result.stage = d->stage; result.failure = d->failure; result.operation = d->operation;
+        result.systemError = d->systemError; result.sslError = d->sslError; result.opensslError = d->opensslError;
+        result.messageType = d->messageType; result.rectIndex = d->rectIndex; result.rectCount = d->rectCount;
+        result.encoding = d->encoding; result.x = d->x; result.y = d->y; result.width = d->width; result.height = d->height;
+        result.framebufferWidth = d->framebufferWidth; result.framebufferHeight = d->framebufferHeight;
+        result.callbacks = d->callbacks;
     }
     result.elapsedMS = (uint64_t)((now() - s->started) * 1000);
     result.cancelled = atomic_load(&s->cancelled);
@@ -303,14 +335,16 @@ bool rm_vnc_resize(RMVNC *s,uint16_t w,uint16_t h) {
     s->resizeDeadline = now() + 3;
     return reconcile_resize(s);
 }
-bool rm_vnc_refresh(RMVNC *s) { return SendFramebufferUpdateRequest(s->client,0,0,s->client->width,s->client->height,false); }
+bool rm_vnc_refresh(RMVNC *s) { rfbRemoraRuntimeMessage(s->client, RFB_REMORA_WRITE); return SendFramebufferUpdateRequest(s->client,0,0,s->client->width,s->client->height,false); }
 bool rm_vnc_key(RMVNC *s,uint32_t sym,uint32_t code,bool down) {
+    rfbRemoraRuntimeMessage(s->client, RFB_REMORA_WRITE);
     if (code && SupportsClient2Server(s->client,rfbQemuEvent)) return SendExtendedKeyEvent(s->client,sym,code,down);
     return SendKeyEvent(s->client,sym,down);
 }
-bool rm_vnc_pointer(RMVNC *s,uint16_t x,uint16_t y,uint8_t mask) { return SendPointerEvent(s->client,x,y,mask); }
+bool rm_vnc_pointer(RMVNC *s,uint16_t x,uint16_t y,uint8_t mask) { rfbRemoraRuntimeMessage(s->client, RFB_REMORA_WRITE); return SendPointerEvent(s->client,x,y,mask); }
 bool rm_vnc_clipboard_utf8(RMVNC *s) { return s->client->extendedClipboardServerCapabilities != 0; }
 bool rm_vnc_clipboard(RMVNC *s,const char *text,int len,bool utf8) {
+    rfbRemoraRuntimeMessage(s->client, RFB_REMORA_WRITE);
     return utf8 ? SendClientCutTextUTF8(s->client,(char*)text,len) : SendClientCutText(s->client,(char*)text,len);
 }
 void rm_vnc_free(RMVNC *s) {
