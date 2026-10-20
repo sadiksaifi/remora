@@ -18,6 +18,8 @@ public final class VNCSession: AgentInputSession, @unchecked Sendable {
     private let certificateStoreURL: URL
     private let isoKeyboard: Bool
     private let state = State()
+    // Used only by the native session worker, including its input-only read hook.
+    private var workerInput = VNCInputState()
     let handshakeAttemptID = UUID().uuidString
 
     @MainActor
@@ -131,6 +133,7 @@ public final class VNCSession: AgentInputSession, @unchecked Sendable {
                 return
             }
             state.commands.append(command)
+            if let handle = state.handle { rm_vnc_set_input_pending(handle, true) }
         }
     }
 
@@ -142,6 +145,7 @@ public final class VNCSession: AgentInputSession, @unchecked Sendable {
             state.receipts.append(receipt)
             if event != nil { state.agentPending = true }
             state.commands.append(.agent(id, event, receipt))
+            if let handle = state.handle { rm_vnc_set_input_pending(handle, true) }
             return receipt
         }
     }
@@ -174,6 +178,62 @@ public final class VNCSession: AgentInputSession, @unchecked Sendable {
         // One fixed numeric snapshot. No upstream strings or payloads enter Logger.
         let summary = "Runtime failure attempt=\(handshakeAttemptID) elapsed_ms=\(diagnostic.elapsedMS) stage=\(diagnostic.stage) failure=\(diagnostic.failure) operation=\(diagnostic.operation) errno=\(diagnostic.systemError) ssl=\(diagnostic.sslError) openssl=\(diagnostic.opensslError) message=\(diagnostic.messageType) rect_index=\(diagnostic.rectIndex) rect_count=\(diagnostic.rectCount) encoding=\(diagnostic.encoding) x=\(diagnostic.x) y=\(diagnostic.y) width=\(diagnostic.width) height=\(diagnostic.height) fb_width=\(diagnostic.framebufferWidth) fb_height=\(diagnostic.framebufferHeight) callbacks=\(diagnostic.callbacks) cancelled=\(diagnostic.cancelled ? 1 : 0)"
         log.error("\(summary, privacy: .public)")
+    }
+
+    private func serviceInput(_ handle: OpaquePointer, limit: Int) -> Bool {
+        let wire = Transport(handle: handle)
+        let commands = state.lock.withLock {
+            let commands = Array(state.commands.prefix(limit))
+            state.commands.removeFirst(commands.count)
+            rm_vnc_set_input_pending(handle, !state.commands.isEmpty)
+            return commands
+        }
+        var failed = false
+        for command in commands {
+            guard !state.lock.withLock({ state.stopping }) else { break }
+            switch command {
+            case .humanKey(let key):
+                let scan = rm_rdp_scancode(key.keyCode, isoKeyboard)
+                failed = !workerInput.humanKey(scan: scan, down: key.isDown, characters: key.characters, wire: wire)
+                if !failed { inputFeedback(.human, .key(scancode: scan, down: key.isDown, characters: key.characters)) }
+            case .human(let event):
+                // The UI may forward extra buttons without querying capabilities.
+                if case .pointer(_, let buttons) = event, !buttons.intersection([.back, .forward]).isEmpty { continue }
+                failed = !workerInput.apply(event, source: .human, wire: wire)
+                if !failed { feedback(event, source: .human) }
+            case .releaseHuman:
+                failed = !workerInput.release(.human, wire: wire)
+                if !failed { inputFeedback(.human, .release) }
+            case .agent(let id, let event, let receipt):
+                let admitted = state.lock.withLock { state.agent == id && (event == nil || !state.agentCancelled) }
+                if !admitted {
+                    receipt.resolve(.cancelled)
+                    state.lock.withLock { state.receipts.removeAll { $0 === receipt } }
+                    continue
+                }
+                let accepted = event.map { workerInput.apply($0, source: .agent, wire: wire) } ?? workerInput.release(.agent, wire: wire)
+                state.lock.withLock {
+                    if state.agent == id {
+                        state.agentPending = false
+                        if event == nil { state.agent = nil }
+                    }
+                }
+                failed = !accepted
+                if accepted {
+                    if let event { feedback(event, source: .agent) }
+                    else { inputFeedback(.agent, .release) }
+                }
+                receipt.resolve(accepted ? nil : .submissionFailed)
+                state.lock.withLock { state.receipts.removeAll { $0 === receipt } }
+            }
+            if failed { break }
+        }
+        if failed {
+            state.lock.withLock {
+                if state.reason == nil { state.reason = .protocolError("The VNC input submission failed. The transport was closed.") }
+            }
+        }
+        return !failed && !state.lock.withLock { state.stopping }
     }
 
     private func run() {
@@ -222,55 +282,9 @@ public final class VNCSession: AgentInputSession, @unchecked Sendable {
                 state.lock.withLock { state.connected = true; state.networkDeadline = nil; state.security = security }
                 emit(.stateChanged(.connected))
                 clipboard(.unknown)
-                let wire = Transport(handle: created)
-                var input = VNCInputState()
+                rm_vnc_enable_input_service(created)
                 while !state.lock.withLock({ state.stopping }) {
-                    let commands = state.lock.withLock {
-                        let commands = state.commands
-                        state.commands.removeAll(keepingCapacity: true)
-                        return commands
-                    }
-                    var failed = false
-                    for command in commands {
-                        guard !state.lock.withLock({ state.stopping }) else { break }
-                        switch command {
-                        case .humanKey(let key):
-                            let scan = rm_rdp_scancode(key.keyCode, isoKeyboard)
-                            failed = !input.humanKey(scan: scan, down: key.isDown, characters: key.characters, wire: wire)
-                            if !failed { inputFeedback(.human, .key(scancode: scan, down: key.isDown, characters: key.characters)) }
-                        case .human(let event):
-                            // The UI may forward extra buttons without querying capabilities.
-                            if case .pointer(_, let buttons) = event, !buttons.intersection([.back, .forward]).isEmpty { continue }
-                            failed = !input.apply(event, source: .human, wire: wire)
-                            if !failed { feedback(event, source: .human) }
-                        case .releaseHuman:
-                            failed = !input.release(.human, wire: wire)
-                            if !failed { inputFeedback(.human, .release) }
-                        case .agent(let id, let event, let receipt):
-                            let admitted = state.lock.withLock { state.agent == id && (event == nil || !state.agentCancelled) }
-                            if !admitted {
-                                receipt.resolve(.cancelled)
-                                state.lock.withLock { state.receipts.removeAll { $0 === receipt } }
-                                continue
-                            }
-                            let accepted = event.map { input.apply($0, source: .agent, wire: wire) } ?? input.release(.agent, wire: wire)
-                            state.lock.withLock {
-                                if state.agent == id {
-                                    state.agentPending = false
-                                    if event == nil { state.agent = nil }
-                                }
-                            }
-                            failed = !accepted
-                            if accepted {
-                                if let event { feedback(event, source: .agent) }
-                                else { inputFeedback(.agent, .release) }
-                            }
-                            receipt.resolve(accepted ? nil : .submissionFailed)
-                            state.lock.withLock { state.receipts.removeAll { $0 === receipt } }
-                        }
-                        if failed { break }
-                    }
-                    if failed { throw Failure("The VNC input submission failed. The transport was closed.") }
+                    guard serviceInput(created, limit: Int.max) else { break }
                     let pending = state.lock.withLock {
                         let pending = (state.clipboard, state.resize, state.refresh)
                         state.clipboard = nil; state.resize = nil; state.refresh = false
@@ -395,6 +409,11 @@ public final class VNCSession: AgentInputSession, @unchecked Sendable {
             newUsername?.pointee = username; newPassword?.pointee = password
             session.emit(.stateChanged(.connecting))
             return true
+        }
+        cb.serviceInput = { user in
+            let session = owner(user)
+            guard let handle = session.state.lock.withLock({ session.state.handle }) else { return false }
+            return session.serviceInput(handle, limit: 16)
         }
         cb.pin = { user, bytes in
             guard let bytes, let pin = owner(user).state.lock.withLock({ owner(user).state.pin }) else { return false }

@@ -160,7 +160,7 @@ private struct DiscardFrames: FrameSink { func consume(_ frame: BorrowedFrame) {
     #expect(terminals == [.cancelledByUser])
 }
 
-@Test @MainActor func vncPartialFrameCancellationWakesAdmittedAgentSend() async throws {
+@Test @MainActor func vncPartialFrameCancellationDoesNotStrandAnAdmittedAgentSend() async throws {
     let peer = try StalledPeer(partialFrame: true)
     defer { peer.stop() }
     let session = VNCSession(configuration: .init(host: "127.0.0.1", port: peer.port, username: "", desktopSize: .init(width: 16, height: 16)), frameSink: DiscardFrames())
@@ -184,7 +184,9 @@ private struct DiscardFrames: FrameSink { func consume(_ frame: BorrowedFrame) {
     }
     #expect(started.duration(to: .now) < .seconds(1))
     let admitted = try #require(send)
-    do { try await admitted.value; Issue.record("A blocked send must fail when the session ends.") }
+    // Input can now be acknowledged during the read. If cancellation wins,
+    // the admitted receipt must instead terminate with the session.
+    do { try await admitted.value }
     catch let failure as AgentInputFailure { #expect(failure == .sessionEnded) }
     #expect(started.duration(to: .now) < .seconds(1))
     #expect(await request?.finish() == false)

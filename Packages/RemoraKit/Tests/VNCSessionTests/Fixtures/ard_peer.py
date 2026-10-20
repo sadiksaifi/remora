@@ -28,6 +28,20 @@ OFFERS = [30, 33, 36, 2, 35]
 SERVER_EXPONENT = int.from_bytes(hashlib.sha256(b'ARD synthetic server exponent').digest(), 'big')
 
 
+def synthetic_zrle(dimension):
+    """Independent legal raw-tile ZRLE stream; no captured desktop content."""
+    import random
+    import zlib
+    randomizer = random.Random(314159)
+    tiles = bytearray()
+    for ty in range(0, dimension, 64):
+        for tx in range(0, dimension, 64):
+            tiles.append(0)
+            tiles.extend(randomizer.randbytes(min(64, dimension-tx) * min(64, dimension-ty) * 3))
+    compressor = zlib.compressobj()
+    return compressor.compress(tiles) + compressor.flush(zlib.Z_SYNC_FLUSH)
+
+
 def fixed(value):
     return value.to_bytes(SIZE, 'big')
 
@@ -189,18 +203,7 @@ def serve_once(offer_mode, outcome, port):
                     elif kind == 3:
                         exact(9)
                         if outcome in ('fragmented-small', 'fragmented-large'):
-                            # Real ZRLE raw tiles, entirely synthetic pixels. A
-                            # deterministic PRNG keeps the large case incompressible.
-                            import random
-                            import zlib
-                            randomizer = random.Random(314159)
-                            tiles = bytearray()
-                            for ty in range(0, dimension, 64):
-                                for tx in range(0, dimension, 64):
-                                    tiles.append(0)
-                                    tiles.extend(randomizer.randbytes(min(64, dimension-tx) * min(64, dimension-ty) * 3))
-                            compressor = zlib.compressobj()
-                            compressed = compressor.compress(tiles) + compressor.flush(zlib.Z_SYNC_FLUSH)
+                            compressed = synthetic_zrle(dimension)
                             report['compressed_bytes'] = len(compressed)
                             send(struct.pack('>BBHHHHHiI', 0, 0, 1, 0, 0, dimension, dimension, 16, len(compressed)))
                             chunk = 4 if dimension == 16 else 512

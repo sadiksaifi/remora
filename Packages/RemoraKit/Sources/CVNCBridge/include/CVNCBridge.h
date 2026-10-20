@@ -35,12 +35,17 @@ typedef struct {
     bool (*trust)(void *, const char *, const uint8_t *, size_t);
     /* Fill 32 bytes if this endpoint has a pin. */
     bool (*pin)(void *, uint8_t *);
+    bool (*serviceInput)(void *);
 } RMVNCCallbacks;
-/* All calls except abort belong to one owning thread. Abort is safe while
+/* All calls except abort and set_input_pending belong to one owning thread. Abort is safe while
  * connect, TLS, authentication, a prompt, or an incomplete frame is blocked. */
 RMVNC *rm_vnc_create(const char *host, uint16_t port, RMVNCCallbacks callbacks, void *user);
 bool rm_vnc_connect(RMVNC *);
 void rm_vnc_abort(RMVNC *);
+/* Atomic admission hint, safe while holding the Swift admission lock. */
+void rm_vnc_set_input_pending(RMVNC *, bool);
+/* Worker-only; called after authenticated connected state is published. */
+void rm_vnc_enable_input_service(RMVNC *);
 void rm_vnc_free(RMVNC *);
 bool rm_vnc_step(RMVNC *);
 RMVNCDiagnostic rm_vnc_diagnostic(RMVNC *);

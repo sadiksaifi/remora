@@ -21,7 +21,9 @@ struct RMVNC {
     RMVNCCallbacks cb;
     void *user;
     pthread_mutex_t lock;
-    atomic_bool cancelled;
+    atomic_bool cancelled, inputPending;
+    unsigned inputBusy;
+    double inputServiceAt;
     int fd, wake[2], error;
     char *host;
     uint16_t port;
@@ -41,6 +43,24 @@ static bool failed(RMVNC *s, int error) {
     else if (!s->diagnostic.failure) s->diagnostic.failure = error == 6 ? RFB_REMORA_MEMORY : error == 3 ? RFB_REMORA_TIMEOUT : RFB_REMORA_IO;
     return false;
 }
+void rm_vnc_set_input_pending(RMVNC *s, bool pending) { atomic_store(&s->inputPending, pending); }
+static rfbBool service_input(rfbClient *c) {
+    RMVNC *s = owner(c);
+    if (atomic_load(&s->cancelled)) return FALSE;
+    if (s->inputBusy || !atomic_load(&s->inputPending) || now() < s->inputServiceAt) return TRUE;
+    s->inputServiceAt = now() + 0.005;
+    rfbRemoraRuntimeDiagnostic context = c->remoraRuntime;
+    s->inputBusy++;
+    bool accepted = !s->cb.serviceInput || s->cb.serviceInput(s->user);
+    s->inputBusy--;
+    if (!c->remoraRuntime.failure) c->remoraRuntime = context;
+    if (!accepted && !atomic_load(&s->cancelled)) {
+        rfbRemoraRuntimeStage(c, RFB_REMORA_WRITE);
+        rfbRemoraRuntimeFail(c, RFB_REMORA_CALLBACK, 0, 0);
+    }
+    return accepted && !atomic_load(&s->cancelled);
+}
+void rm_vnc_enable_input_service(RMVNC *s) { s->client->RemoraServiceInput = service_input; }
 static rfbBool allocate(rfbClient *c) {
     /* Limit remote-controlled allocations to 256 MiB. */
     if (c->width < 1 || c->height < 1 || (uint64_t)c->width * c->height > 67108864) {
@@ -142,6 +162,7 @@ RMVNC *rm_vnc_create(const char *host, uint16_t port, RMVNCCallbacks cb, void *u
     s->fd = -1; s->wake[0] = s->wake[1] = -1;
     pthread_mutex_init(&s->lock, NULL);
     atomic_init(&s->cancelled, false);
+    atomic_init(&s->inputPending, false);
     s->host = strdup(host); s->port = port; s->cb = cb; s->user = user;
     if (!s->host || socketpair(AF_UNIX, SOCK_STREAM, 0, s->wake)) { rm_vnc_free(s); return NULL; }
     for (int i=0; i<2; i++) { fcntl(s->wake[i], F_SETFL, O_NONBLOCK); fcntl(s->wake[i], F_SETFD, FD_CLOEXEC); }
@@ -265,7 +286,10 @@ static bool reconcile_resize(RMVNC *s) {
         (c->remoraLastResizeWidth && (c->remoraLastResizeWidth != s->resizeWidth || c->remoraLastResizeHeight != s->resizeHeight));
     s->wireResizeWidth = s->resizeWidth; s->wireResizeHeight = s->resizeHeight;
     rfbRemoraRuntimeMessage(c, RFB_REMORA_WRITE);
-    return SendExtDesktopSize(c, s->resizeWidth, s->resizeHeight);
+    s->inputBusy++;
+    bool sent = SendExtDesktopSize(c, s->resizeWidth, s->resizeHeight);
+    s->inputBusy--;
+    return sent;
 }
 bool rm_vnc_step(RMVNC *s) {
     if (atomic_load(&s->cancelled)) return false;
@@ -273,7 +297,7 @@ bool rm_vnc_step(RMVNC *s) {
     int ready=WaitForMessage(s->client,10000);
     if (ready < 0 || (ready && !HandleRFBServerMessage(s->client))) {
         rfbRemoraRuntimeOperation(s->client, 0);
-        rfbRemoraRuntimeFail(s->client, RFB_REMORA_DECODER, 0, 0);
+        if (!atomic_load(&s->cancelled)) rfbRemoraRuntimeFail(s->client, RFB_REMORA_DECODER, 0, 0);
         cancel_resize(s); return false;
     }
     return !atomic_load(&s->cancelled) && reconcile_resize(s);
@@ -335,17 +359,31 @@ bool rm_vnc_resize(RMVNC *s,uint16_t w,uint16_t h) {
     s->resizeDeadline = now() + 3;
     return reconcile_resize(s);
 }
-bool rm_vnc_refresh(RMVNC *s) { rfbRemoraRuntimeMessage(s->client, RFB_REMORA_WRITE); return SendFramebufferUpdateRequest(s->client,0,0,s->client->width,s->client->height,false); }
+bool rm_vnc_refresh(RMVNC *s) {
+    rfbRemoraRuntimeMessage(s->client, RFB_REMORA_WRITE);
+    s->inputBusy++;
+    bool sent = SendFramebufferUpdateRequest(s->client,0,0,s->client->width,s->client->height,false);
+    s->inputBusy--; return sent;
+}
 bool rm_vnc_key(RMVNC *s,uint32_t sym,uint32_t code,bool down) {
     rfbRemoraRuntimeMessage(s->client, RFB_REMORA_WRITE);
-    if (code && SupportsClient2Server(s->client,rfbQemuEvent)) return SendExtendedKeyEvent(s->client,sym,code,down);
-    return SendKeyEvent(s->client,sym,down);
+    s->inputBusy++;
+    bool sent = code && SupportsClient2Server(s->client,rfbQemuEvent)
+        ? SendExtendedKeyEvent(s->client,sym,code,down) : SendKeyEvent(s->client,sym,down);
+    s->inputBusy--; return sent;
 }
-bool rm_vnc_pointer(RMVNC *s,uint16_t x,uint16_t y,uint8_t mask) { rfbRemoraRuntimeMessage(s->client, RFB_REMORA_WRITE); return SendPointerEvent(s->client,x,y,mask); }
+bool rm_vnc_pointer(RMVNC *s,uint16_t x,uint16_t y,uint8_t mask) {
+    rfbRemoraRuntimeMessage(s->client, RFB_REMORA_WRITE);
+    s->inputBusy++;
+    bool sent = SendPointerEvent(s->client,x,y,mask);
+    s->inputBusy--; return sent;
+}
 bool rm_vnc_clipboard_utf8(RMVNC *s) { return s->client->extendedClipboardServerCapabilities != 0; }
 bool rm_vnc_clipboard(RMVNC *s,const char *text,int len,bool utf8) {
     rfbRemoraRuntimeMessage(s->client, RFB_REMORA_WRITE);
-    return utf8 ? SendClientCutTextUTF8(s->client,(char*)text,len) : SendClientCutText(s->client,(char*)text,len);
+    s->inputBusy++;
+    bool sent = utf8 ? SendClientCutTextUTF8(s->client,(char*)text,len) : SendClientCutText(s->client,(char*)text,len);
+    s->inputBusy--; return sent;
 }
 void rm_vnc_free(RMVNC *s) {
     if (!s) return;

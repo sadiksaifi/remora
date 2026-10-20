@@ -56,13 +56,14 @@
  typedef struct _rfbClient {
  	uint8_t* frameBuffer;
  	int width, height;
-@@ -506,7 +555,25 @@
+@@ -506,7 +555,26 @@
          rfbBool isUpdateRectManagedByLib;
  
          GetX509CertFingerprintMismatchDecisionProc GetX509CertFingerprintMismatchDecision;
 +        /* Remora adapter metadata. Set only by parsed protocol results. */
 +        rfbRemoraDiagnostic remoraDiagnostic;
 +        rfbRemoraRuntimeDiagnostic remoraRuntime;
++        rfbBool (*RemoraServiceInput)(struct _rfbClient*);
 +        rfbBool remoraAuthFailed;
 +        rfbBool remoraResizeSupported;
 +        rfbBool remoraResizeProhibited;
@@ -832,7 +833,7 @@
  
  /*
   * ReadFromRFBServer is called whenever we want to read some data from the RFB
-@@ -63,7 +84,8 @@
+@@ -63,13 +84,20 @@
  ReadFromRFBServer(rfbClient* client, char *out, unsigned int n)
  {
    const int USECS_WAIT_PER_RETRY = 100000;
@@ -842,7 +843,19 @@
  #undef DEBUG_READ_EXACT
  #ifdef DEBUG_READ_EXACT
  	char* oout=out;
-@@ -122,6 +144,7 @@
+ 	unsigned int nn=n;
+ 	rfbClientLog("ReadFromRFBServer %d bytes\n",n);
+ #endif
++
++  /* The optional callback only writes admitted input on this owning thread.
++   * It must not consume receive bytes or reenter the parser. TLS reads have
++   * returned and released their mutex before any subsequent iteration. */
++  if (client->remoraDiagnostic.phase == RFB_REMORA_READY && client->RemoraServiceInput &&
++      !client->RemoraServiceInput(client)) return FALSE;
+ 
+   /* Handle attempts to write to NULL out buffer that might occur
+      when an outside malloc() fails. For instance, memcpy() to NULL
+@@ -122,6 +150,7 @@
      return TRUE;
    }
  
@@ -850,7 +863,16 @@
    memcpy(out, client->bufoutptr, client->buffered);
  
    out += client->buffered;
-@@ -154,22 +177,25 @@
+@@ -134,6 +163,8 @@
+ 
+     while (client->buffered < n) {
+       int i;
++      if (client->remoraDiagnostic.phase == RFB_REMORA_READY && client->RemoraServiceInput &&
++          !client->RemoraServiceInput(client)) return FALSE;
+       if (client->tlsSession)
+         i = ReadFromTLS(client, client->buf + client->buffered, RFB_BUF_SIZE - client->buffered);
+       else
+@@ -154,22 +185,25 @@
  	if (i < 0) {
  	  if (errno == EWOULDBLOCK || errno == EAGAIN) {
  	    if (client->readTimeout > 0 &&
@@ -881,7 +903,16 @@
  	    rfbClientLog("VNC server closed connection\n");
  	  }
  	  return FALSE;
-@@ -203,22 +229,25 @@
+@@ -186,6 +220,8 @@
+ 
+     while (n > 0) {
+       int i;
++      if (client->remoraDiagnostic.phase == RFB_REMORA_READY && client->RemoraServiceInput &&
++          !client->RemoraServiceInput(client)) return FALSE;
+       if (client->tlsSession)
+         i = ReadFromTLS(client, out, n);
+       else
+@@ -203,22 +239,25 @@
  #endif
  	  if (errno == EWOULDBLOCK || errno == EAGAIN) {
  	    if (client->readTimeout > 0 &&
@@ -912,7 +943,7 @@
  	    rfbClientLog("VNC server closed connection\n");
  	  }
  	  return FALSE;
-@@ -250,6 +279,7 @@
+@@ -250,6 +289,7 @@
  WriteToRFBServer(rfbClient* client, const char *buf, unsigned int n)
  {
    fd_set fds;
@@ -920,7 +951,7 @@
    int i = 0;
    int j;
    const char *obuf = buf;
-@@ -265,7 +295,7 @@
+@@ -265,7 +305,7 @@
    if (client->tlsSession) {
      /* WriteToTLS() will guarantee either everything is written, or error/eof returns */
      i = WriteToTLS(client, buf, n);
@@ -929,7 +960,7 @@
  
      return TRUE;
    }
-@@ -298,6 +328,7 @@
+@@ -298,6 +338,7 @@
  		errno == EAGAIN) {
            if(client->sock == RFB_INVALID_SOCKET) {
                errno = EBADF;
@@ -937,7 +968,7 @@
                rfbClientErr("socket invalid\n");
                return FALSE;
            }
-@@ -306,16 +337,19 @@
+@@ -306,16 +347,19 @@
  	  FD_SET(client->sock,&fds);
  
  	  if (select(client->sock+1, NULL, &fds, NULL, NULL) <= 0) {
@@ -960,7 +991,7 @@
  	return FALSE;
        }
      }
-@@ -873,6 +907,8 @@
+@@ -873,6 +917,8 @@
  
    if(client->sock == RFB_INVALID_SOCKET) {
        errno = EBADF;
@@ -969,7 +1000,7 @@
        return -1;
    }
  
-@@ -884,6 +920,8 @@
+@@ -884,6 +930,8 @@
  #ifdef WIN32
      errno=WSAGetLastError();
  #endif
