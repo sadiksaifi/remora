@@ -93,7 +93,9 @@ public final class VNCSession: AgentInputSession, @unchecked Sendable {
         state.lock.withLock {
             // LibVNCClient manages incremental requests; unsupported suppression
             // deliberately keeps updates flowing. Resuming requests a full redraw.
-            if enabled, state.connected, !state.stopping { state.refresh = true }
+            let resumed = enabled && !state.displayUpdatesEnabled
+            state.displayUpdatesEnabled = enabled
+            if resumed, state.connected, !state.stopping { state.refresh = true }
         }
     }
     public func sendKey(_ key: KeyInput) { enqueue(.humanKey(key)) }
@@ -440,6 +442,7 @@ private extension VNCSession {
         var commands: [Command] = []
         var receipts: [Receipt] = []
         var clipboard: String?, resize: DesktopSize?, refresh = false
+        var displayUpdatesEnabled = true
         var clipboardRevision: UInt64 = 0
         var nextAgent: UInt64 = 0, agent: UInt64?
         var agentCancelled = false, agentPending = false
