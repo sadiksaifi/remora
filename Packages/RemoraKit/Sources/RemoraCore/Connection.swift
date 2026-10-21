@@ -14,6 +14,14 @@ public enum ConnectionResolution: Codable, Sendable, Hashable {
     }
 }
 
+/// How a VNC connection speaks to its server.
+public enum VNCMode: String, Codable, Sendable, CaseIterable {
+    /// Standard VNC with lossless encodings.
+    case standard
+    /// Apple Screen Sharing's dialect and its faster, lossy encoding. Experimental, Macs only.
+    case apple
+}
+
 public struct Connection: Codable, Sendable, Identifiable, Hashable {
     public enum Kind: String, Codable, Sendable {
         case rdp
@@ -34,6 +42,8 @@ public struct Connection: Codable, Sendable, Identifiable, Hashable {
     public var domain: String?
     public var kind: Kind
     public var resolution: ConnectionResolution
+    /// Always standard for RDP connections.
+    public var vncMode: VNCMode
     public var lastConnected: Date?
 
     public init(
@@ -45,7 +55,8 @@ public struct Connection: Codable, Sendable, Identifiable, Hashable {
         domain: String? = nil,
         kind: Kind = .rdp,
         lastConnected: Date? = nil,
-        resolution: ConnectionResolution = .fitToWindow
+        resolution: ConnectionResolution = .fitToWindow,
+        vncMode: VNCMode = .standard
     ) {
         self.id = id
         self.name = name
@@ -56,10 +67,11 @@ public struct Connection: Codable, Sendable, Identifiable, Hashable {
         self.kind = kind
         self.lastConnected = lastConnected
         self.resolution = resolution
+        self.vncMode = vncMode
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, name, host, port, username, domain, kind, lastConnected, resolution
+        case id, name, host, port, username, domain, kind, lastConnected, resolution, vncMode
     }
 
     public init(from decoder: any Decoder) throws {
@@ -73,6 +85,7 @@ public struct Connection: Codable, Sendable, Identifiable, Hashable {
         kind = try values.decode(Kind.self, forKey: .kind)
         lastConnected = try values.decodeIfPresent(Date.self, forKey: .lastConnected)
         resolution = try values.decodeIfPresent(ConnectionResolution.self, forKey: .resolution) ?? .fitToWindow
+        vncMode = try values.decodeIfPresent(VNCMode.self, forKey: .vncMode) ?? .standard
     }
 
     public var defaultPort: Int { kind.defaultPort }

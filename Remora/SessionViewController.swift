@@ -459,7 +459,8 @@ final class SessionViewController: NSViewController {
                 host: connection.host, port: port, username: currentCredentials.username,
                 domain: currentCredentials.domain,
                 password: rejected || currentCredentials.password.isEmpty ? nil : currentCredentials.password,
-                desktopSize: desktopSize, scaleFactor: scaleFactor, allowsDynamicResize: allowsDynamicResize
+                desktopSize: desktopSize, scaleFactor: scaleFactor, allowsDynamicResize: allowsDynamicResize,
+                vncMode: connection.vncMode
             )
             capture.setSource(renderer.desktop)
             let inputOverlays = inputOverlays

@@ -37,10 +37,31 @@ import Testing
     let old = try JSONDecoder().decode(Connection.self, from: legacy)
     #expect(old.kind == .rdp)
     #expect(old.resolution == .fitToWindow)
+    #expect(old.vncMode == .standard)
     let vnc = Connection(name: "VNC", host: "host", username: "", kind: .vnc)
-    let encoded = try JSONEncoder().encode([old, vnc])
-    #expect(try JSONDecoder().decode([Connection].self, from: encoded) == [old, vnc])
+    let apple = Connection(name: "Mac", host: "mac", username: "", kind: .vnc, vncMode: .apple)
+    let encoded = try JSONEncoder().encode([old, vnc, apple])
+    #expect(try JSONDecoder().decode([Connection].self, from: encoded) == [old, vnc, apple])
     #expect(vnc.port == 5900)
+}
+
+@Test func savedAppleModeSurvivesDecodeAndEncode() throws {
+    let saved = Data("""
+    {"id":"00000000-0000-0000-0000-000000000002","name":"Mac","host":"mac","port":5900,"username":"","kind":"vnc","vncMode":"apple"}
+    """.utf8)
+    let encoded = try JSONEncoder().encode(try JSONDecoder().decode(Connection.self, from: saved))
+    let fields = try #require(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+    #expect(fields["vncMode"] as? String == "apple")
+}
+
+@Test func appleModeAppliesOnlyToVNC() throws {
+    let vnc = Connection(name: "Mac", host: "mac", username: "", kind: .vnc)
+    let apple = try ConnectionPatch(vncMode: .apple).applying(to: vnc)
+    #expect(apple.vncMode == .apple)
+    #expect(try ConnectionPatch(name: "Renamed").applying(to: apple).vncMode == .apple)
+    #expect(try ConnectionPatch(kind: .rdp).applying(to: apple).vncMode == .standard)
+    let rdp = Connection(name: "Desktop", host: "host", username: "user")
+    #expect(throws: ConnectionPatch.ValidationFailure.self) { try ConnectionPatch(vncMode: .apple).applying(to: rdp) }
 }
 
 @Test func vncPatchesDiscardRDPDomainsWithoutChangingRDP() throws {

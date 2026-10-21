@@ -41,7 +41,7 @@ extension CommandLineController {
     }
 
     func handleConnection(_ request: ControlRequest) throws -> ControlValue {
-        let fields: Set<String> = ["kind", "host", "name", "port", "username", "domain", "resolution", "password"]
+        let fields: Set<String> = ["kind", "host", "name", "port", "username", "domain", "resolution", "vncMode", "password"]
         let allowed: Set<String>
         switch request.command {
         case "connection.list": allowed = ["search"]
@@ -69,6 +69,11 @@ extension CommandLineController {
                 guard let parsed = Connection.Kind(rawValue: text) else { throw ControlFailure(.invalidArgument, "Protocol must be rdp or vnc.") }
                 kind = parsed
             } else { kind = nil }
+            let vncMode: VNCMode?
+            if let text = try request.string("vncMode") {
+                guard let parsed = VNCMode(rawValue: text) else { throw ControlFailure(.invalidArgument, "VNC mode must be standard or apple.") }
+                vncMode = parsed
+            } else { vncMode = nil }
             let password = try request.string("password")
             let clear = try request.flag("clearPassword")
             guard password == nil || !clear else { throw ControlFailure(.invalidArgument, "Choose a password or clearPassword.") }
@@ -81,7 +86,7 @@ extension CommandLineController {
             } else { port = nil }
             let patch = try ConnectionPatch(name: request.string("name"), host: request.string("host", required: isNew),
                 port: port, username: request.string("username"), domain: request.string("domain"),
-                resolution: request.string("resolution").map { try parseResolution($0) }, kind: kind)
+                resolution: request.string("resolution").map { try parseResolution($0) }, kind: kind, vncMode: vncMode)
             let updated: Connection
             do { updated = try patch.applying(to: original) }
             catch { throw ControlFailure(.invalidArgument, error.localizedDescription) }

@@ -20,6 +20,7 @@ struct ConnectionEditor: View {
     @State private var resolutionChoice: ResolutionChoice
     @State private var customWidth: String
     @State private var customHeight: String
+    @State private var vncMode: VNCMode
     @FocusState private var focusedField: Field?
 
     private enum ResolutionChoice: String, CaseIterable {
@@ -73,6 +74,7 @@ struct ConnectionEditor: View {
             _customWidth = State(initialValue: "")
             _customHeight = State(initialValue: "")
         }
+        _vncMode = State(initialValue: connection.vncMode)
     }
 
     /// An empty port field means the protocol's default port.
@@ -93,6 +95,7 @@ struct ConnectionEditor: View {
             customWidth = String(width)
             customHeight = String(height)
         }
+        vncMode = restores ? original.vncMode : .standard
     }
 
     /// The password field is cleared, and Save removes a stored password.
@@ -165,12 +168,20 @@ struct ConnectionEditor: View {
                 }
                 if kind == .vnc {
                     Section {
+                        Picker("Mode", selection: $vncMode) {
+                            Text("Standard").tag(VNCMode.standard)
+                            Text("Apple (experimental)").tag(VNCMode.apple)
+                        }
+                        .pickerStyle(.menu)
+                        .accessibilityIdentifier("editorVNCMode")
                         LabeledContent("Resolution", value: "Set by the Server")
                             .accessibilityIdentifier("editorResolution")
                     } header: {
                         Text("Display")
                     } footer: {
-                        Text("Remora scales the remote screen to fit the window. Servers that allow resizing match the window’s size.")
+                        Text(vncMode == .apple
+                            ? "Apple mode uses Apple Screen Sharing’s faster, lossy encoding and works only with Macs. Clipboard sharing and display resizing are unavailable."
+                            : "Remora scales the remote screen to fit the window. Servers that allow resizing match the window’s size.")
                             .foregroundStyle(.secondary)
                     }
                 } else {
@@ -302,6 +313,7 @@ struct ConnectionEditor: View {
         connection.port = port
         connection.username = username.trimmingCharacters(in: .whitespacesAndNewlines)
         connection.domain = kind == .rdp && !trimmedDomain.isEmpty ? trimmedDomain : nil
+        connection.vncMode = kind == .vnc ? vncMode : .standard
         return connection
     }
 
