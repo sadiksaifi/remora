@@ -66,6 +66,8 @@ public final class RDPSession: AgentInputSession, @unchecked Sendable {
         configuration.allowsDynamicResize && state.lock.withLock { state.connected && state.supportsDynamicResize && !state.cancelled }
     }
 
+    public var supportsClipboardSynchronization: Bool { true }
+
     public var maximumResizeArea: UInt64? {
         state.lock.withLock {
             guard state.connected, !state.cancelled, let handle = state.handle else { return nil }

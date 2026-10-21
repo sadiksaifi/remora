@@ -77,6 +77,7 @@ private final class LoggingSession: RemoteSession, Sendable {
     func sendWheel(_ wheel: WheelInput, at position: RemotePoint) {}
     func synchronize(locks: LockKeys) {}
     func releaseHumanInput() { NSLog("ShortcutCaptureDemo releaseHumanInput") }
+    var supportsClipboardSynchronization: Bool { false }
     func setLocalClipboard(text: String) {}
 }
 #endif

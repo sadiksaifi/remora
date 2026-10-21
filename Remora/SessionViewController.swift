@@ -51,7 +51,7 @@ final class SessionViewController: NSViewController {
     private(set) var remoteClipboard = RemoteClipboard()
 
     private var canSyncMacClipboard: Bool {
-        allowsMacClipboardSync && state == .connected && NSApp.isActive &&
+        allowsMacClipboardSync && state == .connected && session?.supportsClipboardSynchronization == true && NSApp.isActive &&
             view.window?.isKeyWindow == true && view.window?.isVisible == true &&
             view.window?.isMiniaturized == false && view.window?.firstResponder === desktopView
     }
@@ -59,6 +59,7 @@ final class SessionViewController: NSViewController {
     func offerClipboardText(_ text: String, agent: String?) throws {
         guard state == .connected, let session else { throw ControlFailure(.notConnected, "The session is not connected.") }
         guard !text.utf8.contains(0) else { throw ControlFailure(.invalidArgument, "Clipboard text cannot contain NUL bytes.") }
+        guard session.supportsClipboardSynchronization else { throw ControlFailure(.unsupported, "This session does not exchange clipboard text.") }
         try attachAgentControl(agent: agent)
         session.setLocalClipboard(text: text)
     }
