@@ -96,6 +96,7 @@ public final class VNCSession: AgentInputSession, @unchecked Sendable {
             // LibVNCClient manages incremental requests; unsupported suppression
             // deliberately keeps updates flowing. Resuming requests a full redraw.
             let resumed = enabled && !state.displayUpdatesEnabled
+            if enabled != state.displayUpdatesEnabled { state.displayDemandChanged = true }
             state.displayUpdatesEnabled = enabled
             if resumed, state.connected, !state.stopping { state.refresh = true }
         }
@@ -108,7 +109,10 @@ public final class VNCSession: AgentInputSession, @unchecked Sendable {
         // pulses still travel through normal keyboard input.
     }
     public func releaseHumanInput() { enqueue(.releaseHuman) }
+    public var supportsClipboardSynchronization: Bool { configuration.vncMode == .standard }
+
     public func setLocalClipboard(text: String) {
+        guard supportsClipboardSynchronization else { return }
         guard text.utf8.count <= 1_048_576 else { clipboard(.failed); return }
         state.lock.withLock { if !state.stopping, !state.ended { state.clipboard = text } }
     }
@@ -170,6 +174,15 @@ public final class VNCSession: AgentInputSession, @unchecked Sendable {
         let summary = "Handshake attempt=\(handshakeAttemptID) elapsed_ms=\(diagnostic.elapsedMS) connected=\(connected ? 1 : 0) native_error=\(rm_vnc_error(handle)) phase=\(diagnostic.phase) last_success=\(diagnostic.lastSuccess) failure=\(diagnostic.failure) errno=\(diagnostic.systemError) openssl=\(diagnostic.opensslError) server=\(diagnostic.serverMajor).\(diagnostic.serverMinor) negotiated=\(diagnostic.negotiatedMajor).\(diagnostic.negotiatedMinor) offered=\(offered) offered_count=\(diagnostic.offeredCount) selected=\(diagnostic.selected) suboffered=\(suboffered) suboffered_count=\(diagnostic.subofferedCount) subtype=\(diagnostic.subtype) ard_bits=\(diagnostic.ardBits) cancelled=\(cancelled ? 1 : 0)"
         if connected { log.info("\(summary, privacy: .public)") }
         else { log.error("\(summary, privacy: .public)") }
+    }
+
+    private func appleRuntimeDetail(_ code: Int32) -> String? {
+        switch code {
+        case 8: "The server sent an unsupported Apple profile message."
+        case 9: "The Apple desktop update could not be decoded."
+        case 10: "The experimental Apple profile does not support changing the server desktop size."
+        default: nil
+        }
     }
 
     private func unsupportedSizeDetail(width: Int32, height: Int32) -> String {
@@ -261,7 +274,7 @@ public final class VNCSession: AgentInputSession, @unchecked Sendable {
                 if let pin, pin.count != 32 { throw Failure("The saved VNC certificate fingerprint is invalid.") }
                 state.lock.withLock { state.pin = pin; state.pinURL = pinURL }
                 guard !state.lock.withLock({ state.stopping }) else { return }
-                guard let created = configuration.host.withCString({ rm_vnc_create($0, configuration.port, callbacks(), Unmanaged.passUnretained(self).toOpaque()) }) else {
+                guard let created = configuration.host.withCString({ rm_vnc_create($0, configuration.port, configuration.vncMode == .apple, callbacks(), Unmanaged.passUnretained(self).toOpaque()) }) else {
                     throw Failure("LibVNCClient allocation failed.")
                 }
                 handle = created
@@ -279,6 +292,9 @@ public final class VNCSession: AgentInputSession, @unchecked Sendable {
                     case 3: .connectionTimedOut
                     case 4: .authenticationFailed
                     case 5: .certificateRejected
+                    case 8: .protocolError("The experimental Apple profile requires RFB 003.889, ARD authentication, and a supported shared desktop without session encryption.")
+                    case 9: .protocolError("The Apple desktop update could not be decoded.")
+                    case 10: .protocolError("The experimental Apple profile does not support changing the server desktop size.")
                     case 7: .protocolError(unsupportedSizeDetail(width: diagnostic.framebufferWidth, height: diagnostic.framebufferHeight))
                     // Diagnostic failure 2 is the vendor's local security-policy refusal.
                     default: .protocolError(rm_vnc_diagnostic(created).failure == 2
@@ -292,15 +308,17 @@ public final class VNCSession: AgentInputSession, @unchecked Sendable {
                 log.info("Connected using \(security, privacy: .public)")
                 state.lock.withLock { state.connected = true; state.networkDeadline = nil; state.security = security }
                 emit(.stateChanged(.connected))
-                clipboard(.unknown)
+                clipboard(configuration.vncMode == .apple ? .unavailable : .unknown)
+                if configuration.vncMode == .apple { emit(.cursorChanged(.systemDefault)) }
                 rm_vnc_enable_input_service(created)
                 while !state.lock.withLock({ state.stopping }) {
                     guard serviceInput(created, limit: Int.max) else { break }
                     let pending = state.lock.withLock {
-                        let pending = (state.clipboard, state.resize, state.refresh)
-                        state.clipboard = nil; state.resize = nil; state.refresh = false
+                        let pending = (state.clipboard, state.resize, state.refresh, state.displayDemandChanged ? state.displayUpdatesEnabled : nil)
+                        state.clipboard = nil; state.resize = nil; state.refresh = false; state.displayDemandChanged = false
                         return pending
                     }
+                    if let demand = pending.3, !rm_vnc_set_display_demand(created, demand) { throw Failure("The Apple display subscription could not be updated.") }
                     if let text = pending.0 {
                         let utf8 = rm_vnc_clipboard_utf8(created)
                         if let data = text.data(using: utf8 ? .utf8 : .isoLatin1, allowLossyConversion: false) {
@@ -313,9 +331,9 @@ public final class VNCSession: AgentInputSession, @unchecked Sendable {
                     if pending.2, !rm_vnc_refresh(created) { throw Failure("The VNC framebuffer refresh failed.") }
                     guard rm_vnc_step(created) else {
                         let diagnostic = rm_vnc_runtime_diagnostic(created)
-                        let detail = diagnostic.failure == 18
+                        let detail = appleRuntimeDetail(rm_vnc_error(created)) ?? (diagnostic.failure == 18
                             ? unsupportedSizeDetail(width: diagnostic.framebufferWidth, height: diagnostic.framebufferHeight)
-                            : "The VNC connection closed or a framebuffer read failed."
+                            : "The VNC connection closed or a framebuffer read failed.")
                         state.lock.withLock { if state.reason == nil { state.reason = .serverEndedSession(detail) } }
                         break
                     }
@@ -478,7 +496,7 @@ private extension VNCSession {
         var commands: [Command] = []
         var receipts: [Receipt] = []
         var clipboard: String?, resize: DesktopSize?, refresh = false
-        var displayUpdatesEnabled = true
+        var displayUpdatesEnabled = true, displayDemandChanged = false
         var clipboardRevision: UInt64 = 0
         var nextAgent: UInt64 = 0, agent: UInt64?
         var agentCancelled = false, agentPending = false

@@ -30,6 +30,7 @@ struct RMVNC {
     int fd, wake[2], error;
     char *host;
     uint16_t port;
+    bool apple;
     /* Worker-owned resize intent. Wire replies and actual geometry are distinct:
      * forwarded requests may apply after a newer request already matched. */
     uint16_t resizeWidth, resizeHeight, wireResizeWidth, wireResizeHeight;
@@ -37,6 +38,7 @@ struct RMVNC {
     bool resizeActive, resizeQueued, resizeReplyPending, resizeCorrectionUsed, geometryChanged;
     double resizeDeadline;
 };
+uint32_t rm_vnc_apple_keysym(uint32_t);
 static char client_tag;
 static RMVNC *owner(rfbClient *c) { return rfbClientGetClientData(c, &client_tag); }
 static double now(void) { struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t); return t.tv_sec + t.tv_nsec / 1e9; }
@@ -264,10 +266,10 @@ static rfbBool trust(rfbClient *c, const char *subject, time_t before, time_t af
     if (!decision) s->error = 5;
     return decision;
 }
-RMVNC *rm_vnc_create(const char *host, uint16_t port, RMVNCCallbacks cb, void *user) {
+RMVNC *rm_vnc_create(const char *host, uint16_t port, bool apple, RMVNCCallbacks cb, void *user) {
     RMVNC *s = calloc(1, sizeof(*s));
     if (!s) return NULL;
-    s->started = now();
+    s->started = now(); s->apple=apple;
     s->fd = -1; s->wake[0] = s->wake[1] = -1;
     pthread_mutex_init(&s->lock, NULL);
     atomic_init(&s->cancelled, false);
@@ -359,7 +361,7 @@ bool rm_vnc_connect(RMVNC *s) {
     c->RemoraPerformance = performance; c->RemoraPerformanceClock = performance_clock;
     c->remoraDiagnostic.phase = c->remoraDiagnostic.lastSuccess = RFB_REMORA_TCP;
     rfbClientSetClientData(c,&client_tag,s);
-    c->sock=s->fd;
+    c->sock=s->fd; c->remoraApple889=s->apple;
     free(c->serverHost); c->serverHost=strdup(s->host); c->serverPort=s->port;
     c->connectTimeout=10; c->readTimeout=10;
     c->format.bigEndian=false; c->format.trueColour=true;
@@ -374,7 +376,7 @@ bool rm_vnc_connect(RMVNC *s) {
     c->appData.useRemoteCursor=true; c->canHandleNewFBSize=true;
     const uint32_t schemes[]={rfbVeNCrypt,rfbARD,rfbVncAuth,rfbNoAuth};
     SetClientAuthSchemes(c,schemes,4);
-    if (!rfbClientInitialise(c)) return failed(s,c->remoraAuthFailed ? 4 : 6);
+    if (!rfbClientInitialise(c)) return failed(s,c->remoraAuthFailed ? 4 : c->remoraAppleError ? c->remoraAppleError : 6);
     size(c, false);
     s->error=0;
     return !atomic_load(&s->cancelled);
@@ -458,7 +460,10 @@ RMVNCRuntimeDiagnostic rm_vnc_runtime_diagnostic(RMVNC *s) {
     result.cancelled = atomic_load(&s->cancelled);
     return result;
 }
-int rm_vnc_error(RMVNC *s) { return s->error; }
+int rm_vnc_error(RMVNC *s) {
+    if (s->error && s->error!=6) return s->error;
+    return s->client && s->client->remoraAppleError ? s->client->remoraAppleError : s->error;
+}
 const char *rm_vnc_security(RMVNC *s) {
     if (!s->client) return "unnegotiated";
     switch(s->client->authScheme) {
@@ -473,9 +478,9 @@ const char *rm_vnc_security(RMVNC *s) {
         default:return "unsupported security type (RSA-AES is not supported)";
     }
 }
-bool rm_vnc_resize_supported(RMVNC *s) { return s->client->remoraResizeSupported; }
+bool rm_vnc_resize_supported(RMVNC *s) { return !s->apple && s->client->remoraResizeSupported; }
 bool rm_vnc_resize(RMVNC *s,uint16_t w,uint16_t h) {
-    if (atomic_load(&s->cancelled) || !s->client->remoraResizeSupported) return true;
+    if (atomic_load(&s->cancelled) || s->apple || !s->client->remoraResizeSupported) return true;
     if (now() >= s->resizeDeadline) cancel_resize(s);
     if (s->resizeActive && s->resizeWidth == w && s->resizeHeight == h) return true;
     s->resizeWidth = w; s->resizeHeight = h;
@@ -483,6 +488,13 @@ bool rm_vnc_resize(RMVNC *s,uint16_t w,uint16_t h) {
     s->resizeCorrectionUsed = s->geometryChanged = false;
     s->resizeDeadline = now() + 3;
     return reconcile_resize(s);
+}
+bool rm_vnc_set_display_demand(RMVNC *s, bool enabled) {
+    if (!s->apple) return true;
+    if (atomic_load(&s->cancelled)) return false;
+    s->inputBusy++;
+    bool sent=rfbRemoraAppleSetDemand(s->client,enabled);
+    s->inputBusy--; return sent;
 }
 bool rm_vnc_refresh(RMVNC *s) {
     rfbRemoraRuntimeMessage(s->client, RFB_REMORA_WRITE);
@@ -493,6 +505,7 @@ bool rm_vnc_refresh(RMVNC *s) {
 bool rm_vnc_key(RMVNC *s,uint32_t sym,uint32_t code,bool down) {
     rfbRemoraRuntimeMessage(s->client, RFB_REMORA_WRITE);
     s->inputBusy++;
+    if (s->apple) sym=rm_vnc_apple_keysym(sym);
     bool sent = code && SupportsClient2Server(s->client,rfbQemuEvent)
         ? SendExtendedKeyEvent(s->client,sym,code,down) : SendKeyEvent(s->client,sym,down);
     s->inputBusy--; performance_input(s,1,sent); return sent;
@@ -507,6 +520,7 @@ bool rm_vnc_clipboard_utf8(RMVNC *s) { return s->client->extendedClipboardServer
 bool rm_vnc_clipboard(RMVNC *s,const char *text,int len,bool utf8) {
     rfbRemoraRuntimeMessage(s->client, RFB_REMORA_WRITE);
     s->inputBusy++;
+    if (s->apple) { s->inputBusy--; return false; }
     bool sent = utf8 ? SendClientCutTextUTF8(s->client,(char*)text,len) : SendClientCutText(s->client,(char*)text,len);
     s->inputBusy--; return sent;
 }

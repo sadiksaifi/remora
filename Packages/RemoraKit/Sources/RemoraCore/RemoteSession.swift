@@ -19,12 +19,13 @@ public struct SessionConfiguration: Sendable {
     public let desktopSize: DesktopSize
     /// Physical pixels per logical point, for example 2 for a Retina display.
     public let scaleFactor: Double
+    public let vncMode: VNCMode
     public let allowsDynamicResize: Bool
 
     public init(
         host: String, port: UInt16 = 3389, username: String, domain: String = "",
         password: String? = nil, desktopSize: DesktopSize, scaleFactor: Double = 1,
-        allowsDynamicResize: Bool = true
+        allowsDynamicResize: Bool = true, vncMode: VNCMode = .standard
     ) {
         self.host = host
         self.port = port
@@ -33,6 +34,7 @@ public struct SessionConfiguration: Sendable {
         self.password = password
         self.desktopSize = desktopSize
         self.scaleFactor = scaleFactor
+        self.vncMode = vncMode
         self.allowsDynamicResize = allowsDynamicResize
     }
 }

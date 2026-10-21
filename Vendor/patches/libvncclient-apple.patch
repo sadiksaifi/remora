@@ -1,0 +1,234 @@
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -379,7 +379,11 @@
+     ${CRYPTO_SOURCES}
+ )
+ 
++set_source_files_properties(${LIBVNCCLIENT_DIR}/apple.c ${LIBVNCCLIENT_DIR}/mvs.c PROPERTIES COMPILE_OPTIONS "-std=c17")
++
+ set(LIBVNCCLIENT_SOURCES
++    ${LIBVNCCLIENT_DIR}/apple.c
++    ${LIBVNCCLIENT_DIR}/mvs.c
+     ${LIBVNCCLIENT_DIR}/cursor.c
+     ${LIBVNCCLIENT_DIR}/listen.c
+     ${LIBVNCCLIENT_DIR}/rfbclient.c
+--- a/include/rfb/rfbclient.h
++++ b/include/rfb/rfbclient.h
+@@ -588,7 +588,12 @@
+         uint16_t remoraLastResizeWidth, remoraLastResizeHeight;
+         void (*RemoraDesktopSize)(struct _rfbClient*, rfbBool requested);
+         void (*RemoraResizeReply)(struct _rfbClient*, unsigned int result, uint16_t width, uint16_t height);
++  /* Worker-owned opt-in profile; state is opaque and securely destroyed at cleanup. */
++  rfbBool remoraApple889;
++  void *remoraAppleState;
++  int remoraAppleError;
+ } rfbClient;
++rfbBool rfbRemoraAppleSetDemand(rfbClient *, rfbBool);
+ 
+ /* A first failure freezes its phase, last completed stage, and numeric errors. */
+ void rfbRemoraRuntimeStage(rfbClient*, uint32_t stage);
+--- a/src/libvncclient/rfbclient.c
++++ b/src/libvncclient/rfbclient.c
+@@ -1,3 +1,5 @@
++#include "apple.h"
++#include <openssl/crypto.h>
+ /*
+  *  Copyright (C) 2000-2002 Constantin Kaplinsky.  All Rights Reserved.
+  *  Copyright (C) 2000 Tridia Corporation.  All Rights Reserved.
+@@ -823,7 +825,7 @@
+ HandleARDAuth(rfbClient *client)
+ {
+   uint8_t gen[2], len[2];
+-  size_t keylen;
++  size_t keylen = 0;
+   uint8_t *mod = NULL, *resp = NULL, *priv = NULL, *pub = NULL, *key = NULL, *shared = NULL;
+   uint8_t userpass[128], ciphertext[128];
+   int ciphertext_len;
+@@ -893,7 +895,7 @@
+      This 128-bit (16-byte) value will be used as the AES key. */
+   remora_crypto_begin(client, RFB_REMORA_ARD_HASH);
+   shared = malloc(MD5_HASH_SIZE);
+-  if(!hash_md5(shared, key, keylen)) {
++  if(!shared || !hash_md5(shared, key, keylen)) {
+       remora_crypto_failed(client);
+       rfbClientErr("HandleARDAuth: hashing shared key failed\n");
+       goto out;
+@@ -954,9 +956,15 @@
+   if (!rfbHandleAuthResult(client))
+       goto out;
+ 
++  if (!rfbRemoraAppleRememberKey(client, shared)) goto out;
+   result = TRUE;
+ 
+  out:
++  if (!result && client->remoraApple889) rfbRemoraAppleCleanup(client);
++  OPENSSL_cleanse(userpass, sizeof(userpass));
++  OPENSSL_cleanse(ciphertext, sizeof(ciphertext));
++  if (mod) OPENSSL_cleanse(mod, keylen*5);
++  if (shared) OPENSSL_cleanse(shared, MD5_HASH_SIZE);
+   if (cred)
+     FreeUserCredential(cred);
+ 
+@@ -1006,6 +1014,9 @@
+ rfbBool
+ InitialiseRFBConnection(rfbClient* client)
+ {
++  /* A reused native client cannot carry an earlier session's event key or decoder. */
++  if (client->remoraApple889) { rfbRemoraAppleCleanup(client); client->remoraAppleError=0; }
++
+   rfbProtocolVersionMsg pv;
+   int major,minor;
+   uint32_t authScheme;
+@@ -1024,6 +1035,11 @@
+   errorMessageOnReadFailure = TRUE;
+ 
+   pv[sz_rfbProtocolVersionMsg] = 0;
++  if (client->remoraApple889 && memcmp(pv,"RFB 003.889\n",12)) {
++    client->remoraAppleError=8;
++    rfbRemoraDiagnosticFail(client,RFB_REMORA_PROTOCOL,0,0);
++    return FALSE;
++  }
+ 
+   if (sscanf(pv,rfbProtocolVersionFormat,&major,&minor) != 2) {
+     rfbRemoraDiagnosticFail(client, RFB_REMORA_PROTOCOL, 0, 0);
+@@ -1077,11 +1093,12 @@
+ 	  major, minor, rfbProtocolMajorVersion, rfbProtocolMinorVersion);
+ 
+   sprintf(pv,rfbProtocolVersionFormat,client->major,client->minor);
++  if (client->remoraApple889) memcpy(pv,"RFB 003.889\n",12);
+ 
+   rfbRemoraDiagnosticBegin(client, RFB_REMORA_VERSION);
+   if (!WriteToRFBServer(client, pv, sz_rfbProtocolVersionMsg)) return FALSE;
+   client->remoraDiagnostic.negotiatedMajor = client->major;
+-  client->remoraDiagnostic.negotiatedMinor = client->minor;
++  client->remoraDiagnostic.negotiatedMinor = client->remoraApple889 ? 889 : client->minor;
+   rfbRemoraDiagnosticComplete(client, RFB_REMORA_VERSION);
+ 
+ 
+@@ -1110,6 +1127,12 @@
+   rfbClientLog("Selected Security Scheme %d\n", authScheme);
+   client->authScheme = authScheme;
+   
++  /* Keep selection and preference intact. This profile has input keys only after ARD. */
++  if (client->remoraApple889 && authScheme != rfbARD) {
++    client->remoraAppleError=8;
++    rfbRemoraDiagnosticFail(client,RFB_REMORA_PROTOCOL,0,0);
++    return FALSE;
++  }
+   switch (authScheme) {
+ 
+   case rfbConnFailed:
+@@ -1264,6 +1287,7 @@
+ 
+   rfbRemoraDiagnosticBegin(client, RFB_REMORA_CLIENT_INIT);
+   ci.shared = (client->appData.shareDesktop ? 1 : 0);
++  if (client->remoraApple889) ci.shared=0x81;
+ 
+   if (!WriteToRFBServer(client,  (char *)&ci, sz_rfbClientInitMsg)) return FALSE;
+ 
+@@ -1344,6 +1368,7 @@
+     return FALSE;
+ 
+ 
++  if (client->remoraApple889) return rfbRemoraAppleEncodings(client);
+   if (!SupportsClient2Server(client, rfbSetEncodings)) return TRUE;
+ 
+   se->type = rfbSetEncodings;
+@@ -1561,6 +1586,7 @@
+ rfbBool
+ SendFramebufferUpdateRequest(rfbClient* client, int x, int y, int w, int h, rfbBool incremental)
+ {
++  if (client->remoraApple889 && incremental) return TRUE;
+   rfbRemoraRuntimeStage(client, RFB_REMORA_WRITE);
+   rfbFramebufferUpdateRequestMsg fur;
+ 
+@@ -1740,6 +1766,7 @@
+ rfbBool
+ SendPointerEvent(rfbClient* client,int x, int y, int buttonMask)
+ {
++  if (client->remoraApple889) return rfbRemoraApplePointer(client,x,y,buttonMask);
+   rfbPointerEventMsg pe;
+ 
+   if (!SupportsClient2Server(client, rfbPointerEvent)) return TRUE;
+@@ -1840,6 +1867,7 @@
+ rfbBool
+ SendKeyEvent(rfbClient* client, uint32_t key, rfbBool down)
+ {
++  if (client->remoraApple889) return rfbRemoraAppleKey(client,key,down);
+   rfbKeyEventMsg ke;
+ 
+   if (!SupportsClient2Server(client, rfbKeyEvent)) return TRUE;
+@@ -2152,6 +2180,10 @@
+ 
+   if (!client->remoraRuntime.failure) client->remoraRuntime.messageType = msg.type;
+   rfbRemoraRuntimeStage(client, RFB_REMORA_MESSAGE);
++  if (client->remoraApple889) {
++    int handled=rfbRemoraAppleMessage(client,msg.type);
++    if (handled) return handled>0;
++  }
+   switch (msg.type) {
+ 
+   case rfbSetColourMapEntries:
+@@ -2201,6 +2233,7 @@
+       return FALSE;
+ 
+     msg.fu.nRects = rfbClientSwap16IfLE(msg.fu.nRects);
++    if (client->remoraApple889) rfbRemoraAppleBegin(client);
+     if (client->remoraPerf.enabled) {
+       client->remoraPerf.declaredRects = msg.fu.nRects;
+       client->remoraPerf.header = client->RemoraPerformanceClock();
+@@ -2236,6 +2269,11 @@
+         client->remoraRuntime.encoding = (int32_t)rect.encoding;
+         client->remoraRuntime.x = rect.r.x; client->remoraRuntime.y = rect.r.y;
+         client->remoraRuntime.width = rect.r.w; client->remoraRuntime.height = rect.r.h;
++      }
++      if (client->remoraApple889) {
++        int handled=rfbRemoraAppleRect(client,&rect);
++        if (handled<0) return FALSE;
++        if (handled>0) continue;
+       }
+       if (rect.encoding == rfbEncodingLastRect) break;
+       rfbRemoraRuntimeStage(client, RFB_REMORA_DECODE);
+@@ -2729,13 +2767,16 @@
+       /* Now we may discard "soft cursor locks". */
+       client->SoftCursorUnlockScreen(client);
+ 
+-      client->GotFrameBufferUpdate(client, rect.r.x, rect.r.y, rect.r.w, rect.r.h);
++      if (client->remoraApple889) rfbRemoraAppleRaw(client,&rect);
++      else client->GotFrameBufferUpdate(client, rect.r.x, rect.r.y, rect.r.w, rect.r.h);
+     }
+ 
+     if (client->remoraPerf.enabled && client->RemoraPerformance)
+       client->RemoraPerformance(client, RFB_REMORA_PERF_PARSED);
+     rfbRemoraRuntimeStage(client, RFB_REMORA_WRITE);
+-    if (!earlyRequested) {
++    if (client->remoraApple889) {
++      if (!rfbRemoraAppleEnd(client)) return FALSE;
++    } else if (!earlyRequested) {
+       if (!SendIncrementalFramebufferUpdateRequest(client)) return FALSE;
+     }
+ 
+--- a/src/libvncclient/vncviewer.c
++++ b/src/libvncclient/vncviewer.c
+@@ -1,3 +1,5 @@
++#include "apple.h"
++#include <openssl/crypto.h>
+ /*
+  *  Copyright (C) 1999 AT&T Laboratories Cambridge.  All Rights Reserved.
+  *
+@@ -444,6 +446,7 @@
+   rfbRemoraDiagnosticComplete(client, RFB_REMORA_ALLOCATE);
+   rfbRemoraDiagnosticBegin(client, RFB_REMORA_FORMAT);
+ 
++  if (client->remoraApple889 && !rfbRemoraAppleSetup(client)) return FALSE;
+   if (!SetFormatAndEncodings(client))
+     return FALSE;
+ 
+@@ -547,6 +550,7 @@
+ }
+ 
+ void rfbClientCleanup(rfbClient* client) {
++  rfbRemoraAppleCleanup(client);
+ #ifdef LIBVNCSERVER_HAVE_LIBZ
+   int i;
+ 

@@ -798,3 +798,12 @@ uint32_t rm_vnc_unicode_keysym(uint32_t ucs) {
         if (keysymtab[i].ucs == ucs && !keysymtab[i].deprecated) return keysymtab[i].keysym;
     return ucs | 0x01000000;
 }
+
+/* Apple's ARD character path requires Unicode keysyms above Latin-1.
+ * Function and modifier symbols are outside this character table. */
+uint32_t rm_vnc_apple_keysym(uint32_t keysym) {
+    if (keysym <= 0xff || keysym >= 0x01000000) return keysym;
+    for (size_t i=0; i<sizeof(keysymtab)/sizeof(keysymtab[0]); i++)
+        if (keysymtab[i].keysym==keysym) return 0x01000000u | keysymtab[i].ucs;
+    return keysym;
+}

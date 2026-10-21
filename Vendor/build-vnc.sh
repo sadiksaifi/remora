@@ -20,7 +20,7 @@ readonly JPEG_SHA=3a13a5ba767dc8264bc40b185e41368a80d5d5f945944d1dbaa4b2fb0099f4
     echo 'Build the shared OpenSSL/FreeRDP engine first: ./Vendor/build-engine.sh' >&2; exit 1;
 }
 mkdir -p "$SOURCES" "$BUILD/logs"
-fingerprint=$({ shasum -a 256 "$0" "$VENDOR/patches/"*.patch "$BUILD/.configuration"; xcodebuild -version; "$REMORA_CMAKE" --version; } | shasum -a 256 | awk '{print $1}')
+fingerprint=$({ shasum -a 256 "$0" "$VENDOR/patches/"*.patch "$VENDOR/apple-mvs/"*.[ch] "$BUILD/.configuration"; xcodebuild -version; "$REMORA_CMAKE" --version; } | shasum -a 256 | awk '{print $1}')
 if [[ -f $BUILD/.vnc-configuration && $(cat "$BUILD/.vnc-configuration") == "$fingerprint" && -d $BUILD/LibVNCClient.xcframework ]]; then
     echo 'Skipping completed LibVNCClient stage.'; exit 0
 fi
@@ -37,6 +37,8 @@ fetch() {
 fetch "libvncserver-$VNC_COMMIT" "$VNC_SHA" "https://codeload.github.com/LibVNC/libvncserver/tar.gz/$VNC_COMMIT"
 fetch "libjpeg-turbo-$JPEG_VERSION" "$JPEG_SHA" "https://codeload.github.com/libjpeg-turbo/libjpeg-turbo/tar.gz/refs/tags/$JPEG_VERSION"
 patch -d "$SOURCES/libvncserver-$VNC_COMMIT" -p1 < "$VENDOR/patches/libvncclient-tls-policy.patch"
+patch -d "$SOURCES/libvncserver-$VNC_COMMIT" -p1 < "$VENDOR/patches/libvncclient-apple.patch"
+cp "$VENDOR/apple-mvs/"*.[ch] "$SOURCES/libvncserver-$VNC_COMMIT/src/libvncclient/"
 SDKROOT=$(xcrun --sdk macosx --show-sdk-path)
 CC=$(xcrun --find clang)
 JOBS=$(sysctl -n hw.logicalcpu)

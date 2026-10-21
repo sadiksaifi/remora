@@ -84,6 +84,9 @@ listener.close()
 """#
 
 @Test @MainActor func vncClassicAuthenticationDoesNotPoisonLaterTLSSessions() async throws {
+    // A completed opt-in ARD attempt must not change the default OpenSSL context
+    // or the following standard classic/TLS transcripts in this process.
+    try await verifyApplePrecedesStandardSecuritySequence()
     let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
     defer { try? FileManager.default.removeItem(at: directory) }
