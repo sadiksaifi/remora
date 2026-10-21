@@ -52,7 +52,7 @@ protocol VNCInputTransport {
 struct VNCInputState {
     private var human: [UInt32: VNCKey] = [:]
     private var agent: [UInt32: VNCKey] = [:]
-    private var humanButtons: PointerButtons = []
+    private(set) var humanButtons: PointerButtons = []
     private var agentButtons: PointerButtons = []
     private var position = RemotePoint(x: 0, y: 0)
     private var vertical: [Int64] = [0, 0]
@@ -104,10 +104,12 @@ struct VNCInputState {
         }
     }
 
-    /// Wheel pulses are pointer events, so they also move the pointer to `point`.
-    mutating func humanWheel(_ wheel: WheelInput, at point: RemotePoint, wire: any VNCInputTransport) -> Bool {
-        position = point
-        return apply(.wheel(wheel), source: .human, wire: wire)
+    /// Wheel pulses are pointer events, so a pulse also moves the pointer to `point`.
+    /// `moved` is false when the wheel only adds to a fraction of a notch.
+    mutating func humanWheel(_ wheel: WheelInput, at point: RemotePoint, wire: any VNCInputTransport) -> (ok: Bool, moved: Bool) {
+        let moved = abs(vertical[0] + Int64(wheel.vertical)) >= 120 || abs(horizontal[0] + Int64(wheel.horizontal)) >= 120
+        if moved { position = point }
+        return (apply(.wheel(wheel), source: .human, wire: wire), moved)
     }
 
     mutating func humanKey(scan: UInt32, down: Bool, characters: String?, wire: any VNCInputTransport) -> Bool {

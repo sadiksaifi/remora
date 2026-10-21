@@ -207,7 +207,9 @@ public final class VNCSession: AgentInputSession, @unchecked Sendable {
                 failed = !workerInput.apply(event, source: .human, wire: wire)
                 if !failed { feedback(event, source: .human) }
             case .humanWheel(let wheel, let position):
-                failed = !workerInput.humanWheel(wheel, at: position, wire: wire)
+                let result = workerInput.humanWheel(wheel, at: position, wire: wire)
+                failed = !result.ok
+                if result.ok, result.moved { inputFeedback(.human, .pointer(position, workerInput.humanButtons)) }
             case .releaseHuman:
                 failed = !workerInput.release(.human, wire: wire)
                 if !failed { inputFeedback(.human, .release) }

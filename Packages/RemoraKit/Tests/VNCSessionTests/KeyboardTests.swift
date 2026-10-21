@@ -59,7 +59,9 @@ private final class Wire: VNCInputTransport {
     defer { peer.stop() }
     let pins = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     defer { try? FileManager.default.removeItem(at: pins) }
-    let session = VNCSession(configuration: .init(host: "127.0.0.1", port: peer.port, username: "", desktopSize: .init(width: 16, height: 16)), frameSink: MarkerFrames(), certificateStoreURL: pins)
+    let feedback = PointerFeedback()
+    let session = VNCSession(configuration: .init(host: "127.0.0.1", port: peer.port, username: "", desktopSize: .init(width: 16, height: 16)), frameSink: MarkerFrames(),
+                             inputFeedback: { source, event in feedback.receive(source, event) }, certificateStoreURL: pins)
     defer { session.disconnect() }
     session.connect()
     _ = try await peer.wait("request")
@@ -68,4 +70,18 @@ private final class Wire: VNCInputTransport {
     _ = try await peer.wait("pointer", count: 3)
     let pointers = peer.events("pointer").map { [$0["x"] as? Int, $0["y"] as? Int, $0["mask"] as? Int] }
     #expect(pointers == [[1, 2, 1], [9, 7, 9], [9, 7, 1]])
+    // Recordings draw the pointer from feedback, so the pulses' movement is published with the held button.
+    let deadline = ContinuousClock.now.advanced(by: .seconds(2))
+    while feedback.values.count < 2, ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(5)) }
+    #expect(feedback.values == ["human 1,2 1", "human 9,7 1"])
+}
+
+private final class PointerFeedback: @unchecked Sendable {
+    private let lock = NSLock()
+    private var events: [String] = []
+    func receive(_ source: InputSource, _ event: SessionInputFeedback) {
+        guard case .pointer(let point, let buttons) = event else { return }
+        lock.withLock { events.append("\(source) \(point.x),\(point.y) \(buttons.rawValue)") }
+    }
+    var values: [String] { lock.withLock { events } }
 }
