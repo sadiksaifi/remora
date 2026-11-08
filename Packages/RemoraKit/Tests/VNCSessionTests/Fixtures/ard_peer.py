@@ -85,7 +85,10 @@ def mvs_bits(*parts):
     return bytes(int(bits[i:i+8], 2) for i in range(0, len(bits), 8))
 
 
-def apple_frames(outcome, exact, send, key, report):
+def apple_frames(outcome, exact, send, key, report, connection):
+    import select
+    import time
+    began = time.monotonic()
     def marker(text): return ''.join(format(c, '08b') for c in text.encode('ascii'))
     header = mvs_bits('0', '101 1 0000', marker('m'))
     body = mvs_bits('0 0 0', '00', '00', '1110 010 1', '0 01 0', '1', marker('m'))
@@ -119,19 +122,39 @@ def apple_frames(outcome, exact, send, key, report):
             x,y = struct.unpack('>HH',b[53:57])
             report['scrolls'].append([dx,dy,fixedx,fixedy,pointx,pointy,x,y])
         elif kind == 3:
-            exact(9); report['requests_after_initial'] += 1
+            request = struct.unpack('>BHHHH', exact(9))
+            if request != (0,0,0,16,8): raise ValueError('full non-incremental request required')
+            report['requests_after_initial'] += 1
         else: raise ValueError('unexpected Apple client message')
         return kind
     if outcome == 'apple-no-baseline':
         update(partial); return
     if outcome == 'apple-truncated':
         send(struct.pack('>BBHHHHHiI',0,0,1,0,0,16,8,1011,100)+b'\x00'); return
+    if outcome.startswith('apple-retry-'):
+        if outcome == 'apple-retry-empty': send(bytes(4))
+        # These vectors have only DC coefficients; retain their known DC quantizers.
+        elif outcome == 'apple-retry-quant': update(bytes([2])+bytes([16])*64+bytes([19])*64, rect=(0,0,0,0))
+        elif outcome == 'apple-retry-raw': update(bytes([148,148,148,255])*64, 0, (0,0,8,8))
+        elif outcome == 'apple-retry-controls': send(bytes([4,7,0x14,0,0,4,0,0,0,0,0x51,0,0]))
+        # Drop the initial request, and in the dropped case also its first retry.
+        retries = 2 if outcome == 'apple-retry-dropped' else 1
+        for _ in range(64):
+            if client_message()==3 and report['requests_after_initial']==retries: break
+        else: raise ValueError('missing baseline retry')
+        report['baseline_retry_ms'] = round((time.monotonic()-began)*1000)
+        if outcome == 'apple-retry-hidden': time.sleep(0.1)
     update(full)
     # Subscription may follow already-admitted input. Read independently until it arrives.
     for _ in range(64):
         if client_message()==9: break
     else: raise ValueError('missing subscription')
     if report['subscriptions'][-1] != [0,1,0,0,0,16,8]: raise ValueError('subscription region')
+    if outcome == 'apple-hidden-baseline':
+        report['baseline_retry_ms'] = round((time.monotonic()-began)*1000)
+        for _ in range(64):
+            if client_message()==3: break
+        else: raise ValueError('missing resume refresh')
     if outcome == 'apple-geometry':
         update(b'',-223,(0,0,32,8)); return
     if outcome == 'apple-bad-cache':
@@ -179,6 +202,11 @@ def apple_frames(outcome, exact, send, key, report):
             client_message()
             if len(report['subscriptions'])>=3 and report['requests_after_initial']>=1: break
         else: raise ValueError('demand completion missing')
+    elif outcome.startswith('apple-retry-') or outcome == 'apple-hidden-baseline':
+        # A baseline must stop retries, including across more than one retry interval.
+        if select.select([connection],[],[],1.2)[0]:
+            client_message()
+            raise ValueError('unexpected client message after baseline')
 
 
 def serve_once(offer_mode, outcome, port):
@@ -334,9 +362,11 @@ def serve_once(offer_mode, outcome, port):
                             raise ValueError('encoding count bound')
                         exact(count * 4)
                     elif kind == 3:
-                        exact(9)
+                        request = exact(9)
+                        if apple and (not report.get('control_mode') or request != struct.pack('>BHHHH',0,0,0,dimension,height)):
+                            raise ValueError('initial full request must follow SetMode')
                         if apple and outcome != 'apple-success':
-                            apple_frames(outcome,exact,send,hashlib.md5(shared).digest(),report)
+                            apple_frames(outcome,exact,send,hashlib.md5(shared).digest(),report,connection)
                         elif outcome in ('fragmented-small', 'fragmented-large'):
                             compressed = synthetic_zrle(dimension)
                             report['compressed_bytes'] = len(compressed)

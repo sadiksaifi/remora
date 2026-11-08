@@ -16,10 +16,15 @@ enum { APPLE_PROFILE = 8, APPLE_DECODE = 9, APPLE_GEOMETRY = 10 };
 typedef struct {
     uint8_t key[16];
     rfbBool keyValid, baseline, dirty, demand, subscribed;
+    double baselineRequestAt;
     uint32_t left, top, right, bottom;
     mvs_decoder *decoder;
 } Apple;
 static Apple *state(rfbClient *c) { return c->remoraAppleState; }
+static double monotonic(void) {
+    struct timespec t; clock_gettime(CLOCK_MONOTONIC,&t);
+    return t.tv_sec+t.tv_nsec/1e9;
+}
 static uint16_t be16(const uint8_t *p) { return (uint16_t)((unsigned)p[0]<<8|p[1]); }
 static uint32_t be32(const uint8_t *p) { return (uint32_t)p[0]<<24|(uint32_t)p[1]<<16|(uint32_t)p[2]<<8|p[3]; }
 static void put16(uint8_t *p, uint16_t n) { p[0]=(uint8_t)(n>>8); p[1]=(uint8_t)n; }
@@ -53,7 +58,20 @@ rfbBool rfbRemoraAppleSetup(rfbClient *c) {
     if (!a->decoder) return fail(c,APPLE_DECODE);
     /* Control mode. No session selection, session-record encryption, media or clipboard. */
     const char mode[4]={0x0a,0,0,1};
+    a->baselineRequestAt=monotonic()+1;
     return WriteToRFBServer(c,mode,sizeof(mode));
+}
+/* The initial full request can go unanswered, or produce only controls/partial
+ * coverage. Keep requesting a baseline until push subscription can take over.
+ * Called between complete messages, never during a rectangle decode. */
+rfbBool rfbRemoraAppleRetryBaseline(rfbClient *c) {
+    Apple *a=state(c);
+    if(!a) return fail(c,APPLE_PROFILE);
+    if(a->baseline || !a->demand) return TRUE;
+    double now=monotonic();
+    if(now<a->baselineRequestAt) return TRUE;
+    a->baselineRequestAt=now+1;
+    return SendFramebufferUpdateRequest(c,0,0,c->width,c->height,FALSE);
 }
 rfbBool rfbRemoraAppleEncodings(rfbClient *c) {
     uint8_t message[12]={2,0,0,2};
@@ -151,6 +169,7 @@ void rfbRemoraAppleRaw(rfbClient *c,const rfbFramebufferUpdateRectHeader *r) {
 rfbBool rfbRemoraAppleSetDemand(rfbClient *c,rfbBool enabled) {
     Apple *a=state(c);
     if(!a) return fail(c,APPLE_PROFILE);
+    if(!a->baseline && enabled && !a->demand) a->baselineRequestAt=monotonic()+1;
     a->demand=enabled;
     if(!a->baseline || a->subscribed==enabled) return TRUE;
     if(c->RemoraUpdateAllowed && !c->RemoraUpdateAllowed(c,FALSE)) return FALSE;

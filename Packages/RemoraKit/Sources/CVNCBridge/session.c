@@ -446,7 +446,14 @@ bool rm_vnc_step(RMVNC *s) {
         if (!atomic_load(&s->cancelled)) rfbRemoraRuntimeFail(s->client, RFB_REMORA_DECODER, 0, 0);
         cancel_resize(s); return false;
     }
-    return !atomic_load(&s->cancelled) && reconcile_resize(s);
+    if (atomic_load(&s->cancelled)) return false;
+    if (s->apple) {
+        s->inputBusy++;
+        bool requested = rfbRemoraAppleRetryBaseline(c);
+        s->inputBusy--;
+        if (!requested) return false;
+    }
+    return reconcile_resize(s);
 }
 RMVNCDiagnostic rm_vnc_diagnostic(RMVNC *s) {
     RMVNCDiagnostic result = s->diagnostic;

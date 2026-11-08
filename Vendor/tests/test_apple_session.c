@@ -52,9 +52,10 @@ int main(int argc,char **argv) {
     int ready=ConnectToRFBServer(c,"127.0.0.1",atoi(argv[1])) && rfbClientInitialise(c);
     if(ready) {
         if(!SendKeyEvent(c,0xffe9,TRUE) || !SendKeyEvent(c,0xffe9,FALSE)) return 3;
-        for(unsigned i=0;i<32;i++) {
+        for(unsigned i=0;i<64;i++) {
             int n=WaitForMessage(c,100000);
             if(n<0 || (n>0 && !HandleRFBServerMessage(c))) break;
+            if(!rfbRemoraAppleRetryBaseline(c)) return 3;
         }
     }
     free(c->frameBuffer); c->frameBuffer=NULL; rfbClientCleanup(c);
