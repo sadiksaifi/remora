@@ -6,6 +6,7 @@
 rfbBool rfbRemoraAppleRememberKey(rfbClient *, const unsigned char key[16]);
 void rfbRemoraAppleCleanup(rfbClient *);
 rfbBool rfbRemoraAppleSetup(rfbClient *);
+rfbBool rfbRemoraAppleRetryBaseline(rfbClient *);
 rfbBool rfbRemoraAppleEncodings(rfbClient *);
 int rfbRemoraAppleMessage(rfbClient *, unsigned char type);
 void rfbRemoraAppleBegin(rfbClient *);

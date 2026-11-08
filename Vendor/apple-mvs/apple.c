@@ -16,9 +16,15 @@ enum { APPLE_PROFILE = 8, APPLE_DECODE = 9, APPLE_GEOMETRY = 10 };
 typedef struct {
     uint8_t key[16];
     rfbBool keyValid, baseline, dirty, demand, subscribed;
+    double baselineRequestAt;
+    uint32_t left, top, right, bottom;
     mvs_decoder *decoder;
 } Apple;
 static Apple *state(rfbClient *c) { return c->remoraAppleState; }
+static double monotonic(void) {
+    struct timespec t; clock_gettime(CLOCK_MONOTONIC,&t);
+    return t.tv_sec+t.tv_nsec/1e9;
+}
 static uint16_t be16(const uint8_t *p) { return (uint16_t)((unsigned)p[0]<<8|p[1]); }
 static uint32_t be32(const uint8_t *p) { return (uint32_t)p[0]<<24|(uint32_t)p[1]<<16|(uint32_t)p[2]<<8|p[3]; }
 static void put16(uint8_t *p, uint16_t n) { p[0]=(uint8_t)(n>>8); p[1]=(uint8_t)n; }
@@ -52,7 +58,20 @@ rfbBool rfbRemoraAppleSetup(rfbClient *c) {
     if (!a->decoder) return fail(c,APPLE_DECODE);
     /* Control mode. No session selection, session-record encryption, media or clipboard. */
     const char mode[4]={0x0a,0,0,1};
+    a->baselineRequestAt=monotonic()+1;
     return WriteToRFBServer(c,mode,sizeof(mode));
+}
+/* The initial full request can go unanswered, or produce only controls/partial
+ * coverage. Keep requesting a baseline until push subscription can take over.
+ * Called between complete messages, never during a rectangle decode. */
+rfbBool rfbRemoraAppleRetryBaseline(rfbClient *c) {
+    Apple *a=state(c);
+    if(!a) return fail(c,APPLE_PROFILE);
+    if(a->baseline || !a->demand) return TRUE;
+    double now=monotonic();
+    if(now<a->baselineRequestAt) return TRUE;
+    a->baselineRequestAt=now+1;
+    return SendFramebufferUpdateRequest(c,0,0,c->width,c->height,FALSE);
 }
 rfbBool rfbRemoraAppleEncodings(rfbClient *c) {
     uint8_t message[12]={2,0,0,2};
@@ -93,6 +112,20 @@ int rfbRemoraAppleMessage(rfbClient *c,uint8_t type) {
     }
 }
 void rfbRemoraAppleBegin(rfbClient *c) { state(c)->dirty=FALSE; }
+/* Decoder callbacks are speculative until every rectangle in the message validates. */
+static void damage(void *context,uint32_t x,uint32_t y,uint32_t w,uint32_t h) {
+    Apple *a=context;
+    if(!w || !h) return;
+    if(!a->dirty) {
+        a->left=x; a->top=y; a->right=x+w; a->bottom=y+h;
+    } else {
+        if(x<a->left) a->left=x;
+        if(y<a->top) a->top=y;
+        if(x+w>a->right) a->right=x+w;
+        if(y+h>a->bottom) a->bottom=y+h;
+    }
+    a->dirty=TRUE;
+}
 int rfbRemoraAppleRect(rfbClient *c,const rfbFramebufferUpdateRectHeader *r) {
     Apple *a=state(c);
     if(r->encoding==0) return 0;
@@ -118,24 +151,25 @@ int rfbRemoraAppleRect(rfbClient *c,const rfbFramebufferUpdateRectHeader *r) {
     }
     mvs_surface surface={(uint8_t *)c->frameBuffer,c->width,c->height,(size_t)c->width*4,16,8,0};
     mvs_stats stats;
-    mvs_error error=mvs_decode(a->decoder,&surface,r->r.x,r->r.y,r->r.w,r->r.h,payload,n,NULL,NULL,&stats);
+    mvs_error error=mvs_decode(a->decoder,&surface,r->r.x,r->r.y,r->r.w,r->r.h,payload,n,damage,a,&stats);
     free(payload);
     if(error!=MVS_OK) return fail(c,APPLE_DECODE),-1;
     if(!quant) {
-        a->dirty=TRUE;
+        if(stats.kind==MVS_KIND_FULL) damage(a,0,0,c->width,c->height);
         if(stats.kind==MVS_KIND_FULL && r->r.x==0 && r->r.y==0 && r->r.w==c->width && r->r.h==c->height)
             a->baseline=TRUE;
     }
     return 1;
 }
 void rfbRemoraAppleRaw(rfbClient *c,const rfbFramebufferUpdateRectHeader *r) {
-    state(c)->dirty=TRUE;
+    damage(state(c),r->r.x,r->r.y,r->r.w,r->r.h);
     if(r->r.x==0 && r->r.y==0 && r->r.w==c->width && r->r.h==c->height) state(c)->baseline=TRUE;
 }
 /* Subscription is a source-defined zero-interval full-region 0x09, not standard ContinuousUpdates. */
 rfbBool rfbRemoraAppleSetDemand(rfbClient *c,rfbBool enabled) {
     Apple *a=state(c);
     if(!a) return fail(c,APPLE_PROFILE);
+    if(!a->baseline && enabled && !a->demand) a->baselineRequestAt=monotonic()+1;
     a->demand=enabled;
     if(!a->baseline || a->subscribed==enabled) return TRUE;
     if(c->RemoraUpdateAllowed && !c->RemoraUpdateAllowed(c,FALSE)) return FALSE;
@@ -148,7 +182,7 @@ rfbBool rfbRemoraAppleSetDemand(rfbClient *c,rfbBool enabled) {
 rfbBool rfbRemoraAppleEnd(rfbClient *c) {
     Apple *a=state(c);
     if(!rfbRemoraAppleSetDemand(c,a->demand)) return FALSE;
-    if(a->dirty) c->GotFrameBufferUpdate(c,0,0,c->width,c->height);
+    if(a->dirty) c->GotFrameBufferUpdate(c,a->left,a->top,a->right-a->left,a->bottom-a->top);
     return TRUE;
 }
 rfbBool rfbRemoraAppleKey(rfbClient *c,uint32_t keysym,rfbBool down) {

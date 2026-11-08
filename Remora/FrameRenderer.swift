@@ -47,7 +47,10 @@ final class FrameRenderer: FrameSink, Sendable {
     private let pipeline: any MTLRenderPipelineState
     private let nearest: any MTLSamplerState
     private let linear: any MTLSamplerState
-    private let inFlight = Mutex(false)
+    // Space submissions by a refresh interval so drawables cannot queue behind vsync.
+    // Acquisition stays off the main thread even when the window is occluded.
+    private let presentationQueue = DispatchQueue(label: "Remote desktop presentation", qos: .userInteractive)
+    private let presentation = Mutex((inFlight: false, requested: false, earliest: CFTimeInterval.zero))
     private let counters = Mutex(Statistics())
 
     init(device: any MTLDevice) throws(Failure) {
@@ -104,21 +107,58 @@ final class FrameRenderer: FrameSink, Sendable {
     }
 
     @MainActor
-    func present(on layer: CAMetalLayer, redraw: Bool) -> CGSize? {
-        guard !inFlight.withLock({ $0 }), desktop.needsSubmission(redraw: redraw),
-              layer.drawableSize.width > 0, layer.drawableSize.height > 0,
-              let drawable = layer.nextDrawable() else { return nil }
+    func present(on layer: CAMetalLayer, redraw: Bool, interval: CFTimeInterval,
+                 didComplete: @escaping @MainActor @Sendable (CGSize?) -> Void) {
+        let drawableSize = layer.drawableSize
+        guard drawableSize.width > 0, drawableSize.height > 0 else { return }
+        let deadline = presentation.withLock { state -> CFTimeInterval? in
+            guard !state.inFlight else {
+                state.requested = true
+                return nil
+            }
+            state.inFlight = true
+            return state.earliest
+        }
+        guard let deadline else { return }
+        presentationQueue.asyncAfter(deadline: .now() + max(0, deadline - CACurrentMediaTime())) { [self] in
+            autoreleasepool { draw(on: layer, redraw: redraw, interval: interval, didComplete: didComplete) }
+        }
+    }
+
+    private func finish(size: CGSize?, retry: Bool,
+                        didComplete: @escaping @MainActor @Sendable (CGSize?) -> Void) {
+        let requested = presentation.withLock { state in
+            state.inFlight = false
+            defer { state.requested = false }
+            return state.requested
+        }
+        if size != nil || retry || requested {
+            DispatchQueue.main.async { didComplete(size) }
+        }
+    }
+
+    private func draw(on layer: CAMetalLayer, redraw: Bool, interval: CFTimeInterval,
+                      didComplete: @escaping @MainActor @Sendable (CGSize?) -> Void) {
+        guard desktop.needsSubmission(redraw: redraw) else {
+            finish(size: nil, retry: false, didComplete: didComplete)
+            return
+        }
+        presentation.withLock { $0.earliest = CACurrentMediaTime() + interval }
+        guard let drawable = layer.nextDrawable() else {
+            finish(size: nil, retry: true, didComplete: didComplete)
+            return
+        }
         let pass = MTLRenderPassDescriptor()
         pass.colorAttachments[0].texture = drawable.texture
         pass.colorAttachments[0].loadAction = .clear
         pass.colorAttachments[0].storeAction = .store
         pass.colorAttachments[0].clearColor = MTLClearColor(red: 0, green: 0, blue: 0, alpha: 1)
-        inFlight.withLock { $0 = true }
         do {
-            let submission = try desktop.submit { texture, command in
+            _ = try desktop.submit { texture, command in
                 guard let encoder = command.makeRenderCommandEncoder(descriptor: pass) else { throw Failure.allocationFailed }
                 let size = CGSize(width: texture.width, height: texture.height)
-                let geometry = DesktopGeometry(remoteSize: size, drawableSize: layer.drawableSize)
+                let drawableSize = CGSize(width: drawable.texture.width, height: drawable.texture.height)
+                let geometry = DesktopGeometry(remoteSize: size, drawableSize: drawableSize)
                 let rect = geometry.contentRect
                 encoder.setViewport(MTLViewport(originX: rect.minX, originY: rect.minY, width: rect.width, height: rect.height, znear: 0, zfar: 1))
                 encoder.setRenderPipelineState(pipeline)
@@ -138,17 +178,16 @@ final class FrameRenderer: FrameSink, Sendable {
                         $0.gpuSeconds += max(0, command.gpuEndTime - command.gpuStartTime)
                         if let error = command.error { $0.lastFailure = .commandFailed(error.localizedDescription) }
                     }
-                    inFlight.withLock { $0 = false }
+                    finish(size: command.status == .error ? nil : size, retry: true, didComplete: didComplete)
                     os_signpost(.end, log: renderLog, name: "Present", signpostID: signpost)
                 }
                 command.label = "Remote desktop presentation"
+                presentation.withLock { $0.earliest = CACurrentMediaTime() + interval }
                 command.present(drawable)
             }
-            return CGSize(width: submission.size.width, height: submission.size.height)
         } catch {
-            inFlight.withLock { $0 = false }
             counters.withLock { $0.lastFailure = .commandFailed(error.localizedDescription) }
-            return nil
+            finish(size: nil, retry: true, didComplete: didComplete)
         }
     }
 }

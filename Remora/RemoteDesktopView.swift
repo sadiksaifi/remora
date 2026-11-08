@@ -35,9 +35,10 @@ final class RemoteDesktopView: NSView {
 
     let renderer: FrameRenderer
     private let metalLayer = CAMetalLayer()
-    private var refreshLink: CADisplayLink?
-    private var refreshTarget: RefreshTarget?
-    private var redrawNeeded = true
+    private var frameObserver: UUID?
+    private var frameUpdates: (any DispatchSourceUserDataAdd)?
+    private var redrawRevision = 0
+    private var submittedRedrawRevision = -1
     private(set) var remoteSize = CGSize.zero
 
     /// The tab this desktop belongs to, for its accessibility label and identifier.
@@ -78,7 +79,7 @@ final class RemoteDesktopView: NSView {
         metalLayer.colorspace = CGColorSpace(name: CGColorSpace.sRGB)
         metalLayer.isOpaque = true
         metalLayer.framebufferOnly = true
-        metalLayer.maximumDrawableCount = 3
+        metalLayer.maximumDrawableCount = 2
         metalLayer.presentsWithTransaction = false
         metalLayer.displaySyncEnabled = true
         metalLayer.backgroundColor = NSColor.black.cgColor
@@ -90,7 +91,10 @@ final class RemoteDesktopView: NSView {
 
     required init?(coder: NSCoder) { fatalError("Use init(renderer:)") }
 
-    isolated deinit { refreshLink?.invalidate() }
+    isolated deinit {
+        frameUpdates?.cancel()
+        if let frameObserver { renderer.desktop.removeFrameObserver(frameObserver) }
+    }
 
     override var isFlipped: Bool { true }
     override var isOpaque: Bool { true }
@@ -98,13 +102,15 @@ final class RemoteDesktopView: NSView {
     override var wantsUpdateLayer: Bool { true }
     override func makeBackingLayer() -> CALayer { metalLayer }
 
-    override func updateLayer() { redrawNeeded = true }
+    override func updateLayer() { requestRedraw() }
 
     override func viewWillMove(toWindow newWindow: NSWindow?) {
         desktopInput.focusOut()
-        refreshLink?.invalidate()
-        refreshLink = nil
-        refreshTarget = nil
+        if let frameObserver { renderer.desktop.removeFrameObserver(frameObserver) }
+        frameObserver = nil
+        frameUpdates?.cancel()
+        frameUpdates = nil
+        NotificationCenter.default.removeObserver(self)
         super.viewWillMove(toWindow: newWindow)
     }
 
@@ -113,13 +119,20 @@ final class RemoteDesktopView: NSView {
         updateDrawableSize()
         desktopInput.movedToWindow()
         guard let window else { return }
+        // Merge arrivals while the main run loop is busy; only the newest pixels matter.
+        let updates = DispatchSource.makeUserDataAddSource(queue: .main)
+        updates.setEventHandler { [weak self] in
+            MainActor.assumeIsolated { self?.refresh() }
+        }
+        updates.activate()
+        frameUpdates = updates
+        frameObserver = renderer.desktop.addFrameObserver { _ in updates.add(data: 1) }
         window.makeFirstResponder(self)
-        let target = RefreshTarget(view: self)
-        let link = displayLink(target: target, selector: #selector(RefreshTarget.refresh(_:)))
-        link.add(to: .main, forMode: .common)
-        refreshTarget = target
-        refreshLink = link
-        redrawNeeded = true
+        for name in [NSWindow.didChangeOcclusionStateNotification, NSWindow.didDeminiaturizeNotification,
+                     NSWindow.didChangeScreenNotification] {
+            NotificationCenter.default.addObserver(self, selector: #selector(windowChanged(_:)), name: name, object: window)
+        }
+        requestRedraw()
     }
 
     override func viewDidChangeBackingProperties() {
@@ -216,29 +229,40 @@ final class RemoteDesktopView: NSView {
         metalLayer.contentsScale = scale
         metalLayer.drawableSize = size
         CATransaction.commit()
-        redrawNeeded = true
+        requestRedraw()
         window?.invalidateCursorRects(for: self)
         updateScreenElement()
     }
 
-    private func refresh() {
-        if let size = renderer.present(on: metalLayer, redraw: redrawNeeded) {
-            if remoteSize != size {
-                remoteSize = size
-                agentPointer?.needsLayout = true
-                window?.invalidateCursorRects(for: self)
-                updateScreenElement()
-                NSAccessibility.post(element: screenElement, notification: .valueChanged)
-            }
-            redrawNeeded = false
-        }
+    @objc private func windowChanged(_ notification: Notification) { requestRedraw() }
+
+    private func requestRedraw() {
+        redrawRevision += 1
+        refresh()
     }
 
-    @MainActor
-    private final class RefreshTarget: NSObject {
-        weak var view: RemoteDesktopView?
-        init(view: RemoteDesktopView) { self.view = view }
-        @objc func refresh(_ link: CADisplayLink) { view?.refresh() }
+    private func refresh() {
+        guard frameUpdates != nil, let window, window.occlusionState.contains(.visible),
+              !window.isMiniaturized, !isHiddenOrHasHiddenAncestor else { return }
+        let revision = redrawRevision
+        let refreshRate = window.screen?.maximumFramesPerSecond ?? 60
+        let interval = 1.0 / Double(refreshRate > 0 ? refreshRate : 60)
+        renderer.present(on: metalLayer, redraw: revision != submittedRedrawRevision, interval: interval) { [weak self] size in
+            guard let self else { return }
+            if let size {
+                if remoteSize != size {
+                    remoteSize = size
+                    agentPointer?.needsLayout = true
+                    self.window?.invalidateCursorRects(for: self)
+                    updateScreenElement()
+                    NSAccessibility.post(element: screenElement, notification: .valueChanged)
+                }
+                submittedRedrawRevision = revision
+            }
+            // A frame or redraw can arrive while acquiring a drawable or on the GPU.
+            // The renderer keeps one deferred request and reads the newest pending pixels.
+            refresh()
+        }
     }
 }
 

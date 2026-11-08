@@ -18,7 +18,9 @@ with tempfile.TemporaryDirectory(prefix='remora-apple-sanitizers-') as temporary
                     str(root/'tests/test_apple_session.c'), str(root/'apple-mvs/apple.c'), str(root/'apple-mvs/mvs.c'),
                     str(root/'build/vnc-package/libLibVNCClient.a'), str(root/'build/openssl-install/lib/libssl.a'),
                     str(root/'build/openssl-install/lib/libcrypto.a'), '-lz', '-o',exe], check=True,timeout=60)
-    for mode, frames in [('apple-sequence',3),('apple-no-baseline',0),('apple-bad-cache',1),
+    for mode, frames in [('apple-retry-dropped',3),('apple-retry-empty',3),('apple-retry-quant',3),
+                         ('apple-retry-raw',4),('apple-retry-controls',3),
+                         ('apple-sequence',3),('apple-damage',6),('apple-no-baseline',0),('apple-bad-cache',1),
                          ('apple-multi-invalid',1),('apple-session-select',0),('apple-reject',0),('apple-wrong-banner',0)]:
         with subprocess.Popen(['/usr/bin/python3','-u',str(peer_source),'ard-only',mode],stdout=subprocess.PIPE,text=True) as peer:
             try:
@@ -27,6 +29,9 @@ with tempfile.TemporaryDirectory(prefix='remora-apple-sanitizers-') as temporary
                 subprocess.run([exe,str(port),str(frames)],check=True,timeout=12,env=env)
                 report = json.loads(peer.communicate(timeout=2)[0])
                 assert 'error_class' not in report, (mode,report)
+                if mode.startswith('apple-retry-'):
+                    assert report['requests_after_initial'] == (2 if mode == 'apple-retry-dropped' else 1), report
+                    assert report['subscriptions'] == [[0,1,0,0,0,16,8]], report
                 print(json.dumps(dict(mode=mode,frames=frames,sanitizers_pass=True)))
             finally:
                 if peer.poll() is None: peer.terminate(); peer.wait(timeout=2)
