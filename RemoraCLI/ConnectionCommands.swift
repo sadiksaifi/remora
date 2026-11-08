@@ -5,17 +5,21 @@ import RemoraControl
 struct ConnectionFields: ParsableArguments {
     @Option(help: "Remote hostname or IP address. Required when creating a connection.") var host: String?
     @Option(help: "Saved connection name.") var name: String?
-    @Option(help: "RDP port, 1 to 65535.") var port: Int?
+    @Option(help: "Protocol: rdp or vnc. Defaults to rdp when creating a connection.") var kind: String?
+    @Option(help: "Remote port, 1 to 65535. Defaults to 3389 for RDP and 5900 for VNC.") var port: Int?
     @Option(help: "Remote account username.") var username: String?
     @Option(help: "Remote account domain.") var domain: String?
     @Option(help: "Saved resolution: fit or WIDTHxHEIGHT, 200 to 8192 pixels per side with an even width.") var resolution: String?
+    @Option(help: "VNC mode: standard, or apple for Apple Screen Sharing's experimental faster, lossy encoding (Macs only).") var vncMode: String?
     @Flag(help: "Read the password from UTF-8 stdin, removing one trailing line ending.") var passwordStdin = false
 
     func arguments() async throws -> [String: ControlValue] {
         if let resolution { _ = try ControlResolution(resolution) }
         if let port, !(1...65535).contains(port) { throw ValidationError("Port must be 1 to 65535.") }
+        if let kind, !["rdp", "vnc"].contains(kind) { throw ValidationError("Protocol must be rdp or vnc.") }
+        if let vncMode, !["standard", "apple"].contains(vncMode) { throw ValidationError("VNC mode must be standard or apple.") }
         var result: [String: ControlValue] = [:]
-        for (key, value) in [("host", host), ("name", name), ("username", username), ("domain", domain), ("resolution", resolution)] {
+        for (key, value) in [("kind", kind), ("host", host), ("name", name), ("username", username), ("domain", domain), ("resolution", resolution), ("vncMode", vncMode)] {
             if let value { result[key] = .string(value) }
         }
         if let port { result["port"] = .number(Double(port)) }

@@ -20,10 +20,12 @@ final class SessionCredentialDraft {
 }
 
 /// Asks for the account to use when the server needs credentials or rejected the saved ones.
+/// It shows the fields the server's sign-in method asks for, and the domain only where the protocol has one.
 struct SessionCredentialsView: View {
     let challenge: CredentialsChallenge
     let computerName: String
     let address: String
+    let showsDomain: Bool
     let onCancel: () -> Void
     let onConnect: (SessionCredentials, Bool) -> Void
     @Bindable var draft: SessionCredentialDraft
@@ -34,11 +36,13 @@ struct SessionCredentialsView: View {
         case password
     }
 
-    init(challenge: CredentialsChallenge, computerName: String, address: String, draft: SessionCredentialDraft,
+    init(challenge: CredentialsChallenge, computerName: String, address: String, showsDomain: Bool,
+         draft: SessionCredentialDraft,
          onCancel: @escaping () -> Void, onConnect: @escaping (SessionCredentials, Bool) -> Void) {
         self.challenge = challenge
         self.computerName = computerName
         self.address = address
+        self.showsDomain = showsDomain
         self.onCancel = onCancel
         self.onConnect = onConnect
         self.draft = draft
@@ -65,16 +69,20 @@ struct SessionCredentialsView: View {
 
             Form {
                 Section {
-                    TextField("Username", text: $draft.username)
-                        .focused($focusedField, equals: .username)
-                        .autocorrectionDisabled()
-                        .accessibilityIdentifier("credentialsUsername")
+                    if asksForUsername {
+                        TextField("Username", text: $draft.username)
+                            .focused($focusedField, equals: .username)
+                            .autocorrectionDisabled()
+                            .accessibilityIdentifier("credentialsUsername")
+                    }
                     KeychainPasswordField(title: "Password", text: $draft.password, prompt: "Required")
                         .focused($focusedField, equals: .password)
                         .accessibilityIdentifier("credentialsPassword")
-                    TextField("Domain", text: $draft.domain, prompt: Text("Optional"))
-                        .autocorrectionDisabled()
-                        .accessibilityIdentifier("credentialsDomain")
+                    if asksForUsername && showsDomain {
+                        TextField("Domain", text: $draft.domain, prompt: Text("Optional"))
+                            .autocorrectionDisabled()
+                            .accessibilityIdentifier("credentialsDomain")
+                    }
                 }
                 Section {
                     Toggle("Remember this password in my keychain", isOn: $draft.remember)
@@ -100,8 +108,10 @@ struct SessionCredentialsView: View {
             .padding([.horizontal, .bottom], 20)
         }
         .frame(width: 460)
-        .onAppear { focusedField = challenge.username.isEmpty ? .username : .password }
+        .onAppear { focusedField = asksForUsername && challenge.username.isEmpty ? .username : .password }
     }
+
+    private var asksForUsername: Bool { challenge.fields == .usernamePassword }
 
     private var title: String {
         switch challenge.reason {
@@ -111,9 +121,10 @@ struct SessionCredentialsView: View {
     }
 
     private var message: String {
-        switch challenge.reason {
-        case .missing: "The remote computer at \(address) needs a username and password."
-        case .rejected: "Check your username and password for \(address), then try again."
+        let account = asksForUsername ? "username and password" : "password"
+        return switch challenge.reason {
+        case .missing: "The remote computer at \(address) needs a \(account)."
+        case .rejected: "Check your \(account) for \(address), then try again."
         }
     }
 }

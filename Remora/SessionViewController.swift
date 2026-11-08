@@ -3,6 +3,7 @@ import RDPSession
 import RemoraCore
 import RemoraControl
 import SwiftUI
+import VNCSession
 import os
 
 private let sessionLog = Logger(subsystem: "dev.sadiksaifi.Remora", category: "Session")
@@ -50,7 +51,7 @@ final class SessionViewController: NSViewController {
     private(set) var remoteClipboard = RemoteClipboard()
 
     private var canSyncMacClipboard: Bool {
-        allowsMacClipboardSync && state == .connected && NSApp.isActive &&
+        allowsMacClipboardSync && state == .connected && session?.supportsClipboardSynchronization == true && NSApp.isActive &&
             view.window?.isKeyWindow == true && view.window?.isVisible == true &&
             view.window?.isMiniaturized == false && view.window?.firstResponder === desktopView
     }
@@ -58,6 +59,7 @@ final class SessionViewController: NSViewController {
     func offerClipboardText(_ text: String, agent: String?) throws {
         guard state == .connected, let session else { throw ControlFailure(.notConnected, "The session is not connected.") }
         guard !text.utf8.contains(0) else { throw ControlFailure(.invalidArgument, "Clipboard text cannot contain NUL bytes.") }
+        guard session.supportsClipboardSynchronization else { throw ControlFailure(.unsupported, "This session does not exchange clipboard text.") }
         try attachAgentControl(agent: agent)
         session.setLocalClipboard(text: text)
     }
@@ -115,6 +117,8 @@ final class SessionViewController: NSViewController {
         if case .credentials(_, let challenge) = prompt {
             if let answer, remember { try onRememberCredentials(answer) }
             credentials = answer
+            // Cancelling keeps the rejection, so the saved password isn't sent next time.
+            if answer != nil { rejectedCredentials = nil; attemptWithholdsRejectedPassword = false }
             cancelChallenge = nil
             dismissChallenge(action: answer == nil ? "cancel" : "connect")
             challenge.responder.respond(answer)
@@ -126,11 +130,11 @@ final class SessionViewController: NSViewController {
     }
 
 
-    var inputBackend: RDPSession? { session as? RDPSession }
+    var inputBackend: (any AgentInputSession)? { session as? any AgentInputSession }
     private(set) var control = SessionControl()
     static let controlDidChange = Notification.Name("SessionControlDidChange")
     private var controlFrameDemand = false
-    var activeAgentInput: AgentInputRequest?
+    var activeAgentInput: (any AgentInputRequest)?
     var agentInputCancellation: ControlFailure?
 
     /// Take Over and Stop can cancel even events detached by the C drain loop.
@@ -153,6 +157,11 @@ final class SessionViewController: NSViewController {
     /// A capture failure waits separately, so it never replaces a credentials or certificate request.
     private var pendingAlert: NSAlert?
     private var credentials: SessionCredentials?
+    /// The account the server rejected. Attempts that would send it again ask instead,
+    /// and the credentials sheet starts with these values. A replaced password or another account is sent.
+    private var rejectedCredentials: SessionCredentials?
+    /// True when this attempt left out the rejected password, so the session reports it as missing.
+    private var attemptWithholdsRejectedPassword = false
     /// The state the tab shows. Setup failures and teardown count as disconnected.
     private(set) var state: SessionState = .connecting {
         didSet {
@@ -240,6 +249,10 @@ final class SessionViewController: NSViewController {
     /// Takes the saved connection after an edit. A running session keeps its settings; the next
     /// attempt uses the new ones and reads the password from the Keychain again.
     func update(_ connection: Connection) {
+        // A rejection applies only to the server that made it.
+        if (connection.kind, connection.host, connection.port) != (self.connection.kind, self.connection.host, self.connection.port) {
+            rejectedCredentials = nil
+        }
         self.connection = connection
         credentials = nil
         desktopView?.accessibilityTab = (connection.id, connection.name)
@@ -413,11 +426,14 @@ final class SessionViewController: NSViewController {
                 currentCredentials = credentials
             } else {
                 currentCredentials = SessionCredentials(
-                    username: connection.username, domain: connection.domain ?? "",
+                    username: connection.username, domain: connection.kind == .rdp ? connection.domain ?? "" : "",
                     password: try credentialStore.password(for: connection.id) ?? ""
                 )
                 credentials = currentCredentials
             }
+            attemptWithholdsRejectedPassword = rejectedCredentials.map {
+                ($0.username, $0.domain, $0.password) == (currentCredentials.username, currentCredentials.domain, currentCredentials.password)
+            } ?? false
             let renderer = try FrameRenderer()
             self.renderer = renderer
             view.window?.contentView?.layoutSubtreeIfNeeded()
@@ -445,15 +461,21 @@ final class SessionViewController: NSViewController {
             let configuration = SessionConfiguration(
                 host: connection.host, port: port, username: currentCredentials.username,
                 domain: currentCredentials.domain,
-                password: currentCredentials.password.isEmpty ? nil : currentCredentials.password,
-                desktopSize: desktopSize, scaleFactor: scaleFactor, allowsDynamicResize: allowsDynamicResize
+                password: attemptWithholdsRejectedPassword || currentCredentials.password.isEmpty ? nil : currentCredentials.password,
+                desktopSize: desktopSize, scaleFactor: scaleFactor, allowsDynamicResize: allowsDynamicResize,
+                vncMode: connection.vncMode
             )
             capture.setSource(renderer.desktop)
             let inputOverlays = inputOverlays
             overlayScale = scaleFactor
             refreshOverlaySettings()
-            let session = RDPSession(configuration: configuration, frameSink: renderer,
-                inputFeedback: { source, event in inputOverlays.receive(source, event) })
+            let inputFeedback: @Sendable (InputSource, SessionInputFeedback) -> Void = { source, event in
+                inputOverlays.receive(source, event)
+            }
+            let session: any RemoteSession = switch connection.kind {
+            case .rdp: RDPSession(configuration: configuration, frameSink: renderer, inputFeedback: inputFeedback)
+            case .vnc: VNCSession(configuration: configuration, frameSink: renderer, inputFeedback: inputFeedback)
+            }
             let desktopView = RemoteDesktopView(renderer: renderer)
             desktopView.allowsHumanInput = control.allowsHumanInput
             desktopView.onHumanInput = { [weak self] kind in self?.control.record(kind) }
@@ -540,6 +562,7 @@ final class SessionViewController: NSViewController {
                 }
                 overlays?.reconnecting(attempt: attempt)
             case .disconnected(let reason):
+                if reason == .authenticationFailed { rejectedCredentials = credentials }
                 endAgentControl()
                 finishCapture()
                 capture.setSource(nil)
@@ -567,7 +590,11 @@ final class SessionViewController: NSViewController {
         case .cursorChanged(let cursor):
             desktopView.apply(cursor: cursor)
             updateOverlayCursor(cursor)
-        case .credentialsChallenge(let challenge):
+        case .credentialsChallenge(let reported):
+            let challenge = reported.reason == .missing && attemptWithholdsRejectedPassword
+                ? CredentialsChallenge(username: reported.username, domain: reported.domain, reason: .rejected,
+                                       responder: reported.responder, fields: reported.fields)
+                : reported
             dismissChallenge()
             credentialDraft = SessionCredentialDraft(challenge: challenge, password: credentials?.password ?? "")
             pendingPrompt = .credentials(UUID(), challenge)
@@ -611,7 +638,7 @@ final class SessionViewController: NSViewController {
         guard let credentialDraft else { return }
         let form = SessionCredentialsView(
             challenge: challenge, computerName: connection.name, address: connection.displayAddress,
-            draft: credentialDraft,
+            showsDomain: attemptConnection.kind == .rdp, draft: credentialDraft,
             onCancel: { [weak self] in
                 guard let self, let promptID, pendingPrompt?.id == promptID else { return }
                 try? respondToPrompt(promptID, credentials: nil)
@@ -635,10 +662,11 @@ final class SessionViewController: NSViewController {
     }
 
     private func showTrust(_ challenge: TrustChallenge, on window: NSWindow) {
-        let address = challenge.port == UInt16(Connection.defaultPort)
+        let address = Int(challenge.port) == attemptConnection.defaultPort
             ? challenge.host : "\(challenge.host):\(challenge.port)"
         let alert = NSAlert()
         var details = [("Subject", challenge.subject), ("Issuer", challenge.issuer), ("SHA-256", challenge.fingerprint)]
+            .filter { !$0.1.isEmpty }
         let connectButton: NSApplication.ModalResponse
         if case .changed(let oldFingerprint) = challenge.status {
             alert.alertStyle = .critical

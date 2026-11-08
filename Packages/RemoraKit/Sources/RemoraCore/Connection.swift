@@ -14,9 +14,21 @@ public enum ConnectionResolution: Codable, Sendable, Hashable {
     }
 }
 
+/// How a VNC connection speaks to its server.
+public enum VNCMode: String, Codable, Sendable, CaseIterable {
+    /// Standard VNC with lossless encodings.
+    case standard
+    /// Apple Screen Sharing's dialect and its faster, lossy encoding. Experimental, Macs only.
+    case apple
+}
+
 public struct Connection: Codable, Sendable, Identifiable, Hashable {
     public enum Kind: String, Codable, Sendable {
         case rdp
+        case vnc
+
+        public var defaultPort: Int { self == .rdp ? 3389 : 5900 }
+        public var requiresUsername: Bool { self == .rdp }
     }
 
     /// The standard RDP port.
@@ -30,32 +42,36 @@ public struct Connection: Codable, Sendable, Identifiable, Hashable {
     public var domain: String?
     public var kind: Kind
     public var resolution: ConnectionResolution
+    /// Always standard for RDP connections.
+    public var vncMode: VNCMode
     public var lastConnected: Date?
 
     public init(
         id: UUID = UUID(),
         name: String,
         host: String,
-        port: Int = Connection.defaultPort,
+        port: Int? = nil,
         username: String,
         domain: String? = nil,
         kind: Kind = .rdp,
         lastConnected: Date? = nil,
-        resolution: ConnectionResolution = .fitToWindow
+        resolution: ConnectionResolution = .fitToWindow,
+        vncMode: VNCMode = .standard
     ) {
         self.id = id
         self.name = name
         self.host = host
-        self.port = port
+        self.port = port ?? kind.defaultPort
         self.username = username
         self.domain = domain
         self.kind = kind
         self.lastConnected = lastConnected
         self.resolution = resolution
+        self.vncMode = vncMode
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, name, host, port, username, domain, kind, lastConnected, resolution
+        case id, name, host, port, username, domain, kind, lastConnected, resolution, vncMode
     }
 
     public init(from decoder: any Decoder) throws {
@@ -69,9 +85,12 @@ public struct Connection: Codable, Sendable, Identifiable, Hashable {
         kind = try values.decode(Kind.self, forKey: .kind)
         lastConnected = try values.decodeIfPresent(Date.self, forKey: .lastConnected)
         resolution = try values.decodeIfPresent(ConnectionResolution.self, forKey: .resolution) ?? .fitToWindow
+        vncMode = try values.decodeIfPresent(VNCMode.self, forKey: .vncMode) ?? .standard
     }
 
+    public var defaultPort: Int { kind.defaultPort }
+
     public var displayAddress: String {
-        port == Self.defaultPort ? host : "\(host):\(port)"
+        port == kind.defaultPort ? host : "\(host):\(port)"
     }
 }

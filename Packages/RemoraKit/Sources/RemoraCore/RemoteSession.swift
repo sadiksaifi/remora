@@ -19,12 +19,13 @@ public struct SessionConfiguration: Sendable {
     public let desktopSize: DesktopSize
     /// Physical pixels per logical point, for example 2 for a Retina display.
     public let scaleFactor: Double
+    public let vncMode: VNCMode
     public let allowsDynamicResize: Bool
 
     public init(
         host: String, port: UInt16 = 3389, username: String, domain: String = "",
         password: String? = nil, desktopSize: DesktopSize, scaleFactor: Double = 1,
-        allowsDynamicResize: Bool = true
+        allowsDynamicResize: Bool = true, vncMode: VNCMode = .standard
     ) {
         self.host = host
         self.port = port
@@ -33,6 +34,7 @@ public struct SessionConfiguration: Sendable {
         self.password = password
         self.desktopSize = desktopSize
         self.scaleFactor = scaleFactor
+        self.vncMode = vncMode
         self.allowsDynamicResize = allowsDynamicResize
     }
 }
@@ -102,6 +104,8 @@ public struct SessionCredentials: Sendable {
 }
 
 public struct CredentialsChallenge: Sendable {
+    public enum Fields: Sendable { case usernamePassword, password }
+    public let fields: Fields
     public enum Reason: Sendable {
         case missing
         case rejected
@@ -115,8 +119,9 @@ public struct CredentialsChallenge: Sendable {
 
     public init(
         username: String, domain: String, reason: Reason,
-        responder: SessionResponder<SessionCredentials?>
+        responder: SessionResponder<SessionCredentials?>, fields: Fields = .usernamePassword
     ) {
+        self.fields = fields
         self.username = username
         self.domain = domain
         self.reason = reason
@@ -189,10 +194,13 @@ public protocol RemoteSession: AnyObject, Sendable {
     func disconnect()
     func sendKey(_ key: KeyInput)
     func sendPointer(position: RemotePoint, buttons: PointerButtons)
-    func sendWheel(_ wheel: WheelInput)
+    /// `position` is the remote point under the pointer when the wheel turned.
+    func sendWheel(_ wheel: WheelInput, at position: RemotePoint)
     func synchronize(locks: LockKeys)
     /// Releases only human-owned keys and buttons, preserving agent input.
     func releaseHumanInput()
+    /// False when the session never exchanges clipboard text, for example Apple VNC mode.
+    var supportsClipboardSynchronization: Bool { get }
     func setLocalClipboard(text: String)
 }
 
@@ -210,7 +218,7 @@ public struct DirtyRectangle: Sendable, Equatable {
     }
 }
 
-/// Borrowed pixels in FreeRDP PIXEL_FORMAT_BGRA32 byte order: B, G, R, A.
+/// Borrowed pixels in BGRA32 byte order: B, G, R, A.
 /// Ignore alpha. The pointer is valid only during FrameSink.consume.
 /// Copy all pixels you need before returning, including before dispatching work.
 public struct BorrowedFrame {

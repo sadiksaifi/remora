@@ -63,6 +63,7 @@ extension CommandLineController {
             fields["kind"] = .string("credentials")
             fields["username"] = .string(session.credentialDraft?.username ?? challenge.username)
             fields["domain"] = .string(session.credentialDraft?.domain ?? challenge.domain)
+            fields["fields"] = .array((challenge.fields == .password ? ["password"] : session.connection.kind == .rdp ? ["username", "domain", "password"] : ["username", "password"]).map(ControlValue.string))
             fields["reason"] = .string(challenge.reason == .missing ? "missing" : "rejected")
             fields["remember"] = .bool(session.credentialDraft?.remember ?? true)
             fields["hasPassword"] = .bool(!(session.credentialDraft?.password.isEmpty ?? true))
@@ -96,13 +97,13 @@ extension CommandLineController {
 
     /// Only command waiters poll. An idle app has no timer or frame demand from this adapter.
     func waitFor(_ session: SessionViewController, id: UUID, timeout: Double,
-                         disconnected: Bool = false, predicate: () -> Bool) async throws {
+                         disconnected: Bool = false, predicate: () throws -> Bool) async throws {
         let deadline = ContinuousClock.now.advanced(by: .seconds(timeout))
         while true {
             guard session.attemptID == id, sessions.session(for: session.connection.id) === session else {
                 throw ControlFailure(.sessionEnded, "The session attempt was closed or replaced.", hint: "Inspect session list.")
             }
-            if predicate() { return }
+            if try predicate() { return }
             try promptRequired(session)
             if !disconnected, case .disconnected(let reason) = session.state {
                 throw ControlFailure(.backendFailed, reason?.description ?? "The session disconnected.", hint: "Inspect session get before reconnecting.")
@@ -244,7 +245,10 @@ extension CommandLineController {
                 session.addFrameDemand()
                 defer { session.removeFrameDemand() }
                 try await waitFor(session, id: id, timeout: timeout) {
-                    session.desktopSize == .init(width: width, height: height)
+                    if session.connection.kind == .vnc, session.isConnected, !session.supportsDynamicResize {
+                        throw ControlFailure(.unsupported, "The VNC server denied desktop resizing.")
+                    }
+                    return session.desktopSize == .init(width: width, height: height)
                 }
             }
         case "wait":
