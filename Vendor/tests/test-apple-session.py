@@ -18,7 +18,7 @@ with tempfile.TemporaryDirectory(prefix='remora-apple-sanitizers-') as temporary
                     str(root/'tests/test_apple_session.c'), str(root/'apple-mvs/apple.c'), str(root/'apple-mvs/mvs.c'),
                     str(root/'build/vnc-package/libLibVNCClient.a'), str(root/'build/openssl-install/lib/libssl.a'),
                     str(root/'build/openssl-install/lib/libcrypto.a'), '-lz', '-o',exe], check=True,timeout=60)
-    for mode, frames in [('apple-sequence',3),('apple-no-baseline',0),('apple-bad-cache',1),
+    for mode, frames in [('apple-sequence',3),('apple-damage',6),('apple-no-baseline',0),('apple-bad-cache',1),
                          ('apple-multi-invalid',1),('apple-session-select',0),('apple-reject',0),('apple-wrong-banner',0)]:
         with subprocess.Popen(['/usr/bin/python3','-u',str(peer_source),'ard-only',mode],stdout=subprocess.PIPE,text=True) as peer:
             try:

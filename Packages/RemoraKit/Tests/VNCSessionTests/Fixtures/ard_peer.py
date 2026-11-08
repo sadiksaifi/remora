@@ -142,6 +142,25 @@ def apple_frames(outcome, exact, send, key, report):
         send(struct.pack('>BBH',0,0,2)+struct.pack('>HHHHi',0,0,16,8,0)+bytes(16*8*4)+struct.pack('>HHHHi',0,0,16,8,123456)); return
     if outcome == 'apple-control-encryption':
         update(b'',1103); return
+    if outcome == 'apple-damage':
+        # Quantization, skips and invalid match sources write no pixels.
+        update(bytes([1,14,19])+mvs_bits('00 00',marker('mvs')))
+        update(bytes([1,14,19])+mvs_bits('10 00',marker('mvs')))
+        # A match baseline shares the first tile's DCT and copies it to the second.
+        match_header = mvs_bits('0', '101 0', '001 0', marker('m'))
+        match_body = mvs_bits('0 0 0','00','00','1110 010 1','0 01 0',marker('m'))
+        update(bytes([0,15,25])+(6+len(match_header)).to_bytes(3,'big')+match_header+match_body)
+        update(partial)
+        update(bytes([1,14,19])+mvs_bits('00 10',marker('mvs')))
+        def raw(rect, pixel): return struct.pack('>HHHHi',*rect,0)+bytes(pixel)*(rect[2]*rect[3])
+        send(struct.pack('>BBH',0,0,2)+raw((1,1,2,2),(1,2,3,255))+raw((10,4,3,2),(4,5,6,255)))
+        one_cache = bytes([1,14,19])+mvs_bits('11 0 0000000000000001',marker('mvs'))
+        send(struct.pack('>BBH',0,0,2)+raw((1,2,2,2),(7,8,9,255))
+             +struct.pack('>HHHHiI',8,0,8,8,1011,len(one_cache))+one_cache)
+        update(bytes([2])+bytes([8])*128, rect=(0,0,0,0))
+        # The decoder writes a tile before rejecting this marker. Never publish it.
+        update(partial[:-1]+bytes([partial[-1]^0x80]))
+        return
     # Known control messages and discarded clipboard may precede the next update.
     send(bytes([4,7,0x14,0,0,4,0,0,0,0,0x51,0,0]))
     send(bytes([3,0,0,0])+struct.pack('>I',5)+b'owned')

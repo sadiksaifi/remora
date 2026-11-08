@@ -162,6 +162,37 @@ static void test_reference_vectors(void) {
       screen_free(&s); }
 }
 
+typedef struct { uint32_t x, y, w, h; } rectangle;
+typedef struct { rectangle rectangles[2]; unsigned count; } writes;
+static void record_write(void *context, uint32_t x, uint32_t y, uint32_t w, uint32_t h) {
+    writes *out = context;
+    if (out->count < 2) out->rectangles[out->count] = (rectangle){x, y, w, h};
+    out->count++;
+}
+
+static void test_written_tiles(void) {
+    /* Off-origin tiles clipped by the display edge, with unchanged decoded bytes. */
+    screen observed = screen_new(29, 13), plain = screen_new(29, 13);
+    const buffer *updates[] = { &FULL, &PARTIAL_CR_UP, &PARTIAL_UNCHANGED, &PARTIAL_CACHE_1, &PARTIAL_CACHE_NEXT };
+    for (unsigned i = 0; i < sizeof updates / sizeof *updates; i++) {
+        writes out = {0};
+        const buffer *p = updates[i];
+        CHECK(mvs_decode(observed.decoder, &observed.surface, 16, 8, 13, 5,
+                         p->bytes, p->length, record_write, &out, NULL) == MVS_OK);
+        CHECK(mvs_decode(plain.decoder, &plain.surface, 16, 8, 13, 5,
+                         p->bytes, p->length, NULL, NULL, NULL) == MVS_OK);
+        CHECK(memcmp(observed.pixels, plain.pixels, 29 * 13 * 4) == 0);
+        CHECK(out.count == (i == 0 ? 2u : 1u));
+        rectangle first = out.rectangles[0];
+        CHECK(first.x == (i < 3 ? 16u : 24u) && first.y == 8 && first.w == (i < 3 ? 8u : 5u) && first.h == 5);
+        if (i == 0) {
+            rectangle second = out.rectangles[1];
+            CHECK(second.x == 24 && second.y == 8 && second.w == 5 && second.h == 5);
+        }
+    }
+    screen_free(&observed); screen_free(&plain);
+}
+
 static void test_idct_flat(void) {
     int32_t block[64] = {0};
     uint8_t out[64];
@@ -324,6 +355,7 @@ static void test_fuzz(long iterations) {
 int main(int argc, char **argv) {
     build_vectors();
     test_reference_vectors();
+    test_written_tiles();
     test_idct_flat();
     test_malformed();
     test_cache_bounds();

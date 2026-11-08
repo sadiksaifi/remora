@@ -47,11 +47,19 @@ private final class AppleFrames: FrameSink, @unchecked Sendable {
 private final class ApplePixels: FrameSink, @unchecked Sendable {
     private let lock = NSLock()
     private var values: [[UInt8]] = []
+    private var damage: [[DirtyRectangle]] = []
+    private var images: [[UInt8]] = []
     func consume(_ frame: BorrowedFrame) {
         let p = frame.pixels.assumingMemoryBound(to: UInt8.self)
-        lock.withLock { values.append([p[2], p[1], p[0]]) }
+        lock.withLock {
+            values.append([p[2], p[1], p[0]])
+            damage.append(frame.dirtyRectangles)
+            images.append(Array(UnsafeBufferPointer(start: p, count: frame.stride * frame.height)))
+        }
     }
     var samples: [[UInt8]] { lock.withLock { values } }
+    var rectangles: [[DirtyRectangle]] { lock.withLock { damage } }
+    var snapshots: [[UInt8]] { lock.withLock { images } }
 }
 
 @MainActor private func appleSession(_ outcome: String, offers: String = "ard-only", actions: (@MainActor @Sendable (VNCSession, ApplePixels) async throws -> Void)? = nil) async throws -> ([String: Any], [DisconnectReason], ApplePixels) {
@@ -97,6 +105,45 @@ private final class ApplePixels: FrameSink, @unchecked Sendable {
     #expect(wire["requests_after_initial"] as? Int == 0)
     #expect(wire["subscriptions"] as? [[Int]] == [[0,1,0,0,0,16,8]])
     #expect(pixels.samples == [[148,148,148], [151,147,148], [151,147,148]])
+    #expect(pixels.rectangles == [
+        [.init(x: 0, y: 0, width: 16, height: 8)],
+        [.init(x: 0, y: 0, width: 8, height: 8)],
+        [.init(x: 8, y: 0, width: 8, height: 8)]
+    ])
+    let gray: [UInt8] = [148,148,148,255], reddish: [UInt8] = [148,147,151,255]
+    let expected = [(gray, gray), (reddish, gray), (reddish, reddish)].map { left, right in
+        Array(repeating: Array(repeating: left, count: 8).flatMap { $0 }
+              + Array(repeating: right, count: 8).flatMap { $0 }, count: 8).flatMap { $0 }
+    }
+    #expect(pixels.snapshots == expected)
+}
+
+@Test @MainActor func appleDamageUnionsAllRectanglesAndPublishesOnlyValidatedWrites() async throws {
+    let (_, _, pixels) = try await appleSession("apple-damage")
+    #expect(pixels.rectangles == [
+        [.init(x: 0, y: 0, width: 16, height: 8)],
+        [.init(x: 0, y: 0, width: 16, height: 8)],
+        [.init(x: 0, y: 0, width: 8, height: 8)],
+        [.init(x: 8, y: 0, width: 8, height: 8)],
+        [.init(x: 1, y: 1, width: 12, height: 5)],
+        [.init(x: 1, y: 0, width: 15, height: 8)]
+    ])
+    let gray: [UInt8] = [148,148,148,255]
+    var image = Array(repeating: gray, count: 16 * 8).flatMap { $0 }
+    var expected = [image, image]
+    func paint(_ x: Int, _ y: Int, _ width: Int, _ height: Int, _ bgra: [UInt8]) {
+        for row in y..<(y + height) {
+            for col in x..<(x + width) {
+                let offset = (row * 16 + col) * 4
+                image.replaceSubrange(offset..<(offset + 4), with: bgra)
+            }
+        }
+    }
+    paint(0, 0, 8, 8, [148,147,151,255]); expected.append(image)
+    paint(8, 0, 8, 8, [148,147,151,255]); expected.append(image)
+    paint(1, 1, 2, 2, [1,2,3,255]); paint(10, 4, 3, 2, [4,5,6,255]); expected.append(image)
+    paint(1, 2, 2, 2, [7,8,9,255]); paint(8, 0, 8, 8, [148,147,151,255]); expected.append(image)
+    #expect(pixels.snapshots == expected)
 }
 
 @Test @MainActor func appleKeyEncryptionAndSourceOwnershipReachTheIndependentPeer() async throws {
