@@ -118,7 +118,7 @@ final class SessionViewController: NSViewController {
             if let answer, remember { try onRememberCredentials(answer) }
             credentials = answer
             // Cancelling keeps the rejection, so the saved password isn't sent next time.
-            if answer != nil { rejectedCredentials = nil }
+            if answer != nil { rejectedCredentials = nil; attemptWithholdsRejectedPassword = false }
             cancelChallenge = nil
             dismissChallenge(action: answer == nil ? "cancel" : "connect")
             challenge.responder.respond(answer)
@@ -160,6 +160,8 @@ final class SessionViewController: NSViewController {
     /// The account the server rejected. Attempts that would send it again ask instead,
     /// and the credentials sheet starts with these values. A replaced password or another account is sent.
     private var rejectedCredentials: SessionCredentials?
+    /// True when this attempt left out the rejected password, so the session reports it as missing.
+    private var attemptWithholdsRejectedPassword = false
     /// The state the tab shows. Setup failures and teardown count as disconnected.
     private(set) var state: SessionState = .connecting {
         didSet {
@@ -429,7 +431,7 @@ final class SessionViewController: NSViewController {
                 )
                 credentials = currentCredentials
             }
-            let rejected = rejectedCredentials.map {
+            attemptWithholdsRejectedPassword = rejectedCredentials.map {
                 ($0.username, $0.domain, $0.password) == (currentCredentials.username, currentCredentials.domain, currentCredentials.password)
             } ?? false
             let renderer = try FrameRenderer()
@@ -459,7 +461,7 @@ final class SessionViewController: NSViewController {
             let configuration = SessionConfiguration(
                 host: connection.host, port: port, username: currentCredentials.username,
                 domain: currentCredentials.domain,
-                password: rejected || currentCredentials.password.isEmpty ? nil : currentCredentials.password,
+                password: attemptWithholdsRejectedPassword || currentCredentials.password.isEmpty ? nil : currentCredentials.password,
                 desktopSize: desktopSize, scaleFactor: scaleFactor, allowsDynamicResize: allowsDynamicResize,
                 vncMode: connection.vncMode
             )
@@ -588,7 +590,11 @@ final class SessionViewController: NSViewController {
         case .cursorChanged(let cursor):
             desktopView.apply(cursor: cursor)
             updateOverlayCursor(cursor)
-        case .credentialsChallenge(let challenge):
+        case .credentialsChallenge(let reported):
+            let challenge = reported.reason == .missing && attemptWithholdsRejectedPassword
+                ? CredentialsChallenge(username: reported.username, domain: reported.domain, reason: .rejected,
+                                       responder: reported.responder, fields: reported.fields)
+                : reported
             dismissChallenge()
             credentialDraft = SessionCredentialDraft(challenge: challenge, password: credentials?.password ?? "")
             pendingPrompt = .credentials(UUID(), challenge)
