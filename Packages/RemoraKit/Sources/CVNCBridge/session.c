@@ -117,7 +117,11 @@ static bool failed(RMVNC *s, int error) {
     else if (!s->diagnostic.failure) s->diagnostic.failure = error == 6 ? RFB_REMORA_MEMORY : error == 3 ? RFB_REMORA_TIMEOUT : RFB_REMORA_IO;
     return false;
 }
-void rm_vnc_set_input_pending(RMVNC *s, bool pending) { atomic_store(&s->inputPending, pending); }
+void rm_vnc_set_input_pending(RMVNC *s, bool pending) {
+    atomic_store(&s->inputPending, pending);
+    /* Wakes an idle step so input reaches the wire without waiting out the poll. */
+    if (pending && s->wake[1] >= 0) { char byte=1; (void)write(s->wake[1], &byte, 1); }
+}
 static rfbBool service_input(rfbClient *c) {
     RMVNC *s = owner(c);
     if (atomic_load(&s->cancelled)) return false;
@@ -404,6 +408,22 @@ static bool reconcile_resize(RMVNC *s) {
     s->inputBusy--;
     return sent;
 }
+/* Like WaitForMessage, but queued input or abort also ends the wait. */
+static int wait_for_message_or_input(RMVNC *s, int timeoutMS) {
+    rfbClient *c = s->client;
+    if (c->buffered > 0) return 1;
+    if (c->sock == RFB_INVALID_SOCKET) return WaitForMessage(c, 0);
+    struct pollfd fds[2] = {{c->sock, POLLIN, 0}, {s->wake[0], POLLIN, 0}};
+    int ready = poll(fds, 2, timeoutMS);
+    if (ready < 0) {
+        if (errno == EINTR) return 0;
+        rfbRemoraRuntimeOperation(c, RFB_REMORA_WAIT_OP);
+        rfbRemoraRuntimeFail(c, RFB_REMORA_WAIT_FAILED, errno, 0);
+        return -1;
+    }
+    if (fds[1].revents & POLLIN) { char drain[64]; while (read(s->wake[0], drain, sizeof drain) > 0) {} }
+    return (fds[0].revents & (POLLIN | POLLHUP | POLLERR | POLLNVAL)) ? 1 : 0;
+}
 bool rm_vnc_step(RMVNC *s) {
     if (atomic_load(&s->cancelled)) return false;
     rfbRemoraRuntimeMessage(s->client, RFB_REMORA_WAIT);
@@ -414,7 +434,7 @@ bool rm_vnc_step(RMVNC *s) {
     p->enabled = os_signpost_enabled(performance_log());
     if (!p->enabled) p->lastRequest = lastRequest = 0;
     p->prefetched = c->buffered > 0;
-    int ready=WaitForMessage(c,10000);
+    int ready=wait_for_message_or_input(s,10);
     if (ready > 0 && p->enabled) {
         p->ready = performance_clock(); p->cpuStart = performance_cpu(); p->requestAtReady = lastRequest;
     }
