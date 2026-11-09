@@ -6,7 +6,7 @@ import Testing
     try control.attach()
     #expect(!control.allowsHumanInput)
     #expect(control.needsFrames)
-    let began = control.beginHandover(stopping: false, frame: 10)
+    let began = control.beginHandover(.takeOver, frame: 10)
     #expect(began)
     #expect(!control.allowsHumanInput)
     #expect(throws: SessionControl.Refusal.userActive) { try control.attach() }
@@ -24,18 +24,70 @@ import Testing
     #expect(!control.allowsHumanInput)
 }
 
-@Test func stopDropsDemandAndTheNextInputReattaches() throws {
+@Test func stopRefusesAgentInputUntilTheUserResumes() throws {
     var control = SessionControl()
     try control.attach()
-    let began = control.beginHandover(stopping: true, frame: 3)
+    let began = control.beginHandover(.stop, frame: 3)
     #expect(began)
+    #expect(throws: SessionControl.Refusal.agentStopped) { try control.attach() }
     control.completeHandover()
     #expect(control.state == .stopped)
     #expect(control.allowsHumanInput)
     #expect(!control.needsFrames)
+    control.observed()
+    #expect(throws: SessionControl.Refusal.agentStopped) { try control.attach() }
+    #expect(control.canResume)
+    #expect(control.resume(frame: 3) != nil)
+    #expect(throws: SessionControl.Refusal.observationRequired) { try control.attach() }
+    control.observed()
     try control.attach()
     #expect(control.state == .active)
     #expect(!control.allowsHumanInput)
+}
+
+@Test func releaseDetachesTheAgentWithoutBindingIt() throws {
+    var control = SessionControl()
+    try control.attach()
+    let released = control.beginHandover(.release, frame: 3)
+    #expect(released)
+    #expect(!control.allowsHumanInput)
+    control.completeHandover()
+    #expect(control.state == .idle)
+    #expect(control.allowsHumanInput)
+    #expect(!control.needsFrames)
+    #expect(!control.canResume)
+    try control.attach()
+    #expect(control.state == .active)
+}
+
+@Test func releaseKeepsTheScreenshotRequirementFromResume() throws {
+    var control = SessionControl()
+    try control.attach()
+    control.beginHandover(.stop, frame: 1)
+    control.completeHandover()
+    control.resume(frame: 2)
+    control.beginHandover(.release, frame: 2)
+    control.completeHandover()
+    #expect(throws: SessionControl.Refusal.observationRequired) { try control.attach() }
+    control.observed()
+    try control.attach()
+}
+
+@Test func releaseCannotLiftTheUsersHold() throws {
+    var paused = SessionControl()
+    try paused.attach()
+    paused.beginHandover(.takeOver, frame: 1)
+    paused.completeHandover()
+    let releasedPaused = paused.beginHandover(.release, frame: 2)
+    #expect(!releasedPaused)
+    #expect(throws: SessionControl.Refusal.userActive) { try paused.attach() }
+    var stopped = SessionControl()
+    try stopped.attach()
+    stopped.beginHandover(.stop, frame: 1)
+    stopped.completeHandover()
+    let releasedStopped = stopped.beginHandover(.release, frame: 2)
+    #expect(!releasedStopped)
+    #expect(throws: SessionControl.Refusal.agentStopped) { try stopped.attach() }
 }
 
 @Test func pausePersistsAndOnlyHumanInputIsCounted() throws {
@@ -43,7 +95,7 @@ import Testing
     control.record(.key)
     try control.attach()
     control.record(.click)
-    let began = control.beginHandover(stopping: false, frame: 8)
+    let began = control.beginHandover(.takeOver, frame: 8)
     #expect(began)
     control.completeHandover()
     control.observed() // A screenshot during the pause cannot satisfy Resume.
@@ -55,10 +107,10 @@ import Testing
     #expect(control.observationRequired)
 }
 
-@Test func explicitResumeFromStopRequiresObservationWhileImplicitReattachDoesNot() throws {
+@Test func resumeFromStopCountsHumanInputAndRequiresObservation() throws {
     var control = SessionControl()
     try control.attach()
-    control.beginHandover(stopping: true, frame: 2)
+    control.beginHandover(.stop, frame: 2)
     control.completeHandover()
     control.record(.click)
     let summary = control.resume(frame: 3)
@@ -67,26 +119,32 @@ import Testing
     #expect(throws: SessionControl.Refusal.observationRequired) { try control.attach() }
 }
 
-@Test func endingASessionSettlesHandoverAndKeepsAPause() throws {
+@Test func endingASessionSettlesHandoverAndKeepsTheUsersHold() throws {
     var control = SessionControl()
     try control.attach()
-    control.beginHandover(stopping: false, frame: 2)
+    control.beginHandover(.takeOver, frame: 2)
     control.ended()
     #expect(control.state == .paused)
     #expect(control.allowsHumanInput)
     #expect(!control.isTransferring)
     #expect(throws: SessionControl.Refusal.userActive) { try control.attach() }
+    var stopped = SessionControl()
+    try stopped.attach()
+    stopped.beginHandover(.stop, frame: 2)
+    stopped.ended()
+    #expect(throws: SessionControl.Refusal.agentStopped) { try stopped.attach() }
     var active = SessionControl()
     try active.attach()
     active.ended()
-    #expect(active.state == .stopped)
+    #expect(active.state == .idle)
     #expect(!active.needsFrames)
+    try active.attach()
 }
 
 @Test func resumeTreatsAReplacedFrameCounterAsChanged() throws {
     var control = SessionControl()
     try control.attach()
-    control.beginHandover(stopping: false, frame: 1)
+    control.beginHandover(.takeOver, frame: 1)
     control.completeHandover()
     control.invalidateObservation()
     // A new session attempt can reach the same frame number with different pixels.
@@ -95,18 +153,18 @@ import Testing
 
 @Test func stopAllSkipsUncontrolledTabsAndStopsPausedOnes() throws {
     var idle = SessionControl()
-    let stoppedIdle = idle.beginHandover(stopping: true, frame: 0)
+    let stoppedIdle = idle.beginHandover(.stop, frame: 0)
     #expect(!stoppedIdle)
     var paused = SessionControl()
     try paused.attach()
-    paused.beginHandover(stopping: false, frame: 4)
+    paused.beginHandover(.takeOver, frame: 4)
     paused.completeHandover()
     paused.record(.key)
-    let stoppedPaused = paused.beginHandover(stopping: true, frame: 5)
+    let stoppedPaused = paused.beginHandover(.stop, frame: 5)
     #expect(stoppedPaused)
     paused.completeHandover()
     #expect(paused.state == .stopped)
-    let stoppedAgain = paused.beginHandover(stopping: true, frame: 6)
+    let stoppedAgain = paused.beginHandover(.stop, frame: 6)
     #expect(!stoppedAgain)
     #expect(paused.resume(frame: 6)?.counts.keys == 1)
 }

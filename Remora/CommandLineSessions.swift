@@ -196,7 +196,7 @@ extension CommandLineController {
             let targets = all ? sessions.tabs.compactMap { sessions.session(for: $0.id) } : [try resolveSession(request.session)]
             var failure: Error?
             for session in targets {
-                do { try await session.handoverAgentControl(stopping: true, by: "cli") }
+                do { try await session.handoverAgentControl(.release) }
                 catch { if failure == nil { failure = error } }
             }
             if let failure { throw failure }
@@ -215,9 +215,10 @@ extension CommandLineController {
         let id = session.attemptID
         switch request.command {
         case "session.get": return sessionInfo(session)
-        case "session.resume": try session.resumeAgentControl(by: "cli")
+        case "session.resume": try session.checkUserHold()
         case "session.show": sessions.select(session.connection.id); show(nil)
         case "session.disconnect", "session.close":
+            if request.command == "session.close" { try session.checkUserHold() }
             session.disconnectSession()
             try await waitFor(session, id: id, timeout: timeout, disconnected: true) { !session.state.isLive }
             if case .failure(let failure) = await session.stopRecording() { throw ControlFailure(.captureFailed, failure.localizedDescription) }
@@ -256,7 +257,9 @@ extension CommandLineController {
             if target == "resumed" {
                 let revision = session.control.resumeRevision
                 try await waitFor(session, id: id, timeout: timeout) {
-                    session.control.state == .active && !session.control.isTransferring || session.control.resumeRevision > revision
+                    if session.control.resumeRevision > revision { return true }
+                    if session.control.state == .stopped { throw SessionViewController.agentStopped }
+                    return session.control.state == .active && !session.control.isTransferring
                 }
                 return sessionInfo(session)
             }

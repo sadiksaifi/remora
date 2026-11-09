@@ -233,17 +233,17 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
         close(selection)
     }
 
-    /// Take Over, which validation retitles Resume while the tab is paused.
+    /// Take Over, which validation retitles Resume while the tab is paused or stopped.
     @objc func toggleAgentControl(_ sender: Any?) { targetSession(sender)?.toggleAgentControl() }
     @objc func stopAgentControl(_ sender: Any?) {
         guard let session = targetSession(sender) else { return }
-        Task { do { try await session.handoverAgentControl(stopping: true) } catch { NSApp.presentError(error) } }
+        Task { do { try await session.handoverAgentControl(.stop) } catch { NSApp.presentError(error) } }
     }
     @objc func stopAllAgentControl(_ sender: Any?) {
         let targets = sessionTabs.tabs.compactMap { sessionTabs.session(for: $0.id) }
         Task {
             for session in targets {
-                do { try await session.handoverAgentControl(stopping: true) } catch { NSApp.presentError(error) }
+                do { try await session.handoverAgentControl(.stop) } catch { NSApp.presentError(error) }
             }
         }
     }
@@ -286,7 +286,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
             item.representedObject = id
             items.append(item)
         }
-        add(control.state == .paused ? "Resume" : "Take Over", #selector(toggleAgentControl(_:)),
+        add(control.canResume ? "Resume" : "Take Over", #selector(toggleAgentControl(_:)),
             control.canTakeOver || (control.canResume && sessionTabs.session(for: id)?.isConnected == true))
         add("Stop Agent Control", #selector(stopAgentControl(_:)), control.canStop)
         add("Stop All Agent Control", #selector(stopAllAgentControl(_:)), includingStopAll && canStopAnyAgent)
@@ -338,9 +338,9 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
             menuItem.state = AppSettings.showKeyPresses ? .on : .off
             return true
         case #selector(toggleAgentControl(_:)):
-            let paused = session?.control.state == .paused
-            menuItem.title = paused ? "Resume" : "Take Over"
-            return paused ? session?.isConnected == true && session?.control.canResume == true : session?.control.canTakeOver == true
+            let resumable = session?.control.canResume == true
+            menuItem.title = resumable ? "Resume" : "Take Over"
+            return resumable ? session?.isConnected == true : session?.control.canTakeOver == true
         case #selector(stopAgentControl(_:)): return session?.control.canStop == true
         case #selector(stopAllAgentControl(_:)): return canStopAnyAgent
         case #selector(disconnectSession(_:)):

@@ -862,12 +862,17 @@ extension SessionViewController {
         catch SessionControl.Refusal.userActive {
             throw ControlFailure(.userActive, "The user has taken control of this session.",
                 hint: "Wait for user.resumed, then take a new screenshot.")
+        } catch SessionControl.Refusal.agentStopped {
+            throw Self.agentStopped
         } catch SessionControl.Refusal.observationRequired {
             throw ControlFailure(.observationRequired, "Take a new screenshot before sending input.")
         } catch {
             throw ControlFailure(.inputBusy, "Control is being transferred.")
         }
     }
+
+    static let agentStopped = ControlFailure(.agentStopped, "The user stopped agent control of this session.",
+        hint: "End the task. Only the user can resume agent control, from Remora.")
 
     /// A nil `agent` comes from a request that did not name its program.
     func attachAgentControl(agent: String?) throws {
@@ -906,8 +911,8 @@ extension SessionViewController {
         guard !control.isTransferring else { return }
         Task {
             do {
-                if control.state == .paused { try resumeAgentControl() }
-                else { try await handoverAgentControl(stopping: false) }
+                if control.canResume { try resumeAgentControl() }
+                else { try await handoverAgentControl(.takeOver) }
             } catch { NSApp.presentError(error) }
         }
     }
@@ -916,15 +921,20 @@ extension SessionViewController {
 
     /// Runs independently of a CLI caller's cancellation. Human forwarding stays
     /// closed until the input executor has completed its session-thread releases.
-    func handoverAgentControl(stopping: Bool, by: String = "ui") async throws {
+    /// Only `.release` comes from the CLI; the user's Take Over and Stop come from the UI.
+    func handoverAgentControl(_ kind: SessionControl.Handover) async throws {
         if control.isTransferring { throw ControlFailure(.inputBusy, "Control is being transferred.") }
         let from = control.state.rawValue
-        guard control.beginHandover(stopping: stopping, frame: frameRevision) else { return }
+        guard control.beginHandover(kind, frame: frameRevision) else { return }
         inputGeometryRevision += 1
         applyControl()
-        cancelAgentInput(ControlFailure(stopping ? .cancelled : .userActive,
-            stopping ? "Agent control was stopped." : "The user has taken control of this session.",
-            hint: stopping ? "" : "Wait for user.resumed, then take a new screenshot."))
+        let failure = switch kind {
+        case .takeOver: ControlFailure(.userActive, "The user has taken control of this session.",
+            hint: "Wait for user.resumed, then take a new screenshot.")
+        case .stop: Self.agentStopped
+        case .release: ControlFailure(.cancelled, "Agent control was released.")
+        }
+        cancelAgentInput(failure)
         // The executor owns finish(). A failed release closes the transport, and a
         // recovered reconnect releases every source before new input, so neither
         // case can leave agent-held state under human input. A session that ends
@@ -934,12 +944,18 @@ extension SessionViewController {
         }
         control.completeHandover()
         applyControl()
-        onControlEvent?(stopping ? "control.stopped" : "user.tookOver", .object([
-            "session": .string(attemptID.uuidString), "by": .string(by), "from": .string(from),
+        onControlEvent?(kind == .takeOver ? "user.tookOver" : "control.stopped", .object([
+            "session": .string(attemptID.uuidString), "by": .string(kind == .release ? "cli" : "ui"), "from": .string(from),
             "screenStale": .bool(true)]))
     }
 
-    func resumeAgentControl(by: String = "ui") throws {
+    /// Throws `user-active` or `agent-stopped` while the user holds control or is taking it.
+    /// CLI commands that would resume control or discard the tab's hold check this first.
+    func checkUserHold() throws {
+        if control.canResume || control.isTransferring { try checkAgentInput() }
+    }
+
+    func resumeAgentControl() throws {
         guard isConnected else { throw ControlFailure(.notConnected, "The session is not connected.") }
         let from = control.state.rawValue
         guard let summary = control.resume(frame: frameRevision) else {
@@ -949,7 +965,7 @@ extension SessionViewController {
         inputGeometryRevision += 1
         applyControl()
         onControlEvent?("user.resumed", .object([
-            "session": .string(attemptID.uuidString), "by": .string(by), "from": .string(from),
+            "session": .string(attemptID.uuidString), "by": .string("ui"), "from": .string(from),
             "counts": .object(["clicks": .number(Double(summary.counts.clicks)),
                 "keys": .number(Double(summary.counts.keys)), "scrolls": .number(Double(summary.counts.scrolls))]),
             "screenChanged": .bool(summary.screenChanged), "screenStale": .bool(true), "observationRequired": .bool(true)]))
