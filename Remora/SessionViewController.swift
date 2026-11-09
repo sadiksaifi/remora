@@ -862,12 +862,17 @@ extension SessionViewController {
         catch SessionControl.Refusal.userActive {
             throw ControlFailure(.userActive, "The user has taken control of this session.",
                 hint: "Wait for user.resumed, then take a new screenshot.")
+        } catch SessionControl.Refusal.agentStopped {
+            throw Self.agentStopped
         } catch SessionControl.Refusal.observationRequired {
             throw ControlFailure(.observationRequired, "Take a new screenshot before sending input.")
         } catch {
             throw ControlFailure(.inputBusy, "Control is being transferred.")
         }
     }
+
+    private static let agentStopped = ControlFailure(.agentStopped, "The user stopped agent control of this session.",
+        hint: "End the task. Only the user can resume agent control, from Remora.")
 
     /// A nil `agent` comes from a request that did not name its program.
     func attachAgentControl(agent: String?) throws {
@@ -906,7 +911,7 @@ extension SessionViewController {
         guard !control.isTransferring else { return }
         Task {
             do {
-                if control.state == .paused { try resumeAgentControl() }
+                if control.canResume { try resumeAgentControl() }
                 else { try await handoverAgentControl(stopping: false) }
             } catch { NSApp.presentError(error) }
         }
@@ -922,9 +927,8 @@ extension SessionViewController {
         guard control.beginHandover(stopping: stopping, frame: frameRevision) else { return }
         inputGeometryRevision += 1
         applyControl()
-        cancelAgentInput(ControlFailure(stopping ? .cancelled : .userActive,
-            stopping ? "Agent control was stopped." : "The user has taken control of this session.",
-            hint: stopping ? "" : "Wait for user.resumed, then take a new screenshot."))
+        cancelAgentInput(stopping ? Self.agentStopped : ControlFailure(.userActive,
+            "The user has taken control of this session.", hint: "Wait for user.resumed, then take a new screenshot."))
         // The executor owns finish(). A failed release closes the transport, and a
         // recovered reconnect releases every source before new input, so neither
         // case can leave agent-held state under human input. A session that ends

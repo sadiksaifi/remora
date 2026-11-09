@@ -2,7 +2,7 @@
 /// the adapter confirms that canceled agent input has released its held state.
 public struct SessionControl: Sendable {
     public enum State: String, Sendable { case idle, active, paused, stopped }
-    public enum Refusal: Error { case userActive, observationRequired, inputBusy }
+    public enum Refusal: Error { case userActive, agentStopped, observationRequired, inputBusy }
     public enum HumanInput: Sendable { case click, key, scroll }
     public struct Counts: Sendable, Equatable {
         public var clicks: Int
@@ -29,11 +29,12 @@ public struct SessionControl: Sendable {
     public var allowsHumanInput: Bool { state != .active && handover == nil }
     public var needsFrames: Bool { state == .active || state == .paused }
     public var canTakeOver: Bool { state == .active && handover == nil }
-    public var canResume: Bool { state == .paused && handover == nil }
+    public var canResume: Bool { (state == .paused || state == .stopped) && handover == nil }
     public var canStop: Bool { needsFrames && handover == nil }
 
     public func checkInput() throws {
         if handover == .paused || state == .paused { throw Refusal.userActive }
+        if handover == .stopped || state == .stopped { throw Refusal.agentStopped }
         if handover != nil { throw Refusal.inputBusy }
         if observationRequired { throw Refusal.observationRequired }
     }
@@ -59,7 +60,7 @@ public struct SessionControl: Sendable {
     }
 
     public mutating func resume(frame: Int) -> Summary? {
-        guard (state == .paused || state == .stopped), !isTransferring else { return nil }
+        guard canResume else { return nil }
         let summary = Summary(counts: counts, screenChanged: frame != pauseFrame)
         lastResume = summary
         resumeRevision += 1

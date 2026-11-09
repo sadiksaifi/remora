@@ -24,15 +24,22 @@ import Testing
     #expect(!control.allowsHumanInput)
 }
 
-@Test func stopDropsDemandAndTheNextInputReattaches() throws {
+@Test func stopRefusesAgentInputUntilTheUserResumes() throws {
     var control = SessionControl()
     try control.attach()
     let began = control.beginHandover(stopping: true, frame: 3)
     #expect(began)
+    #expect(throws: SessionControl.Refusal.agentStopped) { try control.attach() }
     control.completeHandover()
     #expect(control.state == .stopped)
     #expect(control.allowsHumanInput)
     #expect(!control.needsFrames)
+    control.observed()
+    #expect(throws: SessionControl.Refusal.agentStopped) { try control.attach() }
+    #expect(control.canResume)
+    #expect(control.resume(frame: 3) != nil)
+    #expect(throws: SessionControl.Refusal.observationRequired) { try control.attach() }
+    control.observed()
     try control.attach()
     #expect(control.state == .active)
     #expect(!control.allowsHumanInput)
@@ -55,7 +62,7 @@ import Testing
     #expect(control.observationRequired)
 }
 
-@Test func explicitResumeFromStopRequiresObservationWhileImplicitReattachDoesNot() throws {
+@Test func resumeFromStopCountsHumanInputAndRequiresObservation() throws {
     var control = SessionControl()
     try control.attach()
     control.beginHandover(stopping: true, frame: 2)

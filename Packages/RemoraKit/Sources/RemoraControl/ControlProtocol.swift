@@ -85,6 +85,7 @@ public struct ControlFailure: Error, Codable, Sendable, Equatable, LocalizedErro
         case appUnavailable = "app-unavailable", notFound = "not-found", ambiguousTarget = "ambiguous-target"
         case unsupported, sessionRequired = "session-required", sessionEnded = "session-ended"
         case notConnected = "not-connected", promptRequired = "prompt-required", userActive = "user-active"
+        case agentStopped = "agent-stopped"
         case inputBusy = "input-busy", observationRequired = "observation-required"
         case backendFailed = "backend-failed", connectionDeleted = "connection-deleted", sessionExists = "session-exists"
         case storeFailed = "store-failed", credentialFailed = "credential-failed", promptResolved = "prompt-resolved"
@@ -97,7 +98,7 @@ public struct ControlFailure: Error, Codable, Sendable, Equatable, LocalizedErro
             case .internal, .captureFailed, .ioFailed, .outcomeUnknown, .storeFailed, .credentialFailed, .backendFailed: 1
             case .invalidArgument, .unknownCommand: 2
             case .appUnavailable, .notFound, .ambiguousTarget, .unsupported, .sessionRequired, .sessionEnded, .promptResolved, .connectionDeleted, .streamOverflow, .imageExpired: 3
-            case .notConnected, .promptRequired, .userActive, .inputBusy, .observationRequired, .sessionExists, .noFrame, .recordingBusy, .destinationExists: 4
+            case .notConnected, .promptRequired, .userActive, .agentStopped, .inputBusy, .observationRequired, .sessionExists, .noFrame, .recordingBusy, .destinationExists: 4
             case .timeout, .frameTimeout: 5
             case .cancelled: 130
             }
