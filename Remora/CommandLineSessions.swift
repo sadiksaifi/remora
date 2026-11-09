@@ -257,7 +257,9 @@ extension CommandLineController {
             if target == "resumed" {
                 let revision = session.control.resumeRevision
                 try await waitFor(session, id: id, timeout: timeout) {
-                    session.control.state == .active && !session.control.isTransferring || session.control.resumeRevision > revision
+                    if session.control.resumeRevision > revision { return true }
+                    if session.control.state == .stopped { throw SessionViewController.agentStopped }
+                    return session.control.state == .active && !session.control.isTransferring
                 }
                 return sessionInfo(session)
             }

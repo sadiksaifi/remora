@@ -27,7 +27,7 @@ C is a saved connection name or UUID from `remora connection list --json`. S, I 
 When the task ends, done or abandoned, hand the session back:
 
 1. Release control: `remora session stop --session S --json`. This returns control to the user.
-2. If you opened S, close it: `remora session close --session S --json`. This disconnects the session and closes its tab. If the user opened S, leave it open.
+2. If you opened S, close it: `remora session close --session S --json`. This disconnects the session and closes its tab. If the user opened S, took over S, or stopped agent control of S, leave it open.
 
 ## Input
 
