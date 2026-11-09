@@ -59,7 +59,6 @@ public struct SessionControl: Sendable {
         guard let handover else { return }
         state = handover
         self.handover = nil
-        if state == .idle { observationRequired = false }
     }
 
     public mutating func resume(frame: Int) -> Summary? {
@@ -86,7 +85,6 @@ public struct SessionControl: Sendable {
     public mutating func ended() {
         if let handover { state = handover } else if state == .active { state = .idle }
         handover = nil
-        observationRequired = false
     }
 
     public mutating func observed() {

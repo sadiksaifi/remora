@@ -60,6 +60,19 @@ import Testing
     #expect(control.state == .active)
 }
 
+@Test func releaseKeepsTheScreenshotRequirementFromResume() throws {
+    var control = SessionControl()
+    try control.attach()
+    control.beginHandover(.stop, frame: 1)
+    control.completeHandover()
+    control.resume(frame: 2)
+    control.beginHandover(.release, frame: 2)
+    control.completeHandover()
+    #expect(throws: SessionControl.Refusal.observationRequired) { try control.attach() }
+    control.observed()
+    try control.attach()
+}
+
 @Test func releaseCannotLiftTheUsersHold() throws {
     var paused = SessionControl()
     try paused.attach()
