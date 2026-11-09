@@ -4,6 +4,9 @@ public struct SessionControl: Sendable {
     public enum State: String, Sendable { case idle, active, paused, stopped }
     public enum Refusal: Error { case userActive, agentStopped, observationRequired, inputBusy }
     public enum HumanInput: Sendable { case click, key, scroll }
+    /// Take Over and Stop come from the user and bind the agent until Resume.
+    /// Release comes from the agent and lets its next input attach again.
+    public enum Handover: Sendable { case takeOver, stop, release }
     public struct Counts: Sendable, Equatable {
         public var clicks: Int
         public var keys: Int
@@ -45,9 +48,9 @@ public struct SessionControl: Sendable {
     }
 
     @discardableResult
-    public mutating func beginHandover(stopping: Bool, frame: Int) -> Bool {
-        guard stopping ? canStop : canTakeOver else { return false }
-        handover = stopping ? .stopped : .paused
+    public mutating func beginHandover(_ kind: Handover, frame: Int) -> Bool {
+        guard kind == .stop ? canStop : canTakeOver else { return false }
+        handover = switch kind { case .takeOver: .paused; case .stop: .stopped; case .release: .idle }
         if state == .active { counts = Counts(); pauseFrame = frame }
         return true
     }
@@ -56,7 +59,7 @@ public struct SessionControl: Sendable {
         guard let handover else { return }
         state = handover
         self.handover = nil
-        if state == .stopped { observationRequired = false }
+        if state == .idle { observationRequired = false }
     }
 
     public mutating func resume(frame: Int) -> Summary? {

@@ -912,7 +912,7 @@ extension SessionViewController {
         Task {
             do {
                 if control.canResume { try resumeAgentControl() }
-                else { try await handoverAgentControl(stopping: false) }
+                else { try await handoverAgentControl(.takeOver) }
             } catch { NSApp.presentError(error) }
         }
     }
@@ -921,14 +921,20 @@ extension SessionViewController {
 
     /// Runs independently of a CLI caller's cancellation. Human forwarding stays
     /// closed until the input executor has completed its session-thread releases.
-    func handoverAgentControl(stopping: Bool, by: String = "ui") async throws {
+    /// Only `.release` comes from the CLI; the user's Take Over and Stop come from the UI.
+    func handoverAgentControl(_ kind: SessionControl.Handover) async throws {
         if control.isTransferring { throw ControlFailure(.inputBusy, "Control is being transferred.") }
         let from = control.state.rawValue
-        guard control.beginHandover(stopping: stopping, frame: frameRevision) else { return }
+        guard control.beginHandover(kind, frame: frameRevision) else { return }
         inputGeometryRevision += 1
         applyControl()
-        cancelAgentInput(stopping ? Self.agentStopped : ControlFailure(.userActive,
-            "The user has taken control of this session.", hint: "Wait for user.resumed, then take a new screenshot."))
+        let failure = switch kind {
+        case .takeOver: ControlFailure(.userActive, "The user has taken control of this session.",
+            hint: "Wait for user.resumed, then take a new screenshot.")
+        case .stop: Self.agentStopped
+        case .release: ControlFailure(.cancelled, "Agent control was released.")
+        }
+        cancelAgentInput(failure)
         // The executor owns finish(). A failed release closes the transport, and a
         // recovered reconnect releases every source before new input, so neither
         // case can leave agent-held state under human input. A session that ends
@@ -938,8 +944,8 @@ extension SessionViewController {
         }
         control.completeHandover()
         applyControl()
-        onControlEvent?(stopping ? "control.stopped" : "user.tookOver", .object([
-            "session": .string(attemptID.uuidString), "by": .string(by), "from": .string(from),
+        onControlEvent?(kind == .takeOver ? "user.tookOver" : "control.stopped", .object([
+            "session": .string(attemptID.uuidString), "by": .string(kind == .release ? "cli" : "ui"), "from": .string(from),
             "screenStale": .bool(true)]))
     }
 

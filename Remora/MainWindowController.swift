@@ -237,13 +237,13 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
     @objc func toggleAgentControl(_ sender: Any?) { targetSession(sender)?.toggleAgentControl() }
     @objc func stopAgentControl(_ sender: Any?) {
         guard let session = targetSession(sender) else { return }
-        Task { do { try await session.handoverAgentControl(stopping: true) } catch { NSApp.presentError(error) } }
+        Task { do { try await session.handoverAgentControl(.stop) } catch { NSApp.presentError(error) } }
     }
     @objc func stopAllAgentControl(_ sender: Any?) {
         let targets = sessionTabs.tabs.compactMap { sessionTabs.session(for: $0.id) }
         Task {
             for session in targets {
-                do { try await session.handoverAgentControl(stopping: true) } catch { NSApp.presentError(error) }
+                do { try await session.handoverAgentControl(.stop) } catch { NSApp.presentError(error) }
             }
         }
     }

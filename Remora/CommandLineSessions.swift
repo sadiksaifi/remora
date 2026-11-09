@@ -196,7 +196,7 @@ extension CommandLineController {
             let targets = all ? sessions.tabs.compactMap { sessions.session(for: $0.id) } : [try resolveSession(request.session)]
             var failure: Error?
             for session in targets {
-                do { try await session.handoverAgentControl(stopping: true, by: "cli") }
+                do { try await session.handoverAgentControl(.release) }
                 catch { if failure == nil { failure = error } }
             }
             if let failure { throw failure }
