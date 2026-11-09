@@ -63,9 +63,10 @@ struct SessionCommand: AsyncParsableCommand {
         }
     }
     struct Stop: AsyncParsableCommand {
+        static let configuration = CommandConfiguration(abstract: "Release agent control. The next input command attaches again.")
         @OptionGroup var options: CommonOptions
         @OptionGroup var target: SessionOptions
-        @Flag(help: "Stop agent control in every tab.") var all = false
+        @Flag(help: "Release agent control in every tab.") var all = false
         mutating func validate() throws {
             if all, target.session != nil { throw ValidationError("Use --all without --session.") }
         }
@@ -75,6 +76,8 @@ struct SessionCommand: AsyncParsableCommand {
         }
     }
     struct Resume: AsyncParsableCommand {
+        static let configuration = CommandConfiguration(
+            abstract: "Fail while the user holds control. Only the user can resume, from Remora.")
         @OptionGroup var options: CommonOptions
         @OptionGroup var target: SessionOptions
         @MainActor func run() async throws {

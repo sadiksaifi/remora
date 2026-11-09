@@ -949,7 +949,12 @@ extension SessionViewController {
             "screenStale": .bool(true)]))
     }
 
-    func resumeAgentControl(by: String = "ui") throws {
+    /// Only the user resumes, from the UI. The CLI's resume reports the user's hold and changes nothing.
+    func refuseAgentResume() throws {
+        if control.canResume || control.isTransferring { try checkAgentInput() }
+    }
+
+    func resumeAgentControl() throws {
         guard isConnected else { throw ControlFailure(.notConnected, "The session is not connected.") }
         let from = control.state.rawValue
         guard let summary = control.resume(frame: frameRevision) else {
@@ -959,7 +964,7 @@ extension SessionViewController {
         inputGeometryRevision += 1
         applyControl()
         onControlEvent?("user.resumed", .object([
-            "session": .string(attemptID.uuidString), "by": .string(by), "from": .string(from),
+            "session": .string(attemptID.uuidString), "by": .string("ui"), "from": .string(from),
             "counts": .object(["clicks": .number(Double(summary.counts.clicks)),
                 "keys": .number(Double(summary.counts.keys)), "scrolls": .number(Double(summary.counts.scrolls))]),
             "screenChanged": .bool(summary.screenChanged), "screenStale": .bool(true), "observationRequired": .bool(true)]))

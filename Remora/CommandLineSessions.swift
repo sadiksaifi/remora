@@ -215,7 +215,7 @@ extension CommandLineController {
         let id = session.attemptID
         switch request.command {
         case "session.get": return sessionInfo(session)
-        case "session.resume": try session.resumeAgentControl(by: "cli")
+        case "session.resume": try session.refuseAgentResume()
         case "session.show": sessions.select(session.connection.id); show(nil)
         case "session.disconnect", "session.close":
             session.disconnectSession()
