@@ -42,4 +42,4 @@ Most failures name their next step in `error.hint`. Follow it. These three need 
 
 - `prompt-required`: Remora is waiting on a credentials or certificate prompt. P is the UUID in `error.details.prompt`. Show it with `remora prompt get P --json`, and ask the user before you accept a certificate or supply a password. Then answer with `remora prompt respond P connect --json` or `remora prompt respond P cancel --json`.
 - `user-active`: the user took over the session, and Resume is theirs to press. Wait with `remora wait --for resumed --session S --timeout 1m --json`, and repeat the wait after each timeout. Then take a new screenshot.
-- `cancelled` with the message "Agent control was stopped.": the user pressed Stop Agent Control. End the task, report the last screenshot, and leave the session open, including one you opened. Your next input command would take control back.
+- `agent-stopped`: the user pressed Stop Agent Control. End the task, report the last screenshot, and leave the session open, including one you opened.
