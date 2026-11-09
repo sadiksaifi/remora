@@ -215,9 +215,10 @@ extension CommandLineController {
         let id = session.attemptID
         switch request.command {
         case "session.get": return sessionInfo(session)
-        case "session.resume": try session.refuseAgentResume()
+        case "session.resume": try session.checkUserHold()
         case "session.show": sessions.select(session.connection.id); show(nil)
         case "session.disconnect", "session.close":
+            if request.command == "session.close" { try session.checkUserHold() }
             session.disconnectSession()
             try await waitFor(session, id: id, timeout: timeout, disconnected: true) { !session.state.isLive }
             if case .failure(let failure) = await session.stopRecording() { throw ControlFailure(.captureFailed, failure.localizedDescription) }

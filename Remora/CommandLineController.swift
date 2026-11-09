@@ -107,6 +107,7 @@ final class CommandLineController {
             case "app.hide": NSApplication.shared.hide(nil)
             case "app.close": mainWindow.window?.close()
             case "app.quit":
+                for tab in sessions.tabs { try sessions.session(for: tab.id)?.checkUserHold() }
                 let failures = await sessions.prepareToQuit()
                 let response: ControlResponse = failures.isEmpty
                     ? .success(.object(["quitting": .bool(true)]))

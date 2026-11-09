@@ -871,7 +871,7 @@ extension SessionViewController {
         }
     }
 
-    private static let agentStopped = ControlFailure(.agentStopped, "The user stopped agent control of this session.",
+    static let agentStopped = ControlFailure(.agentStopped, "The user stopped agent control of this session.",
         hint: "End the task. Only the user can resume agent control, from Remora.")
 
     /// A nil `agent` comes from a request that did not name its program.
@@ -949,8 +949,9 @@ extension SessionViewController {
             "screenStale": .bool(true)]))
     }
 
-    /// Only the user resumes, from the UI. The CLI's resume reports the user's hold and changes nothing.
-    func refuseAgentResume() throws {
+    /// Throws `user-active` or `agent-stopped` while the user holds control or is taking it.
+    /// CLI commands that would resume control or discard the tab's hold check this first.
+    func checkUserHold() throws {
         if control.canResume || control.isTransferring { try checkAgentInput() }
     }
 
