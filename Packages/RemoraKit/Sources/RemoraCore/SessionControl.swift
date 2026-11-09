@@ -81,9 +81,10 @@ public struct SessionControl: Sendable {
         }
     }
 
-    /// Settles a pending handover. A human pause survives, so only Resume returns control.
+    /// Settles a pending handover. The user's pause or stop survives, so only Resume returns control.
+    /// Active control is released, so the agent can attach to a later connection.
     public mutating func ended() {
-        if let handover { state = handover } else if state == .active { state = .stopped }
+        if let handover { state = handover } else if state == .active { state = .idle }
         handover = nil
         observationRequired = false
     }

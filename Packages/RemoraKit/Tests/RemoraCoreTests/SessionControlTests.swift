@@ -106,7 +106,7 @@ import Testing
     #expect(throws: SessionControl.Refusal.observationRequired) { try control.attach() }
 }
 
-@Test func endingASessionSettlesHandoverAndKeepsAPause() throws {
+@Test func endingASessionSettlesHandoverAndKeepsTheUsersHold() throws {
     var control = SessionControl()
     try control.attach()
     control.beginHandover(.takeOver, frame: 2)
@@ -115,11 +115,17 @@ import Testing
     #expect(control.allowsHumanInput)
     #expect(!control.isTransferring)
     #expect(throws: SessionControl.Refusal.userActive) { try control.attach() }
+    var stopped = SessionControl()
+    try stopped.attach()
+    stopped.beginHandover(.stop, frame: 2)
+    stopped.ended()
+    #expect(throws: SessionControl.Refusal.agentStopped) { try stopped.attach() }
     var active = SessionControl()
     try active.attach()
     active.ended()
-    #expect(active.state == .stopped)
+    #expect(active.state == .idle)
     #expect(!active.needsFrames)
+    try active.attach()
 }
 
 @Test func resumeTreatsAReplacedFrameCounterAsChanged() throws {
