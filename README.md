@@ -2,7 +2,9 @@
 
 A fast, native and simple remote desktop client for the Mac that speaks both RDP and VNC, built so your AI agents can drive it too.
 
-![Remora switching between macOS, Debian and Windows sessions in one window](assets/demo.gif)
+<p align="center">
+  <img src="https://github.com/user-attachments/assets/af53e6e8-4ed0-4c74-8fca-7f22c9cf1403" width="100%" alt="Remora switching between macOS, Debian and Windows sessions in one window">
+</p>
 
 ## Highlights
 
