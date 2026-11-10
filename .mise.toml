@@ -29,7 +29,7 @@ description = "Format the Swift sources in place."
 run = "git ls-files -z --cached --others --exclude-standard '*.swift' | xargs -0 xcrun swift-format format --in-place --parallel"
 
 [tasks.check]
-description = "Lint the Swift sources, build and test. Run it before a commit."
+description = "Lint the Swift sources, build and test. Run it before pushing or opening a PR."
 run = [
     "git ls-files -z --cached --others --exclude-standard '*.swift' | xargs -0 xcrun swift-format lint --strict --parallel",
     { task = "build" },
