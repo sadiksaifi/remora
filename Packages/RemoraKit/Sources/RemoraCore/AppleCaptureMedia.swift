@@ -326,7 +326,7 @@ final class AppleCaptureMovie: CaptureMovie, @unchecked Sendable {
                 blit.endEncoding()
             } else {
                 if context == nil { context = CIContext(mtlDevice: source.device, options: [.cacheIntermediates: false]) }
-                // FreeRDP's alpha byte is undefined. A same-format view forces opaque sampling
+                // The remote desktop's alpha byte is undefined. A same-format view forces opaque sampling
                 // without a conversion pass or modifying the renderer's texture.
                 guard let opaque = texture.makeTextureView(pixelFormat: .bgra8Unorm, textureType: .type2D,
                     levels: 0..<1, slices: 0..<1,

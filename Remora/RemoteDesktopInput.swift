@@ -187,7 +187,7 @@ final class RemoteDesktopInput: NSObject {
         }
     }
 
-    /// Presses and releases Control, Option, and Forward Delete, which RDP maps to Ctrl-Alt-Del.
+    /// Presses and releases Control, Option, and Forward Delete, which reach the remote computer as Ctrl-Alt-Del.
     func sendCtrlAltDelete() {
         guard allowsHumanInput, connected, let input else { return }
         onHumanInput?(.key)

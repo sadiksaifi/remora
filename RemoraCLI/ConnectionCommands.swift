@@ -9,7 +9,7 @@ struct ConnectionFields: ParsableArguments {
     @Option(help: "Remote port, 1 to 65535. Defaults to 3389 for RDP and 5900 for VNC.") var port: Int?
     @Option(help: "Remote account username.") var username: String?
     @Option(help: "Remote account domain.") var domain: String?
-    @Option(help: "Saved resolution: fit or WIDTHxHEIGHT, 200 to 8192 pixels per side with an even width.") var resolution: String?
+    @Option(help: "Saved resolution: fit or WIDTHxHEIGHT, 200 to 8192 pixels per side with an even width. VNC starts at the server's size.") var resolution: String?
     @Option(help: "VNC mode: standard, or apple for Apple Screen Sharing's experimental faster, lossy encoding (Macs only).") var vncMode: String?
     @Flag(help: "Read the password from UTF-8 stdin, removing one trailing line ending.") var passwordStdin = false
 

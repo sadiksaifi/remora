@@ -12,7 +12,7 @@ enum SessionStatus: Equatable {
 
 /// Centered status for a session window. Over the desktop it sits on a glass panel.
 struct SessionStatusView: View {
-    /// FreeRDP's reconnect loop in the bridge stops after this many attempts.
+    /// FreeRDP's reconnect loop in the bridge stops after this many attempts. VNC sessions don't reconnect automatically.
     static let reconnectAttemptLimit = 20
 
     let status: SessionStatus

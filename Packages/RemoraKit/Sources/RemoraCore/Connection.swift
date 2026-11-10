@@ -31,9 +31,6 @@ public struct Connection: Codable, Sendable, Identifiable, Hashable {
         public var requiresUsername: Bool { self == .rdp }
     }
 
-    /// The standard RDP port.
-    public static let defaultPort = 3389
-
     public var id: UUID
     public var name: String
     public var host: String
