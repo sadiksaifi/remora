@@ -2,6 +2,9 @@
 
 A fast, native and simple remote desktop client for the Mac that speaks both RDP and VNC, and gives your AI agents computer use on every remote machine you connect to.
 
+> [!WARNING]
+> Remora is in early development and not ready for everyday use yet. There is no release, and things will change and break.
+
 <p align="center">
   <img src="https://github.com/user-attachments/assets/af53e6e8-4ed0-4c74-8fca-7f22c9cf1403" width="100%" alt="Remora switching between macOS, Debian and Windows sessions in one window">
 </p>
@@ -13,18 +16,6 @@ A fast, native and simple remote desktop client for the Mac that speaks both RDP
 - **Screenshots and recordings**: Capture a screenshot or record HEVC video, even from a tab you are not looking at.
 - **Secure VNC**: VeNCrypt with certificate TLS and no fallback to a weaker method, plus Apple Remote Desktop sign-in for Macs.
 - **CLI**: `remora` can do almost everything the app can. Run `remora --help` to see it, and `remora skill install` to teach your agents.
-
-## Install
-
-Remora runs on Apple silicon Macs with macOS 26 or later. There is no release yet, so build it from source with Xcode, CMake and [XcodeGen](https://github.com/yonaskolb/XcodeGen):
-
-```sh
-./Vendor/build-engine.sh   # builds the RDP and VNC engines once
-xcodegen generate
-open Remora.xcodeproj      # then run the Remora scheme
-```
-
-To install the CLI, click Install in Settings > Command Line. That links `remora` into `~/.local/bin`.
 
 ## License
 
