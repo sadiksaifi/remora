@@ -1,7 +1,7 @@
 import AppKit
-import RemoraCore
 import Metal
 import QuartzCore
+import RemoraCore
 import Synchronization
 import os
 
@@ -58,8 +58,7 @@ final class FrameRenderer: FrameSink, Sendable {
         guard let library = device.makeDefaultLibrary() else {
             throw Failure.allocationFailed
         }
-        do { desktop = try MetalDesktop(device: device) }
-        catch { throw Failure.allocationFailed }
+        do { desktop = try MetalDesktop(device: device) } catch { throw Failure.allocationFailed }
         let descriptor = MTLRenderPipelineDescriptor()
         descriptor.label = "Opaque BGRA desktop"
         descriptor.vertexFunction = library.makeFunction(name: "remoraDesktopVertex")
@@ -96,19 +95,22 @@ final class FrameRenderer: FrameSink, Sendable {
         os_signpost(.begin, log: renderLog, name: "Ingest", signpostID: signpost)
         var copiedBytes = 0
         defer { os_signpost(.end, log: renderLog, name: "Ingest", signpostID: signpost, "bytes=%{public}ld", copiedBytes) }
-        do { copiedBytes = try desktop.ingest(frame) }
-        catch { counters.withLock { $0.lastFailure = .commandFailed(error.localizedDescription) } }
+        do { copiedBytes = try desktop.ingest(frame) } catch { counters.withLock { $0.lastFailure = .commandFailed(error.localizedDescription) } }
     }
 
     /// The Debug demo uses the same frame path as a session.
     func ingest(pixels: UnsafeRawPointer, width: Int, height: Int, bytesPerRow: Int, dirty: [DirtyRect]) {
-        consume(BorrowedFrame(pixels: pixels, width: width, height: height, stride: bytesPerRow,
-            dirtyRectangles: dirty.map { .init(x: $0.x, y: $0.y, width: $0.width, height: $0.height) }))
+        consume(
+            BorrowedFrame(
+                pixels: pixels, width: width, height: height, stride: bytesPerRow,
+                dirtyRectangles: dirty.map { .init(x: $0.x, y: $0.y, width: $0.width, height: $0.height) }))
     }
 
     @MainActor
-    func present(on layer: CAMetalLayer, redraw: Bool, interval: CFTimeInterval,
-                 didComplete: @escaping @MainActor @Sendable (CGSize?) -> Void) {
+    func present(
+        on layer: CAMetalLayer, redraw: Bool, interval: CFTimeInterval,
+        didComplete: @escaping @MainActor @Sendable (CGSize?) -> Void
+    ) {
         let drawableSize = layer.drawableSize
         guard drawableSize.width > 0, drawableSize.height > 0 else { return }
         let deadline = presentation.withLock { state -> CFTimeInterval? in
@@ -120,13 +122,17 @@ final class FrameRenderer: FrameSink, Sendable {
             return state.earliest
         }
         guard let deadline else { return }
+        // draw(on:) calls only nextDrawable() on the layer, which is safe off the main thread.
+        nonisolated(unsafe) let layer = layer
         presentationQueue.asyncAfter(deadline: .now() + max(0, deadline - CACurrentMediaTime())) { [self] in
             autoreleasepool { draw(on: layer, redraw: redraw, interval: interval, didComplete: didComplete) }
         }
     }
 
-    private func finish(size: CGSize?, retry: Bool,
-                        didComplete: @escaping @MainActor @Sendable (CGSize?) -> Void) {
+    private func finish(
+        size: CGSize?, retry: Bool,
+        didComplete: @escaping @MainActor @Sendable (CGSize?) -> Void
+    ) {
         let requested = presentation.withLock { state in
             state.inFlight = false
             defer { state.requested = false }
@@ -137,8 +143,10 @@ final class FrameRenderer: FrameSink, Sendable {
         }
     }
 
-    private func draw(on layer: CAMetalLayer, redraw: Bool, interval: CFTimeInterval,
-                      didComplete: @escaping @MainActor @Sendable (CGSize?) -> Void) {
+    private func draw(
+        on layer: CAMetalLayer, redraw: Bool, interval: CFTimeInterval,
+        didComplete: @escaping @MainActor @Sendable (CGSize?) -> Void
+    ) {
         guard desktop.needsSubmission(redraw: redraw) else {
             finish(size: nil, retry: false, didComplete: didComplete)
             return

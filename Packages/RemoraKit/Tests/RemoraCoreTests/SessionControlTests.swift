@@ -1,4 +1,5 @@
 import Testing
+
 @testable import RemoraCore
 
 @Test func handoverWaitsForReleaseAndResumeRequiresANewObservation() throws {
@@ -65,7 +66,7 @@ import Testing
     try control.attach()
     control.beginHandover(.stop, frame: 1)
     control.completeHandover()
-    control.resume(frame: 2)
+    _ = control.resume(frame: 2)
     control.beginHandover(.release, frame: 2)
     control.completeHandover()
     #expect(throws: SessionControl.Refusal.observationRequired) { try control.attach() }
@@ -98,7 +99,7 @@ import Testing
     let began = control.beginHandover(.takeOver, frame: 8)
     #expect(began)
     control.completeHandover()
-    control.observed() // A screenshot during the pause cannot satisfy Resume.
+    control.observed()  // A screenshot during the pause cannot satisfy Resume.
     #expect(throws: SessionControl.Refusal.userActive) { try control.attach() }
     #expect(control.resume(frame: 8)?.counts == .init())
     #expect(control.observationRequired)

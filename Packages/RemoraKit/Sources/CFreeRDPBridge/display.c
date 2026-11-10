@@ -85,7 +85,7 @@ RMDisplay *rm_display_new(rdpContext *context, const RMRDPCallbacks *callbacks, 
         return NULL;
     }
     d->log = os_log_create("dev.sadiksaifi.Remora", "Display");
-    d->wake = CreateEvent(NULL, TRUE, FALSE, NULL);
+    d->wake = CreateEvent(NULL, true, false, NULL);
     if (!d->wake || PubSub_SubscribeChannelConnected(context->pubSub, channel_connected) < 0 ||
         PubSub_SubscribeChannelDisconnected(context->pubSub, channel_disconnected) < 0) {
         PubSub_UnsubscribeChannelConnected(context->pubSub, channel_connected);
