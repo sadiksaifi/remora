@@ -1,6 +1,6 @@
 # Remora
 
-A fast, native and simple remote desktop client for the Mac, built so your AI agents can drive it too.
+A fast, native and simple remote desktop client for the Mac that speaks both RDP and VNC, built so your AI agents can drive it too.
 
 ## Highlights
 
