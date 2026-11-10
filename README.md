@@ -2,6 +2,8 @@
 
 A fast, native and simple remote desktop client for the Mac that speaks both RDP and VNC, built so your AI agents can drive it too.
 
+![Remora switching between macOS, Debian and Windows sessions in one window](assets/demo.gif)
+
 ## Highlights
 
 - **Fast and sharp**: A Metal renderer and H.264 decoded by VideoToolbox keep the remote desktop sharp and responsive, at full Retina resolution on RDP.
