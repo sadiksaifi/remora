@@ -9,6 +9,10 @@ A native macOS desktop client for RDP and VNC.
 - Use Apple's Human Interface Guidelines for macOS 27 as the UI design baseline.
 - Less code is better code: every line we own is maintenance. Prefer an Apple framework, FreeRDP, LibVNCClient, or a well-maintained library over writing our own, and cut features and flags that another path already covers.
 
+## Development
+
+- `mise install` installs the pinned tools, and `just` lists the tasks. Run `just engine` once before the first `just build` or `just test`.
+
 ## Agent skill
 
 - When a change alters what the `remora` CLI does, update `skills/remora/SKILL.md` in the same change, with the smallest edit that keeps it true. The skill holds only what `remora --help` does not tell an agent.

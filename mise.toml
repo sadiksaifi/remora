@@ -1,0 +1,4 @@
+[tools]
+cmake = "4.4.5"
+just = "1.59.0"
+xcodegen = "2.46.0"
