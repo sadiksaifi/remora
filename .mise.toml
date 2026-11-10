@@ -11,7 +11,8 @@ description = "Regenerate Remora.xcodeproj from project.yml."
 run = "xcodegen generate"
 
 [tasks.build]
-description = "Build the Debug app. Run the setup task once first."
+description = "Regenerate the project and build the Debug app. Run the setup task once first."
+depends = ["generate"]
 run = "xcodebuild -project Remora.xcodeproj -scheme Remora -configuration Debug -derivedDataPath build/DerivedData -quiet build"
 
 [tasks.run]
@@ -22,3 +23,15 @@ run = "open -n build/DerivedData/Build/Products/Debug/Remora.app"
 [tasks.test]
 description = "Run the RemoraKit tests. Run the setup task once first. Extra arguments go to swift test, such as --filter."
 run = "swift test --package-path Packages/RemoraKit"
+
+[tasks.format]
+description = "Format the Swift sources in place."
+run = "git ls-files -z --cached --others --exclude-standard '*.swift' | xargs -0 xcrun swift-format format --in-place --parallel"
+
+[tasks.check]
+description = "Lint the Swift sources, build and test. Run it before a commit."
+run = [
+    "git ls-files -z --cached --others --exclude-standard '*.swift' | xargs -0 xcrun swift-format lint --strict --parallel",
+    { task = "build" },
+    { task = "test" },
+]

@@ -27,8 +27,10 @@ final class SystemShortcutCapture {
     private let receive: (NSEvent) -> Bool
     private let releaseKeys: () -> Void
 
-    init(isFocused: @escaping () -> Bool, receive: @escaping (NSEvent) -> Bool,
-         releaseKeys: @escaping () -> Void) {
+    init(
+        isFocused: @escaping () -> Bool, receive: @escaping (NSEvent) -> Bool,
+        releaseKeys: @escaping () -> Void
+    ) {
         self.isFocused = isFocused
         self.receive = receive
         self.releaseKeys = releaseKeys
@@ -38,7 +40,10 @@ final class SystemShortcutCapture {
 
     func start() {
         guard isFocused() else { return }
-        guard Self.isEnabled, Self.isTrusted else { stop(); return }
+        guard Self.isEnabled, Self.isTrusted else {
+            stop()
+            return
+        }
         if let tap {
             if CFMachPortIsValid(tap) {
                 CGEvent.tapEnable(tap: tap, enable: true)
@@ -51,16 +56,19 @@ final class SystemShortcutCapture {
         }
         // CGEvent.h permits active keyboard filters for trusted accessibility clients.
         // Listen-event preflight only checks passive Input Monitoring access.
-        guard let tap = CGEvent.tapCreate(
-            tap: .cgSessionEventTap, place: .headInsertEventTap, options: .defaultTap,
-            eventsOfInterest: mask, callback: { _, type, event, user in
-                let discard = MainActor.assumeIsolated {
-                    let owner = Unmanaged<SystemShortcutCapture>.fromOpaque(user!).takeUnretainedValue()
-                    return owner.filter(type: type, event: event)
-                }
-                return discard ? nil : Unmanaged.passUnretained(event)
-            }, userInfo: Unmanaged.passUnretained(self).toOpaque()
-        ) else { return } // Secure Event Input or a permission change can prevent creation.
+        guard
+            let tap = CGEvent.tapCreate(
+                tap: .cgSessionEventTap, place: .headInsertEventTap, options: .defaultTap,
+                eventsOfInterest: mask,
+                callback: { _, type, event, user in
+                    let discard = MainActor.assumeIsolated {
+                        let owner = Unmanaged<SystemShortcutCapture>.fromOpaque(user!).takeUnretainedValue()
+                        return owner.filter(type: type, event: event)
+                    }
+                    return discard ? nil : Unmanaged.passUnretained(event)
+                }, userInfo: Unmanaged.passUnretained(self).toOpaque()
+            )
+        else { return }  // Secure Event Input or a permission change can prevent creation.
         guard let source = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, tap, 0) else {
             CFMachPortInvalidate(tap)
             return
@@ -82,7 +90,10 @@ final class SystemShortcutCapture {
     }
 
     private func filter(type: CGEventType, event: CGEvent) -> Bool {
-        guard isFocused(), Self.isEnabled else { stop(); return false }
+        guard isFocused(), Self.isEnabled else {
+            stop()
+            return false
+        }
         if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
             releaseKeys()
             if let tap { CGEvent.tapEnable(tap: tap, enable: true) }

@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+
 @testable import RemoraControl
 
 @Test func durationUnitsAndBounds() throws {
@@ -19,7 +20,10 @@ import Testing
     #expect(request.agent == nil)
     let encoded = try JSONEncoder().encode(ControlRequest(command: "key", arguments: ["chord": .string("Enter")], agent: "codex"))
     #expect(try decoder.decode(ControlRequest.self, from: encoded).agent == "codex")
-    for invalid in [#"{"command":"app.quit","extra":true}"#, #"{"command":""}"#, #"{"command":"app.show","arguments":[]}"#, #"{"command":"app.show","session":42}"#, #"{"command":"key","agent":7}"#] {
+    for invalid in [
+        #"{"command":"app.quit","extra":true}"#, #"{"command":""}"#, #"{"command":"app.show","arguments":[]}"#, #"{"command":"app.show","session":42}"#,
+        #"{"command":"key","agent":7}"#,
+    ] {
         #expect(throws: (any Error).self) { try decoder.decode(ControlRequest.self, from: Data(invalid.utf8)) }
     }
 }

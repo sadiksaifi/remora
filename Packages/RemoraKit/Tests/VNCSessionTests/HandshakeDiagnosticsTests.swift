@@ -2,6 +2,7 @@ import Foundation
 import OSLog
 import RemoraCore
 import Testing
+
 @testable import VNCSession
 
 private final class DiagnosticFrames: FrameSink, @unchecked Sendable {
@@ -22,7 +23,7 @@ private final class DiagnosticFrames: FrameSink, @unchecked Sendable {
         ("ard-only", "close-after-selection", 9, 6, 9, 30, "30"),
         ("ard-only", "crypto-failure", 10, 9, 5, 30, "30"),
         ("ard-only", "server-init-eof", 18, 17, 9, 30, "30"),
-        ("ard-only", "success", 22, 22, 0, 30, "30")
+        ("ard-only", "success", 22, 22, 0, 30, "30"),
     ] {
         let started = Date()
         let peer = Process()
@@ -32,7 +33,12 @@ private final class DiagnosticFrames: FrameSink, @unchecked Sendable {
         let output = Pipe()
         peer.standardOutput = output
         try peer.run()
-        defer { if peer.isRunning { peer.terminate(); peer.waitUntilExit() } }
+        defer {
+            if peer.isRunning {
+                peer.terminate()
+                peer.waitUntilExit()
+            }
+        }
         var line = Data()
         while let byte = try output.fileHandleForReading.read(upToCount: 1), !byte.isEmpty, byte != Data([10]) { line.append(byte) }
         let hello = try #require(JSONSerialization.jsonObject(with: line) as? [String: Int])
@@ -40,9 +46,20 @@ private final class DiagnosticFrames: FrameSink, @unchecked Sendable {
         let pins = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: pins) }
         let frames = DiagnosticFrames()
-        let session = VNCSession(configuration: .init(host: "127.0.0.1", port: port, username: "fixture-user", password: "fixture-password", desktopSize: .init(width: 16, height: 16)), frameSink: frames, certificateStoreURL: pins)
-        let fallback = Task { do { try await Task.sleep(for: .seconds(3)); session.disconnect() } catch {} }
-        defer { fallback.cancel(); session.disconnect() }
+        let session = VNCSession(
+            configuration: .init(
+                host: "127.0.0.1", port: port, username: "fixture-user", password: "fixture-password", desktopSize: .init(width: 16, height: 16)),
+            frameSink: frames, certificateStoreURL: pins)
+        let fallback = Task {
+            do {
+                try await Task.sleep(for: .seconds(3))
+                session.disconnect()
+            } catch {}
+        }
+        defer {
+            fallback.cancel()
+            session.disconnect()
+        }
         var connected = false
         var challenges = 0
         var reason: DisconnectReason?
@@ -51,7 +68,9 @@ private final class DiagnosticFrames: FrameSink, @unchecked Sendable {
             switch event {
             case .stateChanged(.connected): connected = true
             case .stateChanged(.disconnected(let failure)): reason = failure
-            case .credentialsChallenge(let challenge): challenges += 1; challenge.responder.respond(nil)
+            case .credentialsChallenge(let challenge):
+                challenges += 1
+                challenge.responder.respond(nil)
             default: break
             }
         }
@@ -90,10 +109,11 @@ private final class DiagnosticFrames: FrameSink, @unchecked Sendable {
         #expect(messages.count == 1)
         guard let message = messages.first else { continue }
         print("Observed VNC diagnostic: \(message)")
-        let fields = Dictionary(uniqueKeysWithValues: message.split(separator: " ").compactMap { token -> (String, String)? in
-            let pair = token.split(separator: "=", maxSplits: 1, omittingEmptySubsequences: false)
-            return pair.count == 2 ? (String(pair[0]), String(pair[1])) : nil
-        })
+        let fields = Dictionary(
+            uniqueKeysWithValues: message.split(separator: " ").compactMap { token -> (String, String)? in
+                let pair = token.split(separator: "=", maxSplits: 1, omittingEmptySubsequences: false)
+                return pair.count == 2 ? (String(pair[0]), String(pair[1])) : nil
+            })
         #expect(fields["connected"] == (outcome == "success" ? "1" : "0"))
         #expect(Int(fields["phase"] ?? "") == phase)
         #expect(Int(fields["last_success"] ?? "") == lastSuccess)
@@ -106,10 +126,11 @@ private final class DiagnosticFrames: FrameSink, @unchecked Sendable {
             #expect(fields["ard_bits"] == "256")
             #expect(UInt64(fields["openssl"] ?? "") ?? 0 != 0)
         }
-        for forbidden in ["fixture-user", "fixture-password", "synthetic-ard-peer", "synthetic fixture rejection", "127.0.0.1"] { #expect(!message.contains(forbidden)) }
+        for forbidden in ["fixture-user", "fixture-password", "synthetic-ard-peer", "synthetic fixture rejection", "127.0.0.1"] {
+            #expect(!message.contains(forbidden))
+        }
     }
 }
-
 
 @Test @MainActor func vncRuntimeFailuresReachTheLocalLogWithoutLosingTheirFirstCause() async throws {
     // Synthetic protocol faults prove diagnostic attribution, not Mac behavior.
@@ -119,7 +140,7 @@ private final class DiagnosticFrames: FrameSink, @unchecked Sendable {
         ("runtime-bounds", 13, 5, 0, 0, 0, 12, 0),
         ("runtime-partial", 9, 6, 1, 0, 0, 0, 0),
         ("runtime-decoder", 14, 6, 0, 0, 7, 0, 0),
-        ("runtime-success", 9, 2, 1, -1, -2_147_483_649, 0, 1)
+        ("runtime-success", 9, 2, 1, -1, -2_147_483_649, 0, 1),
     ] {
         let started = Date()
         let peer = Process()
@@ -129,7 +150,12 @@ private final class DiagnosticFrames: FrameSink, @unchecked Sendable {
         let output = Pipe()
         peer.standardOutput = output
         try peer.run()
-        defer { if peer.isRunning { peer.terminate(); peer.waitUntilExit() } }
+        defer {
+            if peer.isRunning {
+                peer.terminate()
+                peer.waitUntilExit()
+            }
+        }
         var line = Data()
         while let byte = try output.fileHandleForReading.read(upToCount: 1), !byte.isEmpty, byte != Data([10]) { line.append(byte) }
         let hello = try #require(JSONSerialization.jsonObject(with: line) as? [String: Int])
@@ -137,9 +163,20 @@ private final class DiagnosticFrames: FrameSink, @unchecked Sendable {
         let frames = DiagnosticFrames()
         let pins = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: pins) }
-        let session = VNCSession(configuration: .init(host: "127.0.0.1", port: port, username: "fixture-user", password: "fixture-password", desktopSize: .init(width: 16, height: 16)), frameSink: frames, certificateStoreURL: pins)
-        let fallback = Task { do { try await Task.sleep(for: .seconds(3)); session.disconnect() } catch {} }
-        defer { fallback.cancel(); session.disconnect() }
+        let session = VNCSession(
+            configuration: .init(
+                host: "127.0.0.1", port: port, username: "fixture-user", password: "fixture-password", desktopSize: .init(width: 16, height: 16)),
+            frameSink: frames, certificateStoreURL: pins)
+        let fallback = Task {
+            do {
+                try await Task.sleep(for: .seconds(3))
+                session.disconnect()
+            } catch {}
+        }
+        defer {
+            fallback.cancel()
+            session.disconnect()
+        }
         var connected = false
         var reason: DisconnectReason?
         session.connect()
@@ -177,10 +214,11 @@ private final class DiagnosticFrames: FrameSink, @unchecked Sendable {
         #expect(runtime.count == 1)
         guard let message = runtime.first else { continue }
         print("Observed VNC runtime diagnostic: \(message)")
-        let fields = Dictionary(uniqueKeysWithValues: message.split(separator: " ").compactMap { token -> (String, String)? in
-            let pair = token.split(separator: "=", maxSplits: 1, omittingEmptySubsequences: false)
-            return pair.count == 2 ? (String(pair[0]), String(pair[1])) : nil
-        })
+        let fields = Dictionary(
+            uniqueKeysWithValues: message.split(separator: " ").compactMap { token -> (String, String)? in
+                let pair = token.split(separator: "=", maxSplits: 1, omittingEmptySubsequences: false)
+                return pair.count == 2 ? (String(pair[0]), String(pair[1])) : nil
+            })
         #expect(Int(fields["failure"] ?? "") == failure)
         #expect(Int(fields["stage"] ?? "") == stage)
         #expect(Int(fields["operation"] ?? "") == operation)
@@ -201,7 +239,6 @@ private final class DiagnosticFrames: FrameSink, @unchecked Sendable {
     }
 }
 
-
 @Test @MainActor func vncFragmentedZRLEProgressDoesNotSpendAnElapsedTimeoutBudgetPerPacket() async throws {
     // Both buffered and direct exact-read branches must tolerate more than 100
     // readiness cycles while the complete valid payload arrives within 10 s.
@@ -213,7 +250,12 @@ private final class DiagnosticFrames: FrameSink, @unchecked Sendable {
         let output = Pipe()
         peer.standardOutput = output
         try peer.run()
-        defer { if peer.isRunning { peer.terminate(); peer.waitUntilExit() } }
+        defer {
+            if peer.isRunning {
+                peer.terminate()
+                peer.waitUntilExit()
+            }
+        }
         var line = Data()
         while let byte = try output.fileHandleForReading.read(upToCount: 1), !byte.isEmpty, byte != Data([10]) { line.append(byte) }
         let hello = try #require(JSONSerialization.jsonObject(with: line) as? [String: Int])
@@ -221,9 +263,20 @@ private final class DiagnosticFrames: FrameSink, @unchecked Sendable {
         let frames = DiagnosticFrames()
         let pins = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: pins) }
-        let session = VNCSession(configuration: .init(host: "127.0.0.1", port: port, username: "fixture-user", password: "fixture-password", desktopSize: .init(width: 16, height: 16)), frameSink: frames, certificateStoreURL: pins)
-        let fallback = Task { do { try await Task.sleep(for: .seconds(8)); session.disconnect() } catch {} }
-        defer { fallback.cancel(); session.disconnect() }
+        let session = VNCSession(
+            configuration: .init(
+                host: "127.0.0.1", port: port, username: "fixture-user", password: "fixture-password", desktopSize: .init(width: 16, height: 16)),
+            frameSink: frames, certificateStoreURL: pins)
+        let fallback = Task {
+            do {
+                try await Task.sleep(for: .seconds(8))
+                session.disconnect()
+            } catch {}
+        }
+        defer {
+            fallback.cancel()
+            session.disconnect()
+        }
         let started = ContinuousClock.now
         session.connect()
         var connected = false

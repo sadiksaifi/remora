@@ -11,12 +11,16 @@ extension CommandLineController {
         case .idle: state = capture.lastRecordingResult == nil ? "idle" : "finished"
         case .recording: state = "recording"
         case .finishing: state = "finishing"
-        case .failed(let error): state = "failed"; failure = .string(error.localizedDescription)
+        case .failed(let error):
+            state = "failed"
+            failure = .string(error.localizedDescription)
         }
         let saved = try? capture.lastRecordingResult?.get()
-        return .object(["session": .string(session.attemptID.uuidString), "state": .string(state),
+        return .object([
+            "session": .string(session.attemptID.uuidString), "state": .string(state),
             "path": (capture.recordingURL ?? saved).map { .string($0.path) } ?? .null,
-            "elapsed": capture.recordingState.elapsed().map(ControlValue.number) ?? .null, "error": failure])
+            "elapsed": capture.recordingState.elapsed().map(ControlValue.number) ?? .null, "error": failure,
+        ])
     }
 
     func handleScreen(_ request: ControlRequest) async throws -> ControlReply {
@@ -53,8 +57,9 @@ extension CommandLineController {
                 defer { session.removeFrameDemand() }
                 try await waitForSettledFrame(session, id: id, deadline: deadline)
                 if let size = session.frameSize {
-                    do { _ = try ScreenshotGeometry(desktop: size, region: region, maxSize: maxSize) }
-                    catch { throw ControlFailure(.invalidArgument, error.localizedDescription) }
+                    do { _ = try ScreenshotGeometry(desktop: size, region: region, maxSize: maxSize) } catch {
+                        throw ControlFailure(.invalidArgument, error.localizedDescription)
+                    }
                 }
                 let baseline = session.captureFrameBaseline
                 let geometryRevision = session.inputGeometryRevision
@@ -68,10 +73,13 @@ extension CommandLineController {
                 try Task.checkCancellation()
                 let receipt = ScreenshotReceipt(session: id, geometry: geometry, frame: revision - baseline, geometryRevision: geometryRevision)
                 let path: String?
-                if output == "-" { path = nil }
-                else {
-                    path = try await session.capture.saveScreenshot(png, connectionName: session.connection.name,
-                        output: output.map { URL(fileURLWithPath: $0) }).path
+                if output == "-" {
+                    path = nil
+                } else {
+                    path = try await session.capture.saveScreenshot(
+                        png, connectionName: session.connection.name,
+                        output: output.map { URL(fileURLWithPath: $0) }
+                    ).path
                 }
                 guard session.inputGeometryRevision == geometryRevision else {
                     throw ControlFailure(.imageExpired, "Control changed during capture. Take another screenshot.")
@@ -83,7 +91,8 @@ extension CommandLineController {
                     "image": .string(receipt.id.uuidString), "session": .string(id.uuidString),
                     "path": path.map(ControlValue.string) ?? .null, "frame": .number(Double(receipt.frame)), "stale": .bool(false),
                     "desktop": dimensions(geometry.desktop), "size": dimensions(geometry.encoded),
-                    "region": .array([geometry.region.x, geometry.region.y, geometry.region.width, geometry.region.height].map { .number(Double($0)) })]
+                    "region": .array([geometry.region.x, geometry.region.y, geometry.region.width, geometry.region.height].map { .number(Double($0)) }),
+                ]
                 if output == "-" { fields["byteLength"] = .number(Double(png.count)) }
                 return ControlReply(.success(.object(fields)), payload: output == "-" ? png : nil)
             case "recording.start":
@@ -107,7 +116,9 @@ extension CommandLineController {
                             throw ControlFailure(.invalidArgument, "after must be a nonnegative frame revision.")
                         }
                         after = Int(number)
-                    } else { after = 0 }
+                    } else {
+                        after = 0
+                    }
                     session.addFrameDemand()
                     defer { session.removeFrameDemand() }
                     try await waitFor(session, id: id, timeout: timeout) { session.state == .connected && session.frameRevision > after }
@@ -115,7 +126,10 @@ extension CommandLineController {
                 case "recording-finished":
                     guard request.arguments["after"] == nil else { throw ControlFailure(.invalidArgument, "after applies only to frame waits.") }
                     try await waitFor(session, id: id, timeout: timeout, disconnected: true) {
-                        switch session.capture.recordingState { case .recording, .finishing: false; case .idle, .failed: true }
+                        switch session.capture.recordingState {
+                        case .recording, .finishing: false
+                        case .idle, .failed: true
+                        }
                     }
                     if case .failure(let failure) = session.capture.lastRecordingResult { throw failure }
                 default: throw ControlFailure(.invalidArgument, "Unknown screen wait condition.")
@@ -123,8 +137,10 @@ extension CommandLineController {
             default: break
             }
             return ControlReply(.success(recordingInfo(session)))
-        } catch let failure as ControlFailure where failure.code == .timeout &&
-            (request.command == "screenshot" || request.command == "recording.start" || request.arguments["for"] == .string("frame")) {
+        } catch let failure as ControlFailure
+            where failure.code == .timeout
+            && (request.command == "screenshot" || request.command == "recording.start" || request.arguments["for"] == .string("frame"))
+        {
             throw ControlFailure(.frameTimeout, "No fresh desktop frame arrived before the deadline.", hint: "Inspect session get and try another observation.")
         } catch let failure as CaptureFailure {
             let code: ControlFailure.Code

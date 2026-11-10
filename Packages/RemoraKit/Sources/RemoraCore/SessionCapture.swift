@@ -147,11 +147,14 @@ public final class SessionCapture {
         let destination = destination
         let url = try await Task.detached {
             let url = try output.map(ScreenshotDestination.reserve(at:)) ?? destination.reserve(connectionName: connectionName, extension: "png")
-            do { try png.write(to: url); return url }
-            catch {
+            do {
+                try png.write(to: url)
+                return url
+            } catch {
                 var failure = CaptureFailure.file(error.localizedDescription)
-                do { try FileManager.default.removeItem(at: url) }
-                catch { failure = .file("\(failure.localizedDescription) Capture file remains at \(url.path): \(error.localizedDescription)") }
+                do { try FileManager.default.removeItem(at: url) } catch {
+                    failure = .file("\(failure.localizedDescription) Capture file remains at \(url.path): \(error.localizedDescription)")
+                }
                 throw failure
             }
         }.value
@@ -181,8 +184,9 @@ public final class SessionCapture {
             }
         } catch {
             var failure = error as? CaptureFailure ?? .recording(error.localizedDescription)
-            do { try FileManager.default.removeItem(at: url) }
-            catch { failure = .file("\(failure.localizedDescription) Capture file remains at \(url.path): \(error.localizedDescription)") }
+            do { try FileManager.default.removeItem(at: url) } catch {
+                failure = .file("\(failure.localizedDescription) Capture file remains at \(url.path): \(error.localizedDescription)")
+            }
             lastRecordingResult = .failure(failure)
             recordingState = .failed(failure)
             throw failure
@@ -209,7 +213,9 @@ public final class SessionCapture {
             recordingURL = nil
             lastRecordingResult = result
             switch result {
-            case .success(let url): lastSavedURL = url; recordingState = .idle
+            case .success(let url):
+                lastSavedURL = url
+                recordingState = .idle
             case .failure(let failure): recordingState = .failed(failure)
             }
             return result

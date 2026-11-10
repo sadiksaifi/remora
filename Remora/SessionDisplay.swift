@@ -79,18 +79,21 @@ final class SessionDisplay {
     /// Requests the content area's size in backing pixels. A hidden tab has no window and requests nothing.
     func requestResize() {
         guard followsWindow, connected, !transitioning, let session, session.supportsDynamicResize,
-              let view, let window = view.window, !window.inLiveResize else { return }
+            let view, let window = view.window, !window.inLiveResize
+        else { return }
         let scale = window.backingScaleFactor
         let pixels: NSSize
         if window.styleMask.contains(.fullScreen), let screen = window.screen {
-            pixels = NSSize(width: screen.frame.width * scale,
-                            height: screen.frame.height * scale)
+            pixels = NSSize(
+                width: screen.frame.width * scale,
+                height: screen.frame.height * scale)
         } else {
             pixels = view.convertToBacking(view.bounds).size
         }
         guard pixels.width > 0, pixels.height > 0 else { return }
         onScaleChange?(scale)
-        session.requestResize(DesktopSize(width: Int(pixels.width.rounded()), height: Int(pixels.height.rounded())),
-                              scale: scale)
+        session.requestResize(
+            DesktopSize(width: Int(pixels.width.rounded()), height: Int(pixels.height.rounded())),
+            scale: scale)
     }
 }

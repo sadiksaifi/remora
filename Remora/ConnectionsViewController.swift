@@ -1,13 +1,14 @@
 import AppKit
 import Observation
-import RemoraCore
 import RemoraControl
+import RemoraCore
 import SwiftUI
 
 /// The list of saved connections and every action on them: connect, disconnect, add, edit, duplicate, delete.
 @MainActor
 final class ConnectionsViewController: NSViewController, NSTableViewDataSource, NSTableViewDelegate,
-    NSMenuDelegate, NSMenuItemValidation {
+    NSMenuDelegate, NSMenuItemValidation
+{
     private let connectionStore: ConnectionStore
     private let credentialStore: CredentialStore
     private let sessionTabs: SessionTabs
@@ -56,9 +57,10 @@ final class ConnectionsViewController: NSViewController, NSTableViewDataSource, 
         scrollView.autohidesScrollers = true
         scrollView.translatesAutoresizingMaskIntoConstraints = false
 
-        emptyStateView = NSHostingView(rootView: EmptyStateView(kind: .noConnections) { [weak self] in
-            self?.newConnection(nil)
-        })
+        emptyStateView = NSHostingView(
+            rootView: EmptyStateView(kind: .noConnections) { [weak self] in
+                self?.newConnection(nil)
+            })
         emptyStateView.sizingOptions = []
         emptyStateView.translatesAutoresizingMaskIntoConstraints = false
 
@@ -129,14 +131,14 @@ final class ConnectionsViewController: NSViewController, NSTableViewDataSource, 
 
     @objc func editConnection(_ sender: Any?) {
         guard let connection = singleTarget(for: sender),
-              let password = storedPassword(for: connection)
+            let password = storedPassword(for: connection)
         else { return }
         presentEditor(title: "Edit Connection", for: connection, password: password)
     }
 
     @objc func duplicateConnection(_ sender: Any?) {
         guard let connection = singleTarget(for: sender),
-              let password = storedPassword(for: connection)
+            let password = storedPassword(for: connection)
         else { return }
         var copy = connection
         copy.id = UUID()
@@ -211,7 +213,8 @@ final class ConnectionsViewController: NSViewController, NSTableViewDataSource, 
     }
 
     func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
-        let cell = tableView.makeView(withIdentifier: ConnectionCellView.identifier, owner: self)
+        let cell =
+            tableView.makeView(withIdentifier: ConnectionCellView.identifier, owner: self)
             as? ConnectionCellView ?? makeCell()
         cell.configure(
             with: rows[row], session: sessionTabs.states[rows[row].id],
@@ -457,9 +460,9 @@ final class ConnectionsViewController: NSViewController, NSTableViewDataSource, 
 
     private static func message(for error: any Error) -> String {
         switch error {
-        case let ConnectionStore.StorageError.loadFailed(_, underlying),
-             let ConnectionStore.StorageError.quarantineFailed(_, underlying),
-             let ConnectionStore.StorageError.saveFailed(_, underlying):
+        case ConnectionStore.StorageError.loadFailed(_, let underlying),
+            ConnectionStore.StorageError.quarantineFailed(_, let underlying),
+            ConnectionStore.StorageError.saveFailed(_, let underlying):
             underlying.localizedDescription
         default:
             error.localizedDescription

@@ -1,6 +1,6 @@
-import Testing
 import Foundation
 import RemoraCore
+import Testing
 
 @Test func keyPressDisplayUsesRemoteModifierNames() throws {
     var display = KeyPressDisplay()
@@ -90,7 +90,8 @@ import RemoraCore
 @Test(arguments: [1.0, 2.0], [0.75, 1.0, 1.5, 2.0])
 func screenPillScalesWithRecordedDesktop(connectionScale: Double, keySize: Double) throws {
     let overlays = SessionOverlayState()
-    overlays.configure(showPointerInRecordings: true, showKeyPresses: true, showAgentPointer: true,
+    overlays.configure(
+        showPointerInRecordings: true, showKeyPresses: true, showAgentPointer: true,
         scale: connectionScale, keyPressSize: keySize)
     overlays.receive(.agent, .text("hello"))
     let state = overlays.snapshot()
@@ -115,8 +116,10 @@ func screenPillScalesWithRecordedDesktop(connectionScale: Double, keySize: Doubl
     let overlays = SessionOverlayState()
     overlays.configure(showPointerInRecordings: true, showKeyPresses: true, showAgentPointer: true, scale: 2)
     overlays.receive(.agent, .text("hello"))
-    let screen = try #require(KeyPressPill.placed(overlays.snapshot(),
-        desktop: CGSize(width: 1920, height: 1080), pointsPerPixel: 0.5))
+    let screen = try #require(
+        KeyPressPill.placed(
+            overlays.snapshot(),
+            desktop: CGSize(width: 1920, height: 1080), pointsPerPixel: 0.5))
     #expect(screen.pill.size.height == 44 && screen.pill.scale == 1)
     #expect(540 - screen.frame.maxY == 64)
 }

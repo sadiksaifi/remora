@@ -3,7 +3,8 @@ import Foundation
 import RemoraControl
 
 struct SettingsCommand: AsyncParsableCommand {
-    static let configuration = CommandConfiguration(commandName: "settings", abstract: "Read and change Remora settings.",
+    static let configuration = CommandConfiguration(
+        commandName: "settings", abstract: "Read and change Remora settings.",
         subcommands: [Get.self, Set.self, Reset.self, Permission.self, CLI.self])
     @OptionGroup var options: CommonOptions
 
@@ -15,8 +16,9 @@ struct SettingsCommand: AsyncParsableCommand {
         }
     }
     struct Set: AsyncParsableCommand {
-        static let configuration = CommandConfiguration(abstract: "Set a Remora setting.", discussion: "Keys and values:\n" +
-            SettingKey.allCases.map { "\($0.rawValue): \($0.valueHelp)." }.joined(separator: "\n"))
+        static let configuration = CommandConfiguration(
+            abstract: "Set a Remora setting.",
+            discussion: "Keys and values:\n" + SettingKey.allCases.map { "\($0.rawValue): \($0.valueHelp)." }.joined(separator: "\n"))
         @OptionGroup var options: CommonOptions
         @Argument(help: "Settings key from the list above.") var key: String
         @Argument(help: "Value allowed for this key.") var value: String

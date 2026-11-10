@@ -15,18 +15,30 @@ private final class AppleFrames: FrameSink, @unchecked Sendable {
     peer.executableURL = URL(fileURLWithPath: "/usr/bin/python3")
     let script = try #require(Bundle.module.url(forResource: "ard_peer", withExtension: "py", subdirectory: "Fixtures"))
     peer.arguments = ["-u", script.path, "ard-only", "apple-success"]
-    let output = Pipe(); peer.standardOutput = output
+    let output = Pipe()
+    peer.standardOutput = output
     try peer.run()
-    defer { if peer.isRunning { peer.terminate(); peer.waitUntilExit() } }
+    defer {
+        if peer.isRunning {
+            peer.terminate()
+            peer.waitUntilExit()
+        }
+    }
     var line = Data()
     while let byte = try output.fileHandleForReading.read(upToCount: 1), !byte.isEmpty, byte != Data([10]) { line.append(byte) }
     let hello = try #require(JSONSerialization.jsonObject(with: line) as? [String: Int])
     let frames = AppleFrames()
     let pins = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     defer { try? FileManager.default.removeItem(at: pins) }
-    let session = VNCSession(configuration: .init(host: "127.0.0.1", port: UInt16(try #require(hello["loopback_port"])), username: "fixture-user", password: "fixture-password", desktopSize: .init(width: 16, height: 16), vncMode: .apple), frameSink: frames, certificateStoreURL: pins)
+    let session = VNCSession(
+        configuration: .init(
+            host: "127.0.0.1", port: UInt16(try #require(hello["loopback_port"])), username: "fixture-user", password: "fixture-password",
+            desktopSize: .init(width: 16, height: 16), vncMode: .apple), frameSink: frames, certificateStoreURL: pins)
     defer { session.disconnect() }
-    let fallback = Task { try? await Task.sleep(for: .seconds(3)); session.disconnect() }
+    let fallback = Task {
+        try? await Task.sleep(for: .seconds(3))
+        session.disconnect()
+    }
     defer { fallback.cancel() }
     var connected = false
     session.connect()
@@ -62,22 +74,37 @@ private final class ApplePixels: FrameSink, @unchecked Sendable {
     var snapshots: [[UInt8]] { lock.withLock { images } }
 }
 
-@MainActor private func appleSession(_ outcome: String, offers: String = "ard-only", updatesEnabled: Bool = true, actions: (@MainActor @Sendable (VNCSession, ApplePixels) async throws -> Void)? = nil) async throws -> ([String: Any], [DisconnectReason], ApplePixels) {
+@MainActor private func appleSession(
+    _ outcome: String, offers: String = "ard-only", updatesEnabled: Bool = true,
+    actions: (@MainActor @Sendable (VNCSession, ApplePixels) async throws -> Void)? = nil
+) async throws -> ([String: Any], [DisconnectReason], ApplePixels) {
     let peer = Process()
     peer.executableURL = URL(fileURLWithPath: "/usr/bin/python3")
     peer.arguments = ["-u", try #require(Bundle.module.url(forResource: "ard_peer", withExtension: "py", subdirectory: "Fixtures")).path, offers, outcome]
-    let output = Pipe(); peer.standardOutput = output
+    let output = Pipe()
+    peer.standardOutput = output
     try peer.run()
-    defer { if peer.isRunning { peer.terminate(); peer.waitUntilExit() } }
+    defer {
+        if peer.isRunning {
+            peer.terminate()
+            peer.waitUntilExit()
+        }
+    }
     var line = Data()
     while let byte = try output.fileHandleForReading.read(upToCount: 1), !byte.isEmpty, byte != Data([10]) { line.append(byte) }
     let port = try #require((JSONSerialization.jsonObject(with: line) as? [String: Int])?["loopback_port"])
     let frames = ApplePixels()
     let pins = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     defer { try? FileManager.default.removeItem(at: pins) }
-    let session = VNCSession(configuration: .init(host: "127.0.0.1", port: UInt16(port), username: "fixture-user", password: "fixture-password", desktopSize: .init(width: 16, height: 8), vncMode: .apple), frameSink: frames, certificateStoreURL: pins)
+    let session = VNCSession(
+        configuration: .init(
+            host: "127.0.0.1", port: UInt16(port), username: "fixture-user", password: "fixture-password", desktopSize: .init(width: 16, height: 8),
+            vncMode: .apple), frameSink: frames, certificateStoreURL: pins)
     defer { session.disconnect() }
-    let fallback = Task { try? await Task.sleep(for: .seconds(4)); session.disconnect() }
+    let fallback = Task {
+        try? await Task.sleep(for: .seconds(4))
+        session.disconnect()
+    }
     defer { fallback.cancel() }
     var work: Task<Void, Error>?
     var terminals: [DisconnectReason] = []
@@ -104,17 +131,21 @@ private final class ApplePixels: FrameSink, @unchecked Sendable {
     let (wire, _, pixels) = try await appleSession("apple-sequence", offers: "apple-mixed")
     #expect(wire["selected_security_id"] as? Int == 30)
     #expect(wire["requests_after_initial"] as? Int == 0)
-    #expect(wire["subscriptions"] as? [[Int]] == [[0,1,0,0,0,16,8]])
-    #expect(pixels.samples == [[148,148,148], [151,147,148], [151,147,148]])
-    #expect(pixels.rectangles == [
-        [.init(x: 0, y: 0, width: 16, height: 8)],
-        [.init(x: 0, y: 0, width: 8, height: 8)],
-        [.init(x: 8, y: 0, width: 8, height: 8)]
-    ])
-    let gray: [UInt8] = [148,148,148,255], reddish: [UInt8] = [148,147,151,255]
+    #expect(wire["subscriptions"] as? [[Int]] == [[0, 1, 0, 0, 0, 16, 8]])
+    #expect(pixels.samples == [[148, 148, 148], [151, 147, 148], [151, 147, 148]])
+    #expect(
+        pixels.rectangles == [
+            [.init(x: 0, y: 0, width: 16, height: 8)],
+            [.init(x: 0, y: 0, width: 8, height: 8)],
+            [.init(x: 8, y: 0, width: 8, height: 8)],
+        ])
+    let gray: [UInt8] = [148, 148, 148, 255]
+    let reddish: [UInt8] = [148, 147, 151, 255]
     let expected = [(gray, gray), (reddish, gray), (reddish, reddish)].map { left, right in
-        Array(repeating: Array(repeating: left, count: 8).flatMap { $0 }
-              + Array(repeating: right, count: 8).flatMap { $0 }, count: 8).flatMap { $0 }
+        Array(
+            repeating: Array(repeating: left, count: 8).flatMap { $0 }
+                + Array(repeating: right, count: 8).flatMap { $0 }, count: 8
+        ).flatMap { $0 }
     }
     #expect(pixels.snapshots == expected)
 }
@@ -123,9 +154,9 @@ private final class ApplePixels: FrameSink, @unchecked Sendable {
 @MainActor func appleRetriesFullRequestsUntilACompleteBaselineArrives(_ first: String) async throws {
     let (wire, _, pixels) = try await appleSession("apple-retry-\(first)")
     #expect(wire["requests_after_initial"] as? Int == (first == "dropped" ? 2 : 1))
-    #expect(wire["subscriptions"] as? [[Int]] == [[0,1,0,0,0,16,8]])
+    #expect(wire["subscriptions"] as? [[Int]] == [[0, 1, 0, 0, 0, 16, 8]])
     #expect(pixels.samples.count == (first == "raw" ? 4 : 3))
-    #expect(Array(pixels.samples.suffix(3)) == [[148,148,148], [151,147,148], [151,147,148]])
+    #expect(Array(pixels.samples.suffix(3)) == [[148, 148, 148], [151, 147, 148], [151, 147, 148]])
 }
 
 @Test(arguments: [false, true])
@@ -138,21 +169,22 @@ private final class ApplePixels: FrameSink, @unchecked Sendable {
     }
     #expect(try #require(wire["baseline_retry_ms"] as? Int) >= 1200)
     #expect(wire["requests_after_initial"] as? Int == 1)
-    #expect(wire["subscriptions"] as? [[Int]] == [[0,1,0,0,0,16,8]])
+    #expect(wire["subscriptions"] as? [[Int]] == [[0, 1, 0, 0, 0, 16, 8]])
     #expect(pixels.samples.count == 3)
 }
 
 @Test @MainActor func appleDamageUnionsAllRectanglesAndPublishesOnlyValidatedWrites() async throws {
     let (_, _, pixels) = try await appleSession("apple-damage")
-    #expect(pixels.rectangles == [
-        [.init(x: 0, y: 0, width: 16, height: 8)],
-        [.init(x: 0, y: 0, width: 16, height: 8)],
-        [.init(x: 0, y: 0, width: 8, height: 8)],
-        [.init(x: 8, y: 0, width: 8, height: 8)],
-        [.init(x: 1, y: 1, width: 12, height: 5)],
-        [.init(x: 1, y: 0, width: 15, height: 8)]
-    ])
-    let gray: [UInt8] = [148,148,148,255]
+    #expect(
+        pixels.rectangles == [
+            [.init(x: 0, y: 0, width: 16, height: 8)],
+            [.init(x: 0, y: 0, width: 16, height: 8)],
+            [.init(x: 0, y: 0, width: 8, height: 8)],
+            [.init(x: 8, y: 0, width: 8, height: 8)],
+            [.init(x: 1, y: 1, width: 12, height: 5)],
+            [.init(x: 1, y: 0, width: 15, height: 8)],
+        ])
+    let gray: [UInt8] = [148, 148, 148, 255]
     var image = Array(repeating: gray, count: 16 * 8).flatMap { $0 }
     var expected = [image, image]
     func paint(_ x: Int, _ y: Int, _ width: Int, _ height: Int, _ bgra: [UInt8]) {
@@ -163,10 +195,16 @@ private final class ApplePixels: FrameSink, @unchecked Sendable {
             }
         }
     }
-    paint(0, 0, 8, 8, [148,147,151,255]); expected.append(image)
-    paint(8, 0, 8, 8, [148,147,151,255]); expected.append(image)
-    paint(1, 1, 2, 2, [1,2,3,255]); paint(10, 4, 3, 2, [4,5,6,255]); expected.append(image)
-    paint(1, 2, 2, 2, [7,8,9,255]); paint(8, 0, 8, 8, [148,147,151,255]); expected.append(image)
+    paint(0, 0, 8, 8, [148, 147, 151, 255])
+    expected.append(image)
+    paint(8, 0, 8, 8, [148, 147, 151, 255])
+    expected.append(image)
+    paint(1, 1, 2, 2, [1, 2, 3, 255])
+    paint(10, 4, 3, 2, [4, 5, 6, 255])
+    expected.append(image)
+    paint(1, 2, 2, 2, [7, 8, 9, 255])
+    paint(8, 0, 8, 8, [148, 147, 151, 255])
+    expected.append(image)
     #expect(pixels.snapshots == expected)
 }
 
@@ -193,14 +231,17 @@ private final class ApplePixels: FrameSink, @unchecked Sendable {
         #expect(await request.finish())
     }
     let keys = try #require(wire["keys"] as? [[Int]])
-    #expect(keys.map { Array($0.prefix(2)) } == [[0xffe1,1],[0xffe7,1],[0xffe7,0],[0x010003b1,1],[0x010003b1,0],[0xffbe,1],[0xffbe,0],[0xffe1,0]])
+    #expect(
+        keys.map { Array($0.prefix(2)) } == [
+            [0xffe1, 1], [0xffe7, 1], [0xffe7, 0], [0x0100_03b1, 1], [0x0100_03b1, 0], [0xffbe, 1], [0xffbe, 0], [0xffe1, 0],
+        ])
     #expect(keys.allSatisfy { $0.count == 3 && $0[2] > 0 })
     let microseconds = (keys[2][2] - keys[1][2] + 4_294_967_296) % 4_294_967_296
     #expect((20_000...2_000_000).contains(microseconds))
     let pointers = try #require(wire["pointers"] as? [[Int]])
-    #expect(pointers.contains([3,9,7]))
-    #expect(pointers.suffix(2) == [[1,9,7],[0,9,7]])
-    #expect(wire["scrolls"] as? [[Int]] == [[0,1,0,65536,0,1,9,7],[-1,0,-65536,0,-1,0,9,7]])
+    #expect(pointers.contains([3, 9, 7]))
+    #expect(pointers.suffix(2) == [[1, 9, 7], [0, 9, 7]])
+    #expect(wire["scrolls"] as? [[Int]] == [[0, 1, 0, 65536, 0, 1, 9, 7], [-1, 0, -65536, 0, -1, 0, 9, 7]])
     #expect(frames.samples.count == 3)
 }
 
@@ -213,7 +254,7 @@ private final class ApplePixels: FrameSink, @unchecked Sendable {
         session.setDisplayUpdatesEnabled(true)
         session.setDisplayUpdatesEnabled(true)
     }
-    #expect(wire["subscriptions"] as? [[Int]] == [[0,1,0,0,0,16,8],[0,0,0,0,0,16,8],[0,1,0,0,0,16,8]])
+    #expect(wire["subscriptions"] as? [[Int]] == [[0, 1, 0, 0, 0, 16, 8], [0, 0, 0, 0, 0, 16, 8], [0, 1, 0, 0, 0, 16, 8]])
     #expect(wire["requests_after_initial"] as? Int == 1)
 }
 
@@ -228,14 +269,17 @@ private final class ApplePixels: FrameSink, @unchecked Sendable {
 }
 
 @Test @MainActor func appleSecuritySelectionDoesNotRetryOrUseAProfileWithoutItsARDKey() async throws {
-    for (offers, selected) in [("tls-ard",19),("none-only",1)] {
+    for (offers, selected) in [("tls-ard", 19), ("none-only", 1)] {
         let (wire, terminals, frames) = try await appleSession("apple-profile-reject", offers: offers)
         #expect(wire["selected_security_id"] as? Int == selected)
         #expect(wire["profile_rejected"] as? Bool == true)
         #expect(wire["attempts"] as? Int == 1)
         #expect(frames.samples.isEmpty)
-        if case .protocolError(let detail) = terminals.first { #expect(detail.contains("ARD authentication")) }
-        else { Issue.record("Expected unsupported Apple profile") }
+        if case .protocolError(let detail) = terminals.first {
+            #expect(detail.contains("ARD authentication"))
+        } else {
+            Issue.record("Expected unsupported Apple profile")
+        }
     }
     for offers in ["apple-only", "unknown-ard", "apple-none"] {
         let (wire, terminals, frames) = try await appleSession("apple-policy-reject", offers: offers)

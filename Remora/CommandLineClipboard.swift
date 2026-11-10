@@ -33,8 +33,9 @@ extension CommandLineController {
                 if session.remoteClipboard.status == .notReady { throw ControlFailure(.unsupported, "The remote clipboard channel is not ready.") }
                 throw ControlFailure(.timeout, "The remote clipboard did not offer text before the deadline.")
             }
-            do { try await Task.sleep(until: min(deadline, ContinuousClock.now.advanced(by: .milliseconds(25))), clock: .continuous) }
-            catch { throw ControlFailure(.cancelled, "The command was interrupted.") }
+            do { try await Task.sleep(until: min(deadline, ContinuousClock.now.advanced(by: .milliseconds(25))), clock: .continuous) } catch {
+                throw ControlFailure(.cancelled, "The command was interrupted.")
+            }
         }
     }
 }

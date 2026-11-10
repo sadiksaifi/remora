@@ -1,10 +1,10 @@
-import Foundation
 import AVFoundation
 import CoreImage
+import Foundation
 import ImageIO
+import Metal
 import UniformTypeIdentifiers
 import VideoToolbox
-import Metal
 
 public struct ScreenshotDestination: CaptureDestination {
     private let folder: @Sendable () -> URL?
@@ -40,7 +40,10 @@ public struct ScreenshotDestination: CaptureDestination {
             let url = directory.appendingPathComponent(base + (index == 0 ? "" : " (\(index + 1))") + "." + suffix)
             // O_EXCL reserves without a check-then-create race, including across processes.
             let fd = open(url.path, O_WRONLY | O_CREAT | O_EXCL, S_IRUSR | S_IWUSR)
-            if fd >= 0 { Darwin.close(fd); return url }
+            if fd >= 0 {
+                Darwin.close(fd)
+                return url
+            }
             if errno != EEXIST { throw CaptureFailure.file(String(cString: strerror(errno))) }
         }
         throw CaptureFailure.file("No unused filename is available.")
@@ -58,23 +61,32 @@ public struct AppleCaptureMedia: CaptureMedia {
 
     public func png(_ frame: CaptureFrame, geometry: ScreenshotGeometry) throws -> Data {
         guard let desktop = Self.image(frame),
-              let cropped = desktop.cropping(to: CGRect(x: geometry.region.x, y: geometry.region.y,
-                    width: geometry.region.width, height: geometry.region.height)) else {
+            let cropped = desktop.cropping(
+                to: CGRect(
+                    x: geometry.region.x, y: geometry.region.y,
+                    width: geometry.region.width, height: geometry.region.height))
+        else {
             throw CaptureFailure.image("Could not crop the image.")
         }
         let image: CGImage
-        if geometry.encoded.width == cropped.width, geometry.encoded.height == cropped.height { image = cropped }
-        else {
-            guard let context = CGContext(data: nil, width: geometry.encoded.width, height: geometry.encoded.height,
-                bitsPerComponent: 8, bytesPerRow: 0, space: CGColorSpace(name: CGColorSpace.sRGB)!,
-                bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue) else { throw CaptureFailure.image("Could not scale the image.") }
+        if geometry.encoded.width == cropped.width, geometry.encoded.height == cropped.height {
+            image = cropped
+        } else {
+            guard
+                let context = CGContext(
+                    data: nil, width: geometry.encoded.width, height: geometry.encoded.height,
+                    bitsPerComponent: 8, bytesPerRow: 0, space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                    bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue)
+            else { throw CaptureFailure.image("Could not scale the image.") }
             context.interpolationQuality = .high
             context.draw(cropped, in: CGRect(x: 0, y: 0, width: geometry.encoded.width, height: geometry.encoded.height))
             guard let scaled = context.makeImage() else { throw CaptureFailure.image("Could not scale the image.") }
             image = scaled
         }
         let data = NSMutableData()
-        guard let destination = CGImageDestinationCreateWithData(data, UTType.png.identifier as CFString, 1, nil) else { throw CaptureFailure.image("Could not create the image.") }
+        guard let destination = CGImageDestinationCreateWithData(data, UTType.png.identifier as CFString, 1, nil) else {
+            throw CaptureFailure.image("Could not create the image.")
+        }
         CGImageDestinationAddImage(destination, image, nil)
         guard CGImageDestinationFinalize(destination) else { throw CaptureFailure.image("PNG encoding failed.") }
         return data as Data
@@ -82,18 +94,18 @@ public struct AppleCaptureMedia: CaptureMedia {
 
     static func image(_ frame: CaptureFrame) -> CGImage? {
         guard let provider = CGDataProvider(data: frame.pixels as CFData) else { return nil }
-        return CGImage(width: frame.size.width, height: frame.size.height, bitsPerComponent: 8,
-                       bitsPerPixel: 32, bytesPerRow: frame.size.width * 4,
-                       space: CGColorSpace(name: CGColorSpace.sRGB)!,
-                       bitmapInfo: [.byteOrder32Little, CGBitmapInfo(rawValue: CGImageAlphaInfo.noneSkipFirst.rawValue)],
-                       provider: provider, decode: nil, shouldInterpolate: false, intent: .defaultIntent)
+        return CGImage(
+            width: frame.size.width, height: frame.size.height, bitsPerComponent: 8,
+            bitsPerPixel: 32, bytesPerRow: frame.size.width * 4,
+            space: CGColorSpace(name: CGColorSpace.sRGB)!,
+            bitmapInfo: [.byteOrder32Little, CGBitmapInfo(rawValue: CGImageAlphaInfo.noneSkipFirst.rawValue)],
+            provider: provider, decode: nil, shouldInterpolate: false, intent: .defaultIntent)
     }
 
     public func movie(at url: URL, source: any CaptureSource) throws -> any CaptureMovie {
         guard let source = source as? MetalDesktop else { throw CaptureFailure.recording("A Metal desktop is required.") }
         let workingURL = url.deletingLastPathComponent().appendingPathComponent(".Remora-\(UUID().uuidString).partial.mov")
-        do { return try AppleCaptureMovie(url: url, workingURL: workingURL, source: source, overlays: overlays) }
-        catch {
+        do { return try AppleCaptureMovie(url: url, workingURL: workingURL, source: source, overlays: overlays) } catch {
             do {
                 if FileManager.default.fileExists(atPath: workingURL.path) { try FileManager.default.removeItem(at: workingURL) }
             } catch {
@@ -151,7 +163,8 @@ final class AppleCaptureMovie: CaptureMovie, @unchecked Sendable {
         self.size = size
         var cache: CVMetalTextureCache?
         guard CVMetalTextureCacheCreate(nil, nil, source.device, nil, &cache) == kCVReturnSuccess,
-              let cache else { throw CaptureFailure.recording("No Metal pixel buffer texture cache.") }
+            let cache
+        else { throw CaptureFailure.recording("No Metal pixel buffer texture cache.") }
         textureCache = cache
         origin = ProcessInfo.processInfo.systemUptime
         // Keep the filename reservation until the finished movie atomically replaces it.
@@ -165,23 +178,25 @@ final class AppleCaptureMovie: CaptureMovie, @unchecked Sendable {
                 AVVideoAverageBitRateKey: min(40_000_000, max(2_000_000, size.width * size.height * 4)),
                 AVVideoExpectedSourceFrameRateKey: 60,
                 AVVideoMaxKeyFrameIntervalDurationKey: 2,
-                AVVideoAllowFrameReorderingKey: false
+                AVVideoAllowFrameReorderingKey: false,
             ],
             AVVideoColorPropertiesKey: [
                 AVVideoColorPrimariesKey: AVVideoColorPrimaries_ITU_R_709_2,
                 AVVideoTransferFunctionKey: AVVideoTransferFunction_ITU_R_709_2,
-                AVVideoYCbCrMatrixKey: AVVideoYCbCrMatrix_ITU_R_709_2
-            ]
+                AVVideoYCbCrMatrixKey: AVVideoYCbCrMatrix_ITU_R_709_2,
+            ],
         ]
         input = AVAssetWriterInput(mediaType: .video, outputSettings: settings)
         input.expectsMediaDataInRealTime = true
-        adaptor = AVAssetWriterInputPixelBufferAdaptor(assetWriterInput: input, sourcePixelBufferAttributes: [
-            kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA,
-            kCVPixelBufferWidthKey as String: size.width,
-            kCVPixelBufferHeightKey as String: size.height,
-            kCVPixelBufferIOSurfacePropertiesKey as String: [:],
-            kCVPixelBufferMetalCompatibilityKey as String: true
-        ])
+        adaptor = AVAssetWriterInputPixelBufferAdaptor(
+            assetWriterInput: input,
+            sourcePixelBufferAttributes: [
+                kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA,
+                kCVPixelBufferWidthKey as String: size.width,
+                kCVPixelBufferHeightKey as String: size.height,
+                kCVPixelBufferIOSurfacePropertiesKey as String: [:],
+                kCVPixelBufferMetalCompatibilityKey as String: true,
+            ])
         guard writer.canAdd(input) else { throw CaptureFailure.recording("Hardware HEVC settings are unavailable.") }
         writer.add(input)
         guard writer.startWriting() else { throw CaptureFailure.recording(writer.error?.localizedDescription ?? "Could not start HEVC encoder.") }
@@ -210,7 +225,10 @@ final class AppleCaptureMovie: CaptureMovie, @unchecked Sendable {
         let stoppedAt = ProcessInfo.processInfo.systemUptime - origin
         return await withCheckedContinuation { continuation in
             let begin = lock.withLock {
-                if let outcome { continuation.resume(returning: outcome); return false }
+                if let outcome {
+                    continuation.resume(returning: outcome)
+                    return false
+                }
                 waiters.append(continuation)
                 guard accepting else { return false }
                 accepting = false
@@ -238,9 +256,15 @@ final class AppleCaptureMovie: CaptureMovie, @unchecked Sendable {
 
     private func drain() {
         guard !finishingWriter, lock.withLock({ outcome == nil }) else { return }
-        if writer.status == .failed { fail(.recording(writer.error?.localizedDescription ?? "Encoder failed.")); return }
+        if writer.status == .failed {
+            fail(.recording(writer.error?.localizedDescription ?? "Encoder failed."))
+            return
+        }
         let now = ProcessInfo.processInfo.systemUptime
-        if finishing && now >= finishDeadline { fail(.timedOut); return }
+        if finishing && now >= finishDeadline {
+            fail(.timedOut)
+            return
+        }
         if lock.withLock({ pending != nil }), input.isReadyForMoreMediaData, now - lastAppend >= 1.0 / 60 {
             let selected = lock.withLock { () -> TimeInterval? in
                 let arrival = pending
@@ -257,7 +281,10 @@ final class AppleCaptureMovie: CaptureMovie, @unchecked Sendable {
                         lastAppend = ProcessInfo.processInfo.systemUptime
                         lock.withLock { if pending == nil { pending = selected } }
                     }
-                } catch { fail(error as? CaptureFailure ?? .recording(error.localizedDescription)); return }
+                } catch {
+                    fail(error as? CaptureFailure ?? .recording(error.localizedDescription))
+                    return
+                }
             }
         }
         let hasPending = lock.withLock { () -> Bool in
@@ -282,14 +309,22 @@ final class AppleCaptureMovie: CaptureMovie, @unchecked Sendable {
             finishingWriter = true
             writer.endSession(atSourceTime: endTime)
             input.markAsFinished()
-            writer.finishWriting { self.queue.async {
-                if self.writer.status == .completed {
-                    if rename(self.workingURL.path, self.url.path) == 0 { self.complete(.success(self.url)) }
-                    else { self.fail(.file(String(cString: strerror(errno)))) }
-                } else { self.fail(.recording(self.writer.error?.localizedDescription ?? "Could not finish the movie.")) }
-            } }
+            writer.finishWriting {
+                self.queue.async {
+                    if self.writer.status == .completed {
+                        if rename(self.workingURL.path, self.url.path) == 0 {
+                            self.complete(.success(self.url))
+                        } else {
+                            self.fail(.file(String(cString: strerror(errno))))
+                        }
+                    } else {
+                        self.fail(.recording(self.writer.error?.localizedDescription ?? "Could not finish the movie."))
+                    }
+                }
+            }
         } else if hasPending {
-            let delay = input.isReadyForMoreMediaData
+            let delay =
+                input.isReadyForMoreMediaData
                 ? max(0.0001, lastAppend + 1.0 / 60 - ProcessInfo.processInfo.systemUptime) : 1.0 / 60
             queue.asyncAfter(deadline: .now() + delay) { self.drain() }
         }
@@ -298,7 +333,8 @@ final class AppleCaptureMovie: CaptureMovie, @unchecked Sendable {
     private func append(at arrival: TimeInterval) throws -> TimeInterval? {
         guard let pool = adaptor.pixelBufferPool else { throw CaptureFailure.recording("No pixel buffer pool.") }
         var pixelBuffer: CVPixelBuffer?
-        let status = CVPixelBufferPoolCreatePixelBufferWithAuxAttributes(nil, pool,
+        let status = CVPixelBufferPoolCreatePixelBufferWithAuxAttributes(
+            nil, pool,
             [kCVPixelBufferPoolAllocationThresholdKey as String: 6] as CFDictionary, &pixelBuffer)
         if status == kCVReturnWouldExceedAllocationThreshold {
             CVMetalTextureCacheFlush(textureCache, 0)
@@ -308,7 +344,8 @@ final class AppleCaptureMovie: CaptureMovie, @unchecked Sendable {
             throw CaptureFailure.recording("Pixel buffer allocation failed (\(status)).")
         }
         var cvTexture: CVMetalTexture?
-        let textureStatus = CVMetalTextureCacheCreateTextureFromImage(nil, textureCache, pixelBuffer,
+        let textureStatus = CVMetalTextureCacheCreateTextureFromImage(
+            nil, textureCache, pixelBuffer,
             [kCVMetalTextureUsage as String: MTLTextureUsage.shaderWrite.rawValue | MTLTextureUsage.shaderRead.rawValue] as CFDictionary,
             .bgra8Unorm, size.width, size.height, 0, &cvTexture)
         guard textureStatus == kCVReturnSuccess, let cvTexture, let destination = CVMetalTextureGetTexture(cvTexture) else {
@@ -321,26 +358,33 @@ final class AppleCaptureMovie: CaptureMovie, @unchecked Sendable {
             let glass = snapshot.flatMap { overlayDrawing.keyPress($0, desktop: desktopSize) }
             if texture.width == size.width && texture.height == size.height && sprites.isEmpty && glass == nil {
                 guard let blit = command.makeBlitCommandEncoder() else { throw CaptureFailure.recording("No encoder blit command.") }
-                blit.copy(from: texture, sourceSlice: 0, sourceLevel: 0, sourceOrigin: MTLOrigin(),
-                          sourceSize: MTLSize(width: size.width, height: size.height, depth: 1),
-                          to: destination, destinationSlice: 0, destinationLevel: 0, destinationOrigin: MTLOrigin())
+                blit.copy(
+                    from: texture, sourceSlice: 0, sourceLevel: 0, sourceOrigin: MTLOrigin(),
+                    sourceSize: MTLSize(width: size.width, height: size.height, depth: 1),
+                    to: destination, destinationSlice: 0, destinationLevel: 0, destinationOrigin: MTLOrigin())
                 blit.endEncoding()
             } else {
                 if context == nil { context = CIContext(mtlDevice: source.device, options: [.cacheIntermediates: false]) }
                 // The remote desktop's alpha byte is undefined. A same-format view forces opaque sampling
                 // without a conversion pass or modifying the renderer's texture.
-                guard let opaque = texture.makeTextureView(pixelFormat: .bgra8Unorm, textureType: .type2D,
-                    levels: 0..<1, slices: 0..<1,
-                    swizzle: MTLTextureSwizzleChannels(red: .red, green: .green, blue: .blue, alpha: .one)),
-                    let image = CIImage(mtlTexture: opaque, options: [.colorSpace: CGColorSpace(name: CGColorSpace.sRGB)!]) else {
+                guard
+                    let opaque = texture.makeTextureView(
+                        pixelFormat: .bgra8Unorm, textureType: .type2D,
+                        levels: 0..<1, slices: 0..<1,
+                        swizzle: MTLTextureSwizzleChannels(red: .red, green: .green, blue: .blue, alpha: .one)),
+                    let image = CIImage(mtlTexture: opaque, options: [.colorSpace: CGColorSpace(name: CGColorSpace.sRGB)!])
+                else {
                     throw CaptureFailure.recording("Invalid desktop texture.")
                 }
                 var decorated = glass.map { Self.composite($0, over: image) } ?? image
                 for sprite in sprites {
                     let rect = sprite.rect
                     var overlay = CIImage(cgImage: sprite.image)
-                        .transformed(by: CGAffineTransform(scaleX: rect.width / CGFloat(sprite.image.width),
-                                                          y: -rect.height / CGFloat(sprite.image.height)))
+                        .transformed(
+                            by: CGAffineTransform(
+                                scaleX: rect.width / CGFloat(sprite.image.width),
+                                y: -rect.height / CGFloat(sprite.image.height))
+                        )
                         .transformed(by: CGAffineTransform(translationX: rect.minX, y: rect.maxY))
                         .applyingFilter("CIColorMatrix", parameters: ["inputAVector": CIVector(x: 0, y: 0, z: 0, w: sprite.opacity)])
                     if sprite.blurRadius > 0 {
@@ -351,12 +395,15 @@ final class AppleCaptureMovie: CaptureMovie, @unchecked Sendable {
                 let scale = min(Double(size.width) / Double(texture.width), Double(size.height) / Double(texture.height))
                 let fitted = decorated.cropped(to: image.extent)
                     .transformed(by: CGAffineTransform(scaleX: scale, y: scale))
-                    .transformed(by: CGAffineTransform(translationX: (Double(size.width) - Double(texture.width) * scale) / 2,
-                                                      y: (Double(size.height) - Double(texture.height) * scale) / 2))
+                    .transformed(
+                        by: CGAffineTransform(
+                            translationX: (Double(size.width) - Double(texture.width) * scale) / 2,
+                            y: (Double(size.height) - Double(texture.height) * scale) / 2))
                 let bounds = CGRect(x: 0, y: 0, width: size.width, height: size.height)
                 let composite = fitted.composited(over: CIImage(color: .black).cropped(to: bounds))
-                context!.render(composite, to: destination, commandBuffer: command, bounds: bounds,
-                                colorSpace: CGColorSpace(name: CGColorSpace.sRGB)!)
+                context!.render(
+                    composite, to: destination, commandBuffer: command, bounds: bounds,
+                    colorSpace: CGColorSpace(name: CGColorSpace.sRGB)!)
             }
         }
         // Keep both Core Video wrappers alive through the GPU copy. Never wait on the session thread.
@@ -385,16 +432,22 @@ final class AppleCaptureMovie: CaptureMovie, @unchecked Sendable {
         let tint = CIImage(color: glass.dark ? CIColor(red: 0.25, green: 0.25, blue: 0.25, alpha: 0.9) : CIColor(red: 1, green: 1, blue: 1, alpha: 0.45))
             .cropped(to: frame)
         let fade = CIVector(x: 0, y: 0, z: 0, w: glass.opacity)
-        let mask = CIFilter(name: "CIRoundedRectangleGenerator", parameters: ["inputExtent": CIVector(cgRect: frame),
-            "inputRadius": frame.height / 2, "inputColor": CIColor(red: 1, green: 1, blue: 1, alpha: glass.opacity)])!.outputImage!
+        let mask = CIFilter(
+            name: "CIRoundedRectangleGenerator",
+            parameters: [
+                "inputExtent": CIVector(cgRect: frame),
+                "inputRadius": frame.height / 2, "inputColor": CIColor(red: 1, green: 1, blue: 1, alpha: glass.opacity),
+            ])!.outputImage!
         let rect = glass.imageRect
         let chrome = CIImage(cgImage: glass.image)
             .transformed(by: CGAffineTransform(scaleX: rect.width / CGFloat(glass.image.width), y: -rect.height / CGFloat(glass.image.height)))
             .transformed(by: CGAffineTransform(translationX: rect.minX, y: rect.maxY))
             .applyingFilter("CIColorMatrix", parameters: ["inputAVector": fade])
         // Masking keeps the glass within its frame, so no extra pass touches the rest of the desktop.
-        return chrome.composited(over: tint.composited(over: backdrop)
-            .applyingFilter("CISourceInCompositing", parameters: [kCIInputBackgroundImageKey: mask])).composited(over: image)
+        return chrome.composited(
+            over: tint.composited(over: backdrop)
+                .applyingFilter("CISourceInCompositing", parameters: [kCIInputBackgroundImageKey: mask])
+        ).composited(over: image)
     }
 
     private func stopObservingOverlays() {
@@ -411,8 +464,9 @@ final class AppleCaptureMovie: CaptureMovie, @unchecked Sendable {
         if writer.status == .writing { writer.cancelWriting() }
         var failure = error
         for file in [workingURL, url] {
-            do { if FileManager.default.fileExists(atPath: file.path) { try FileManager.default.removeItem(at: file) } }
-            catch { failure = .file("\(failure.localizedDescription) Capture file remains at \(file.path): \(error.localizedDescription)") }
+            do { if FileManager.default.fileExists(atPath: file.path) { try FileManager.default.removeItem(at: file) } } catch {
+                failure = .file("\(failure.localizedDescription) Capture file remains at \(file.path): \(error.localizedDescription)")
+            }
         }
         complete(.failure(failure))
     }

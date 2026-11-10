@@ -12,7 +12,7 @@ import Testing
     for (width, height, valid) in [
         (200, 200, true), (8192, 8192, true), (1600, 901, true),
         (199, 720, false), (1280, 199, false), (8194, 720, false),
-        (1280, 8193, false), (1281, 720, false)
+        (1280, 8193, false), (1281, 720, false),
     ] {
         let resolution = ConnectionResolution.fixed(width: width, height: height)
         #expect(resolution.isValid == valid)

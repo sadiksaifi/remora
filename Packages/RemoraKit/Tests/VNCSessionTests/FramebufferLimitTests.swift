@@ -10,8 +10,7 @@ private final class MetalFrames: FrameSink, @unchecked Sendable {
     private var errors = 0
     init() throws { desktop = try MetalDesktop(device: #require(MTLCreateSystemDefaultDevice())) }
     func consume(_ frame: BorrowedFrame) {
-        do { _ = try desktop.ingest(frame) }
-        catch { lock.withLock { errors += 1 } }
+        do { _ = try desktop.ingest(frame) } catch { lock.withLock { errors += 1 } }
     }
     var failures: Int { lock.withLock { errors } }
 }
@@ -21,14 +20,16 @@ private final class MetalFrames: FrameSink, @unchecked Sendable {
         ("size", 16385, 1, false), ("size", 1, 16385, false),
         ("size-resize", 16385, 1, false), ("size-resize", 1, 16385, false),
         ("size", 8193, 8193, false),
-        ("size", 16384, 1, true), ("size-resize", 1, 16384, true)
+        ("size", 16384, 1, true), ("size-resize", 1, 16384, true),
     ] {
         let peer = try SessionPeer(arguments: [mode, String(width), String(height)])
         defer { peer.stop() }
         let frames = try MetalFrames()
         let pins = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: pins) }
-        let session = VNCSession(configuration: .init(host: "127.0.0.1", port: peer.port, username: "", desktopSize: .init(width: 16, height: 16)), frameSink: frames, certificateStoreURL: pins)
+        let session = VNCSession(
+            configuration: .init(host: "127.0.0.1", port: peer.port, username: "", desktopSize: .init(width: 16, height: 16)), frameSink: frames,
+            certificateStoreURL: pins)
         defer { session.disconnect() }
         var connected = false
         var reason: DisconnectReason?

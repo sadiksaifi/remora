@@ -42,7 +42,8 @@ public final class MetalDesktop: CaptureSource, Sendable {
     @discardableResult
     public func ingest(_ frame: BorrowedFrame) throws -> Int {
         guard frame.width > 0, frame.height > 0, frame.width <= 16_384, frame.height <= 16_384,
-              frame.stride >= frame.width * 4, frame.stride <= Int.max / frame.height else {
+            frame.stride >= frame.width * 4, frame.stride <= Int.max / frame.height
+        else {
             throw CaptureFailure.image("Invalid framebuffer dimensions or stride.")
         }
         return try state.withLock { state in
@@ -55,8 +56,9 @@ public final class MetalDesktop: CaptureSource, Sendable {
             }
             guard let storage = state.storage else { return 0 }
             var damage = FrameDamage()
-            if resized { damage.insert(.init(x: 0, y: 0, width: frame.width, height: frame.height)) }
-            else {
+            if resized {
+                damage.insert(.init(x: 0, y: 0, width: frame.width, height: frame.height))
+            } else {
                 for rectangle in frame.dirtyRectangles {
                     if let clipped = rectangle.clipped(width: frame.width, height: frame.height) { damage.insert(clipped) }
                 }
@@ -75,8 +77,9 @@ public final class MetalDesktop: CaptureSource, Sendable {
                 let rowBytes = rectangle.width * 4
                 for y in rectangle.y..<(rectangle.y + rectangle.height) {
                     let offset = rectangle.x * 4
-                    memcpy(destination + y * storage.bytesPerRow + offset,
-                           frame.pixels + y * frame.stride + offset, rowBytes)
+                    memcpy(
+                        destination + y * storage.bytesPerRow + offset,
+                        frame.pixels + y * frame.stride + offset, rowBytes)
                 }
                 copied += rowBytes * rectangle.height
                 state.damage.insert(rectangle)
@@ -108,12 +111,13 @@ public final class MetalDesktop: CaptureSource, Sendable {
             if let slot {
                 guard let blit = command.makeBlitCommandEncoder() else { throw CaptureFailure.image("No Metal blit encoder.") }
                 for rectangle in rectangles {
-                    blit.copy(from: slot.buffer,
-                              sourceOffset: rectangle.y * storage.bytesPerRow + rectangle.x * 4,
-                              sourceBytesPerRow: storage.bytesPerRow, sourceBytesPerImage: 0,
-                              sourceSize: MTLSize(width: rectangle.width, height: rectangle.height, depth: 1),
-                              to: storage.texture, destinationSlice: 0, destinationLevel: 0,
-                              destinationOrigin: MTLOrigin(x: rectangle.x, y: rectangle.y, z: 0))
+                    blit.copy(
+                        from: slot.buffer,
+                        sourceOffset: rectangle.y * storage.bytesPerRow + rectangle.x * 4,
+                        sourceBytesPerRow: storage.bytesPerRow, sourceBytesPerImage: 0,
+                        sourceSize: MTLSize(width: rectangle.width, height: rectangle.height, depth: 1),
+                        to: storage.texture, destinationSlice: 0, destinationLevel: 0,
+                        destinationOrigin: MTLOrigin(x: rectangle.x, y: rectangle.y, z: 0))
                 }
                 blit.endEncoding()
             }
@@ -121,7 +125,10 @@ public final class MetalDesktop: CaptureSource, Sendable {
                 slot?.available.signal()
                 if command.status == .error {
                     self.state.withLock {
-                        if $0.storage === storage { $0.dropPending(); $0.storage = nil }
+                        if $0.storage === storage {
+                            $0.dropPending()
+                            $0.storage = nil
+                        }
                     }
                 }
             }
@@ -130,11 +137,16 @@ public final class MetalDesktop: CaptureSource, Sendable {
             storage.hasSubmitted = true
             // enqueue, rather than commit, establishes order without encoding under the ingest lock.
             command.enqueue()
-            return (Submission(command: command, size: storage.size, arrival: state.arrival,
-                               revision: state.revision, rectangleCount: rectangles.count), storage.texture)
+            return (
+                Submission(
+                    command: command, size: storage.size, arrival: state.arrival,
+                    revision: state.revision, rectangleCount: rectangles.count), storage.texture
+            )
         }
-        do { try encode(prepared.1, prepared.0.command) }
-        catch { prepared.0.command.commit(); throw error }
+        do { try encode(prepared.1, prepared.0.command) } catch {
+            prepared.0.command.commit()
+            throw error
+        }
         prepared.0.command.commit()
         return prepared.0
     }
@@ -146,20 +158,24 @@ public final class MetalDesktop: CaptureSource, Sendable {
         let submission = try submit { texture, command in
             stride = (texture.width * 4 + 255) & ~255
             guard let buffer = device.makeBuffer(length: stride * texture.height, options: .storageModeShared),
-                  let blit = command.makeBlitCommandEncoder() else { throw CaptureFailure.image("Could not allocate desktop readback.") }
+                let blit = command.makeBlitCommandEncoder()
+            else { throw CaptureFailure.image("Could not allocate desktop readback.") }
             readback = buffer
-            blit.copy(from: texture, sourceSlice: 0, sourceLevel: 0, sourceOrigin: MTLOrigin(),
-                      sourceSize: MTLSize(width: texture.width, height: texture.height, depth: 1),
-                      to: buffer, destinationOffset: 0, destinationBytesPerRow: stride,
-                      destinationBytesPerImage: stride * texture.height)
+            blit.copy(
+                from: texture, sourceSlice: 0, sourceLevel: 0, sourceOrigin: MTLOrigin(),
+                sourceSize: MTLSize(width: texture.width, height: texture.height, depth: 1),
+                to: buffer, destinationOffset: 0, destinationBytesPerRow: stride,
+                destinationBytesPerImage: stride * texture.height)
             blit.endEncoding()
         }
         submission.command.waitUntilCompleted()
         guard submission.command.status == .completed, let readback else {
             throw CaptureFailure.image(submission.command.error?.localizedDescription ?? "Desktop readback failed.")
         }
-        return CaptureFrame(copying: BorrowedFrame(pixels: readback.contents(), width: submission.size.width,
-            height: submission.size.height, stride: stride, dirtyRectangles: []), arrival: submission.arrival, revision: submission.revision)
+        return CaptureFrame(
+            copying: BorrowedFrame(
+                pixels: readback.contents(), width: submission.size.width,
+                height: submission.size.height, stride: stride, dirtyRectangles: []), arrival: submission.arrival, revision: submission.revision)
     }
 
     private struct State {

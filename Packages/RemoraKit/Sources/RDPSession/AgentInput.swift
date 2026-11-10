@@ -8,7 +8,10 @@ final class RDPAgentInputRequest: AgentInputRequest {
     private let session: RDPSession
     private let id: UInt64
 
-    init(session: RDPSession, id: UInt64) { self.session = session; self.id = id }
+    init(session: RDPSession, id: UInt64) {
+        self.session = session
+        self.id = id
+    }
 
     public func cancel() {
         session.agentHandle { rm_rdp_agent_cancel($0, id) }
@@ -18,14 +21,24 @@ final class RDPAgentInputRequest: AgentInputRequest {
         try Task.checkCancellation()
         var wire = RMRDPAgentEvent()
         switch event {
-        case .key(let key, let down): wire.kind = RMRDP_AGENT_SCAN; wire.scancode = key.scancode; wire.down = down
+        case .key(let key, let down):
+            wire.kind = RMRDP_AGENT_SCAN
+            wire.scancode = key.scancode
+            wire.down = down
         case .pointer(let point, let buttons):
-            wire.kind = RMRDP_AGENT_POINTER; wire.x = point.x; wire.y = point.y; wire.buttons = buttons.rawValue
-        case .wheel(let wheel): wire.kind = RMRDP_AGENT_WHEEL; wire.vertical = wheel.vertical; wire.horizontal = wheel.horizontal
+            wire.kind = RMRDP_AGENT_POINTER
+            wire.x = point.x
+            wire.y = point.y
+            wire.buttons = buttons.rawValue
+        case .wheel(let wheel):
+            wire.kind = RMRDP_AGENT_WHEEL
+            wire.vertical = wheel.vertical
+            wire.horizontal = wheel.horizontal
         case .unicode(let scalar):
             wire.kind = RMRDP_AGENT_UNICODE
             let units = Array(String(scalar).utf16)
-            wire.units = UInt8(units.count); wire.utf16 = (units[0], units.count == 2 ? units[1] : 0)
+            wire.units = UInt8(units.count)
+            wire.utf16 = (units[0], units.count == 2 ? units[1] : 0)
         case .pause: wire.kind = RMRDP_AGENT_PAUSE
         }
         guard let sequence = session.agentHandle({ rm_rdp_agent_send($0, id, wire) }) else { throw AgentInputFailure.sessionEnded }

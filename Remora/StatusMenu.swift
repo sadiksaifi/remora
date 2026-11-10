@@ -39,8 +39,10 @@ final class StatusMenu: NSObject, NSMenuDelegate {
         for tab in tabs { menu.addItem(sessionItem(for: tab)) }
         menu.addItem(.separator())
         addItem("Open Remora", #selector(open(_:)), to: menu)
-        menu.addItem(withTitle: "Stop All Agent Control", action: #selector(MainWindowController.stopAllAgentControl(_:)),
-                     keyEquivalent: "").target = windowController
+        menu.addItem(
+            withTitle: "Stop All Agent Control", action: #selector(MainWindowController.stopAllAgentControl(_:)),
+            keyEquivalent: ""
+        ).target = windowController
         menu.addItem(.separator())
         addItem("Settings…", #selector(showSettings(_:)), key: ",", to: menu)
         menu.addItem(.separator())

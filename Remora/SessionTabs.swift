@@ -1,7 +1,7 @@
 import AppKit
 import Observation
-import RemoraCore
 import RemoraControl
+import RemoraCore
 
 /// The open session tabs of the main window, at most one per connection, and which page the window shows:
 /// the connections list (home) or one tab. Views observe it; the main window shows the selected page.
@@ -42,8 +42,12 @@ final class SessionTabs {
             let session = notification.object as? SessionViewController
             MainActor.assumeIsolated {
                 guard let self, let session, let tab = self.tabs.first(where: { $0.id == session.connection.id }),
-                      tab.control != session.control.state || tab.agentName != session.agentName else { return }
-                self.update(tab.id) { $0.control = session.control.state; $0.agentName = session.agentName }
+                    tab.control != session.control.state || tab.agentName != session.agentName
+                else { return }
+                self.update(tab.id) {
+                    $0.control = session.control.state
+                    $0.agentName = session.agentName
+                }
             }
         }
     }
@@ -91,17 +95,23 @@ final class SessionTabs {
             },
             onRememberCredentials: { [weak self] credentials in
                 guard let self,
-                      let current = connectionStore.connections.first(where: { $0.id == id }) else {
+                    let current = connectionStore.connections.first(where: { $0.id == id })
+                else {
                     throw ControlFailure(.notFound, "The saved connection was deleted.")
                 }
                 let updated = try ConnectionPatch(username: credentials.username, domain: credentials.domain).applying(to: current)
-                do { try connectionStore.update(updated) }
-                catch { throw ControlFailure(.storeFailed, "Could not save account metadata.") }
+                do { try connectionStore.update(updated) } catch { throw ControlFailure(.storeFailed, "Could not save account metadata.") }
                 self.update(updated)
                 do {
-                    if credentials.password.isEmpty { try credentialStore.removePassword(for: id) }
-                    else { try credentialStore.setPassword(credentials.password, for: id) }
-                } catch { throw ControlFailure(.credentialFailed, "Account metadata was saved, but the password operation failed.", details: .object(["recordSaved": .bool(true)])) }
+                    if credentials.password.isEmpty {
+                        try credentialStore.removePassword(for: id)
+                    } else {
+                        try credentialStore.setPassword(credentials.password, for: id)
+                    }
+                } catch {
+                    throw ControlFailure(
+                        .credentialFailed, "Account metadata was saved, but the password operation failed.", details: .object(["recordSaved": .bool(true)]))
+                }
             }
         )
         sessions[id] = session
@@ -143,7 +153,8 @@ final class SessionTabs {
     func selectAdjacent(forward: Bool) {
         guard !tabs.isEmpty else { return }
         let current = selection.flatMap { id in tabs.firstIndex { $0.id == id } }
-        let index = current.map { ($0 + (forward ? 1 : -1) + tabs.count) % tabs.count }
+        let index =
+            current.map { ($0 + (forward ? 1 : -1) + tabs.count) % tabs.count }
             ?? (forward ? 0 : tabs.count - 1)
         select(tabs[index].id)
     }

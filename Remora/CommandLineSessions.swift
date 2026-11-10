@@ -50,20 +50,24 @@ extension CommandLineController {
             "frame": .number(Double(session.frameRevision)),
             "recording": recordingInfo(session),
             "sizing": .string((session.attemptResolution ?? session.attemptConnection.resolution) == .fitToWindow ? "fit" : "fixed"),
-            "prompt": session.pendingPrompt.map { .string($0.id.uuidString) } ?? .null
+            "prompt": session.pendingPrompt.map { .string($0.id.uuidString) } ?? .null,
         ])
     }
 
     func promptInfo(_ session: SessionViewController) -> ControlValue? {
         guard let prompt = session.pendingPrompt else { return nil }
-        var fields: [String: ControlValue] = ["prompt": .string(prompt.id.uuidString), "session": .string(session.attemptID.uuidString),
-            "actions": .array([.string("connect"), .string("cancel")])]
+        var fields: [String: ControlValue] = [
+            "prompt": .string(prompt.id.uuidString), "session": .string(session.attemptID.uuidString),
+            "actions": .array([.string("connect"), .string("cancel")]),
+        ]
         switch prompt {
         case .credentials(_, let challenge):
             fields["kind"] = .string("credentials")
             fields["username"] = .string(session.credentialDraft?.username ?? challenge.username)
             fields["domain"] = .string(session.credentialDraft?.domain ?? challenge.domain)
-            fields["fields"] = .array((challenge.fields == .password ? ["password"] : session.connection.kind == .rdp ? ["username", "domain", "password"] : ["username", "password"]).map(ControlValue.string))
+            fields["fields"] = .array(
+                (challenge.fields == .password
+                    ? ["password"] : session.connection.kind == .rdp ? ["username", "domain", "password"] : ["username", "password"]).map(ControlValue.string))
             fields["reason"] = .string(challenge.reason == .missing ? "missing" : "rejected")
             fields["remember"] = .bool(session.credentialDraft?.remember ?? true)
             fields["hasPassword"] = .bool(!(session.credentialDraft?.password.isEmpty ?? true))
@@ -76,7 +80,9 @@ extension CommandLineController {
             fields["fingerprint"] = .string(challenge.fingerprint)
             switch challenge.status {
             case .new: fields["status"] = .string("new")
-            case .changed(let previous): fields["status"] = .string("changed"); fields["previousFingerprint"] = .string(previous)
+            case .changed(let previous):
+                fields["status"] = .string("changed")
+                fields["previousFingerprint"] = .string(previous)
             }
         }
         return .object(fields)
@@ -91,13 +97,18 @@ extension CommandLineController {
 
     func promptRequired(_ session: SessionViewController) throws {
         if let prompt = session.pendingPrompt {
-            throw ControlFailure(.promptRequired, "Session \(session.attemptID) requires prompt \(prompt.id).", hint: "Run remora prompt get \(prompt.id) and remora prompt respond \(prompt.id) connect|cancel.", details: .object(["prompt": .string(prompt.id.uuidString), "session": .string(session.attemptID.uuidString)]))
+            throw ControlFailure(
+                .promptRequired, "Session \(session.attemptID) requires prompt \(prompt.id).",
+                hint: "Run remora prompt get \(prompt.id) and remora prompt respond \(prompt.id) connect|cancel.",
+                details: .object(["prompt": .string(prompt.id.uuidString), "session": .string(session.attemptID.uuidString)]))
         }
     }
 
     /// Only command waiters poll. An idle app has no timer or frame demand from this adapter.
-    func waitFor(_ session: SessionViewController, id: UUID, timeout: Double,
-                         disconnected: Bool = false, predicate: () throws -> Bool) async throws {
+    func waitFor(
+        _ session: SessionViewController, id: UUID, timeout: Double,
+        disconnected: Bool = false, predicate: () throws -> Bool
+    ) async throws {
         let deadline = ContinuousClock.now.advanced(by: .seconds(timeout))
         while true {
             guard session.attemptID == id, sessions.session(for: session.connection.id) === session else {
@@ -109,8 +120,9 @@ extension CommandLineController {
                 throw ControlFailure(.backendFailed, reason?.description ?? "The session disconnected.", hint: "Inspect session get before reconnecting.")
             }
             guard ContinuousClock.now < deadline else { throw ControlFailure(.timeout, "The session did not reach the requested state before the deadline.") }
-            do { try await Task.sleep(until: min(deadline, ContinuousClock.now.advanced(by: .milliseconds(25))), clock: .continuous) }
-            catch { throw ControlFailure(.cancelled, "The command was interrupted.") }
+            do { try await Task.sleep(until: min(deadline, ContinuousClock.now.advanced(by: .milliseconds(25))), clock: .continuous) } catch {
+                throw ControlFailure(.cancelled, "The command was interrupted.")
+            }
         }
     }
 
@@ -120,7 +132,8 @@ extension CommandLineController {
         do {
             try await waitFor(session, id: id, timeout: max(0, deadline - ProcessInfo.processInfo.systemUptime)) {
                 guard session.state == .connected, session.hasFreshFrame,
-                      let arrival = session.lastFrameArrival else { return false }
+                    let arrival = session.lastFrameArrival
+                else { return false }
                 let now = ProcessInfo.processInfo.systemUptime
                 if firstFrameAt == nil { firstFrameAt = now }
                 return now >= min(arrival + 0.25, firstFrameAt! + 2, deadline)
@@ -138,7 +151,8 @@ extension CommandLineController {
             try request.validateArguments([])
             return .array(sessions.tabs.compactMap { sessions.session(for: $0.id).flatMap(promptInfo) })
         case "prompt.get", "prompt.respond":
-            try request.validateArguments(request.command == "prompt.get" ? ["prompt"] : ["prompt", "action", "username", "domain", "remember", "password", "clearPassword"])
+            try request.validateArguments(
+                request.command == "prompt.get" ? ["prompt"] : ["prompt", "action", "username", "domain", "remember", "password", "clearPassword"])
             let target = try request.string("prompt", required: true)!
             let session = try promptSession(target)
             if request.command == "prompt.get" { return promptInfo(session)! }
@@ -146,19 +160,28 @@ extension CommandLineController {
             guard ["connect", "cancel"].contains(action) else { throw ControlFailure(.invalidArgument, "Action must be connect or cancel.") }
             let hasEdits = !Set(request.arguments.keys).isDisjoint(with: ["username", "domain", "remember", "password", "clearPassword"])
             guard let prompt = session.pendingPrompt else { throw ControlFailure(.promptResolved, "This prompt was already resolved.") }
-            if action == "cancel" || { if case .certificate = prompt { return true }; return false }() {
+            if action == "cancel"
+                || {
+                    if case .certificate = prompt { return true }
+                    return false
+                }()
+            {
                 guard !hasEdits else { throw ControlFailure(.invalidArgument, "Certificate and cancel answers accept no credential fields.") }
                 try session.respondToPrompt(prompt.id, credentials: nil, trust: action == "connect")
             } else if case .credentials(_, let challenge) = prompt {
                 let remember = try request.string("remember")
-                guard remember == nil || remember == "true" || remember == "false" else { throw ControlFailure(.invalidArgument, "remember must be true or false.") }
+                guard remember == nil || remember == "true" || remember == "false" else {
+                    throw ControlFailure(.invalidArgument, "remember must be true or false.")
+                }
                 let password = try request.string("password")
                 let clear = try request.flag("clearPassword")
                 guard password == nil || !clear else { throw ControlFailure(.invalidArgument, "Choose a password or clearPassword.") }
-                let answer = try SessionCredentials(username: request.string("username") ?? session.credentialDraft?.username ?? challenge.username,
+                let answer = try SessionCredentials(
+                    username: request.string("username") ?? session.credentialDraft?.username ?? challenge.username,
                     domain: request.string("domain") ?? session.credentialDraft?.domain ?? challenge.domain,
                     password: clear ? "" : password ?? session.credentialDraft?.password ?? "")
-                try session.respondToPrompt(prompt.id, credentials: answer, remember: remember.map { $0 == "true" } ?? session.credentialDraft?.remember ?? true)
+                try session.respondToPrompt(
+                    prompt.id, credentials: answer, remember: remember.map { $0 == "true" } ?? session.credentialDraft?.remember ?? true)
             }
             return .object(["prompt": .string(prompt.id.uuidString), "resolved": .bool(true), "session": .string(session.attemptID.uuidString)])
         case "session.list":
@@ -171,13 +194,16 @@ extension CommandLineController {
             let noWait = try request.flag("noWait")
             let resolution = try request.string("resolution").map { try parseResolution($0) }
             if let existing = sessions.session(for: connection.id), existing.state.isLive, let resolution,
-               resolution != (existing.attemptResolution ?? existing.attemptConnection.resolution) {
+                resolution != (existing.attemptResolution ?? existing.attemptConnection.resolution)
+            {
                 throw ControlFailure(.sessionExists, "An active session uses a different resolution.", hint: "Inspect it or disconnect explicitly.")
             }
             let started = sessions.open(connection, select: !background, agent: request.agent ?? "remora CLI", resolution: resolution)
             if started {
-                do { try connectionStore.markConnected(id: connection.id) }
-                catch { throw ControlFailure(.storeFailed, "Session started, but its last-connected date could not be saved.", hint: "Inspect session list before retrying.") }
+                do { try connectionStore.markConnected(id: connection.id) } catch {
+                    throw ControlFailure(
+                        .storeFailed, "Session started, but its last-connected date could not be saved.", hint: "Inspect session list before retrying.")
+                }
             }
             let session = sessions.session(for: connection.id)!
             if !background { show(nil) }
@@ -196,8 +222,7 @@ extension CommandLineController {
             let targets = all ? sessions.tabs.compactMap { sessions.session(for: $0.id) } : [try resolveSession(request.session)]
             var failure: Error?
             for session in targets {
-                do { try await session.handoverAgentControl(.release) }
-                catch { if failure == nil { failure = error } }
+                do { try await session.handoverAgentControl(.release) } catch { if failure == nil { failure = error } }
             }
             if let failure { throw failure }
             return .array(targets.map(sessionInfo))
@@ -216,7 +241,9 @@ extension CommandLineController {
         switch request.command {
         case "session.get": return sessionInfo(session)
         case "session.resume": try session.checkUserHold()
-        case "session.show": sessions.select(session.connection.id); show(nil)
+        case "session.show":
+            sessions.select(session.connection.id)
+            show(nil)
         case "session.disconnect", "session.close":
             if request.command == "session.close" { try session.checkUserHold() }
             session.disconnectSession()

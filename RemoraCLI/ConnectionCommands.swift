@@ -9,7 +9,8 @@ struct ConnectionFields: ParsableArguments {
     @Option(help: "Remote port, 1 to 65535. Defaults to 3389 for RDP and 5900 for VNC.") var port: Int?
     @Option(help: "Remote account username.") var username: String?
     @Option(help: "Remote account domain.") var domain: String?
-    @Option(help: "Saved resolution: fit or WIDTHxHEIGHT, 200 to 8192 pixels per side with an even width. VNC starts at the server's size.") var resolution: String?
+    @Option(help: "Saved resolution: fit or WIDTHxHEIGHT, 200 to 8192 pixels per side with an even width. VNC starts at the server's size.") var resolution:
+        String?
     @Option(help: "VNC mode: standard, or apple for Apple Screen Sharing's experimental faster, lossy encoding (Macs only).") var vncMode: String?
     @Flag(help: "Read the password from UTF-8 stdin, removing one trailing line ending.") var passwordStdin = false
 
@@ -19,7 +20,9 @@ struct ConnectionFields: ParsableArguments {
         if let kind, !["rdp", "vnc"].contains(kind) { throw ValidationError("Protocol must be rdp or vnc.") }
         if let vncMode, !["standard", "apple"].contains(vncMode) { throw ValidationError("VNC mode must be standard or apple.") }
         var result: [String: ControlValue] = [:]
-        for (key, value) in [("kind", kind), ("host", host), ("name", name), ("username", username), ("domain", domain), ("resolution", resolution), ("vncMode", vncMode)] {
+        for (key, value) in [
+            ("kind", kind), ("host", host), ("name", name), ("username", username), ("domain", domain), ("resolution", resolution), ("vncMode", vncMode),
+        ] {
             if let value { result[key] = .string(value) }
         }
         if let port { result["port"] = .number(Double(port)) }
@@ -39,8 +42,9 @@ func readStandardInput() async throws -> Data {
         input.readabilityHandler = { handle in
             do {
                 let chunk = try handle.read(upToCount: 65_536) ?? Data()
-                if chunk.isEmpty { continuation.finish() }
-                else if case .dropped = continuation.yield(chunk) {
+                if chunk.isEmpty {
+                    continuation.finish()
+                } else if case .dropped = continuation.yield(chunk) {
                     continuation.finish(throwing: ControlFailure(.invalidArgument, "Stdin exceeds the read buffer."))
                 }
             } catch {
@@ -59,7 +63,8 @@ func readStandardInput() async throws -> Data {
 }
 
 struct ConnectionCommand: AsyncParsableCommand {
-    static let configuration = CommandConfiguration(commandName: "connection", abstract: "Manage saved connections.",
+    static let configuration = CommandConfiguration(
+        commandName: "connection", abstract: "Manage saved connections.",
         subcommands: [List.self, Get.self, Create.self, Update.self, Duplicate.self, Delete.self, Password.self])
     @OptionGroup var options: CommonOptions
 
@@ -120,13 +125,16 @@ struct ConnectionCommand: AsyncParsableCommand {
             @Flag(help: "Read the password from UTF-8 stdin, removing one trailing line ending.") var passwordStdin = false
             mutating func validate() throws { guard passwordStdin else { throw ValidationError("--password-stdin is required.") } }
             @MainActor func run() async throws {
-                try await options.execute(.init(command: "connection.password.set", arguments: ["connection": .string(connection), "password": .string(try await readPassword())]))
+                try await options.execute(
+                    .init(command: "connection.password.set", arguments: ["connection": .string(connection), "password": .string(try await readPassword())]))
             }
         }
         struct Clear: AsyncParsableCommand {
             @OptionGroup var options: CommonOptions
             @Argument(help: "Saved connection name or UUID.") var connection: String
-            @MainActor func run() async throws { try await options.execute(.init(command: "connection.password.clear", arguments: ["connection": .string(connection)])) }
+            @MainActor func run() async throws {
+                try await options.execute(.init(command: "connection.password.clear", arguments: ["connection": .string(connection)]))
+            }
         }
     }
 }

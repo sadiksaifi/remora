@@ -1,6 +1,6 @@
+import Darwin
 import Foundation
 import Network
-import Darwin
 
 public struct ControlEndpoint: Sendable {
     public let path: String
@@ -37,8 +37,11 @@ public struct ControlClient: Sendable {
             throw error
         } catch {
             let unknownOutcome = submitted && isMutation
-            throw ControlFailure(submitted ? (unknownOutcome ? .outcomeUnknown : .ioFailed) : .appUnavailable,
-                submitted ? (unknownOutcome ? "The app reply was lost. The command may have completed." : "The app reply was lost.") : "The app control socket is unavailable.",
+            throw ControlFailure(
+                submitted ? (unknownOutcome ? .outcomeUnknown : .ioFailed) : .appUnavailable,
+                submitted
+                    ? (unknownOutcome ? "The app reply was lost. The command may have completed." : "The app reply was lost.")
+                    : "The app control socket is unavailable.",
                 hint: "Inspect app status before retrying a command that changes state.")
         }
     }
@@ -53,12 +56,14 @@ public struct ControlClient: Sendable {
             let response = try JSONDecoder().decode(ControlResponse.self, from: await reader.line(timeout: remaining(deadline)))
             if case .failure = response { return (response, Data()) }
             guard case .success(.object(let fields)) = response, case .number(let count) = fields["byteLength"],
-                  count > 0, count <= 256 * 1024 * 1024, count.rounded() == count else {
+                count > 0, count <= 256 * 1024 * 1024, count.rounded() == count
+            else {
                 throw ControlFailure(.ioFailed, "The screenshot reply has no valid PNG byte length.")
             }
             return (response, try await reader.bytes(Int(count), timeout: remaining(deadline)))
-        } catch let failure as ControlFailure { throw failure }
-        catch { throw ControlFailure(.ioFailed, "The screenshot transfer failed.", hint: "Inspect session get before trying another screenshot.") }
+        } catch let failure as ControlFailure { throw failure } catch {
+            throw ControlFailure(.ioFailed, "The screenshot transfer failed.", hint: "Inspect session get before trying another screenshot.")
+        }
     }
 
     public func events(_ request: ControlRequest, timeout: Double?, receive: @Sendable (ControlEvent) throws -> Void) async throws {
@@ -71,13 +76,13 @@ public struct ControlClient: Sendable {
             let deadline = timeout.map { ContinuousClock.now.advanced(by: .seconds($0)) }
             while true {
                 let line: Data
-                do { line = try await reader.line(timeout: deadline.map(remaining)) }
-                catch is ControlStreamEnd { return }
+                do { line = try await reader.line(timeout: deadline.map(remaining)) } catch is ControlStreamEnd { return }
                 if let response = try? JSONDecoder().decode(ControlResponse.self, from: line), case .failure(let failure) = response { throw failure }
                 try receive(JSONDecoder().decode(ControlEvent.self, from: line))
             }
-        } catch let failure as ControlFailure { throw failure }
-        catch { throw ControlFailure(.ioFailed, "The event stream failed.", hint: "Subscribe again and inspect the new snapshot.") }
+        } catch let failure as ControlFailure { throw failure } catch {
+            throw ControlFailure(.ioFailed, "The event stream failed.", hint: "Subscribe again and inspect the new snapshot.")
+        }
     }
 
 }
@@ -89,7 +94,10 @@ public struct ControlReply: Sendable {
     public let events: AsyncThrowingStream<ControlEvent, any Error>?
     public let afterSend: (@Sendable () async -> Void)?
 
-    public init(_ response: ControlResponse, payload: Data? = nil, events: AsyncThrowingStream<ControlEvent, any Error>? = nil, afterSend: (@Sendable () async -> Void)? = nil) {
+    public init(
+        _ response: ControlResponse, payload: Data? = nil, events: AsyncThrowingStream<ControlEvent, any Error>? = nil,
+        afterSend: (@Sendable () async -> Void)? = nil
+    ) {
         self.payload = payload
         self.events = events
         self.response = response
@@ -115,7 +123,8 @@ public actor ControlServer {
         guard listener == nil else { return }
         let directory = URL(fileURLWithPath: endpoint.path).deletingLastPathComponent()
         if endpoint.path == "/tmp/remora-\(getuid())/control.sock" {
-            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true,
+            try FileManager.default.createDirectory(
+                at: directory, withIntermediateDirectories: true,
                 attributes: [.posixPermissions: 0o700])
             try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: directory.path)
         }
@@ -180,8 +189,9 @@ public actor ControlServer {
             do {
                 let line = try await readLine(on: connection, timeout: 10)
                 let request: ControlRequest
-                do { request = try JSONDecoder().decode(ControlRequest.self, from: line) }
-                catch { throw ControlFailure(.invalidArgument, "Invalid control request JSON or fields.") }
+                do { request = try JSONDecoder().decode(ControlRequest.self, from: line) } catch {
+                    throw ControlFailure(.invalidArgument, "Invalid control request JSON or fields.")
+                }
                 let operation = Task {
                     let reply = await handler(request)
                     do {
@@ -229,9 +239,11 @@ private func connect(_ connection: NWConnection, timeout: Double) async throws {
 
 private func send(_ data: Data, on connection: NWConnection, timeout: Double?) async throws {
     try await NetworkOperation<Void>.run(timeout: timeout, cancel: { connection.cancel() }) { finish in
-        connection.send(content: data, completion: .contentProcessed { error in
-            if let error { finish(.failure(error)) } else { finish(.success(())) }
-        })
+        connection.send(
+            content: data,
+            completion: .contentProcessed { error in
+                if let error { finish(.failure(error)) } else { finish(.success(())) }
+            })
     }
 }
 
@@ -241,8 +253,10 @@ private func readLine(on connection: NWConnection, timeout: Double) async throws
     }
 }
 
-private func receiveLine(on connection: NWConnection, buffer: Data,
-                         finish: @escaping @Sendable (Result<Data, any Error>) -> Void) {
+private func receiveLine(
+    on connection: NWConnection, buffer: Data,
+    finish: @escaping @Sendable (Result<Data, any Error>) -> Void
+) {
     connection.receive(minimumIncompleteLength: 1, maximumLength: min(65_536, maximumLineSize + 1 - buffer.count)) { data, _, complete, error in
         var buffer = buffer
         if let data { buffer.append(data) }
@@ -250,9 +264,13 @@ private func receiveLine(on connection: NWConnection, buffer: Data,
             finish(.success(Data(buffer[..<newline])))
         } else if buffer.count >= maximumLineSize {
             finish(.failure(ControlFailure(.invalidArgument, "The JSON line exceeds 1 MiB.")))
-        } else if let error { finish(.failure(error)) }
-        else if complete { finish(.failure(ControlFailure(.ioFailed, "The socket closed before a complete JSON line."))) }
-        else { receiveLine(on: connection, buffer: buffer, finish: finish) }
+        } else if let error {
+            finish(.failure(error))
+        } else if complete {
+            finish(.failure(ControlFailure(.ioFailed, "The socket closed before a complete JSON line.")))
+        } else {
+            receiveLine(on: connection, buffer: buffer, finish: finish)
+        }
     }
 }
 
@@ -266,8 +284,10 @@ private final class NetworkOperation<Value: Sendable>: @unchecked Sendable {
 
     private init(cancel: @escaping @Sendable () -> Void) { self.cancel = cancel }
 
-    static func run(timeout: Double?, cancel: @escaping @Sendable () -> Void,
-                    start: (@escaping @Sendable (Result<Value, any Error>) -> Void) -> Void) async throws -> Value {
+    static func run(
+        timeout: Double?, cancel: @escaping @Sendable () -> Void,
+        start: (@escaping @Sendable (Result<Value, any Error>) -> Void) -> Void
+    ) async throws -> Value {
         let operation = NetworkOperation(cancel: cancel)
         return try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { continuation in
@@ -279,7 +299,9 @@ private final class NetworkOperation<Value: Sendable>: @unchecked Sendable {
                 }
                 operation.continuation = continuation
                 if let timeout {
-                    let timer = DispatchWorkItem { [weak operation] in operation?.abort(ControlFailure(.timeout, "The command timed out.", hint: "Inspect current state before retrying.")) }
+                    let timer = DispatchWorkItem { [weak operation] in
+                        operation?.abort(ControlFailure(.timeout, "The command timed out.", hint: "Inspect current state before retrying."))
+                    }
                     operation.timer = timer
                     socketQueue.asyncAfter(deadline: .now() + max(0, timeout), execute: timer)
                 }
@@ -301,7 +323,10 @@ private final class NetworkOperation<Value: Sendable>: @unchecked Sendable {
 
     @discardableResult private func finish(_ result: Result<Value, any Error>) -> Bool {
         lock.lock()
-        guard self.result == nil else { lock.unlock(); return false }
+        guard self.result == nil else {
+            lock.unlock()
+            return false
+        }
         self.result = result
         let continuation = continuation
         self.continuation = nil
@@ -323,8 +348,9 @@ private actor ControlReader {
         let deadline = timeout.map { ContinuousClock.now.advanced(by: .seconds($0)) }
         while buffer.firstIndex(of: 10) == nil {
             guard buffer.count < maximumLineSize else { throw ControlFailure(.ioFailed, "The JSON line exceeds 1 MiB.") }
-            do { try await receive(timeout: deadline.map(remaining)) }
-            catch is ControlStreamEnd where !buffer.isEmpty { throw ControlFailure(.ioFailed, "The control stream closed mid-line.") }
+            do { try await receive(timeout: deadline.map(remaining)) } catch is ControlStreamEnd where !buffer.isEmpty {
+                throw ControlFailure(.ioFailed, "The control stream closed mid-line.")
+            }
         }
         let newline = buffer.firstIndex(of: 10)!
         guard newline < maximumLineSize else { throw ControlFailure(.ioFailed, "The JSON line exceeds 1 MiB.") }
@@ -345,8 +371,7 @@ private actor ControlReader {
         let connection = connection
         let data: Data = try await NetworkOperation.run(timeout: timeout, cancel: { connection.cancel() }) { finish in
             connection.receive(minimumIncompleteLength: 1, maximumLength: 65_536) { data, _, _, error in
-                if let data, !data.isEmpty { finish(.success(data)) }
-                else { finish(.failure(error ?? ControlStreamEnd())) }
+                if let data, !data.isEmpty { finish(.success(data)) } else { finish(.failure(error ?? ControlStreamEnd())) }
             }
         }
         buffer.append(data)

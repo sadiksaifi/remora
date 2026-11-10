@@ -2,7 +2,8 @@ import ArgumentParser
 import RemoraControl
 
 struct PromptCommand: AsyncParsableCommand {
-    static let configuration = CommandConfiguration(commandName: "prompt", abstract: "Answer credentials and certificate requests.",
+    static let configuration = CommandConfiguration(
+        commandName: "prompt", abstract: "Answer credentials and certificate requests.",
         subcommands: [List.self, Get.self, Respond.self])
     @OptionGroup var options: CommonOptions
     struct List: AsyncParsableCommand {

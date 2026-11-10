@@ -32,8 +32,7 @@ final class RemoteDesktopInput: NSObject {
         }
     )
     private var hasFocus: Bool {
-        connected && input != nil && NSApp.isActive && view?.window?.isKeyWindow == true &&
-            view?.window?.firstResponder === view
+        connected && input != nil && NSApp.isActive && view?.window?.isKeyWindow == true && view?.window?.firstResponder === view
     }
     private var canCapture: Bool { hasFocus && allowsHumanInput }
     private var keyboard = KeyboardState()
@@ -65,7 +64,8 @@ final class RemoteDesktopInput: NSObject {
         keyUpMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyUp) { [weak self] event in
             let handled = MainActor.assumeIsolated {
                 guard let self, let view = self.view,
-                      event.window == nil || event.window === view.window else { return false }
+                    event.window == nil || event.window === view.window
+                else { return false }
                 return self.receiveKeyboardEvent(event)
             }
             return handled ? nil : event
@@ -144,8 +144,9 @@ final class RemoteDesktopInput: NSObject {
     }
 
     private func resetKeyboard() {
-        keyboard.reset(capsLockOn: NSEvent.modifierFlags.contains(.capsLock),
-                       rawFlags: UInt(CGEventSource.flagsState(.combinedSessionState).rawValue))
+        keyboard.reset(
+            capsLockOn: NSEvent.modifierFlags.contains(.capsLock),
+            rawFlags: UInt(CGEventSource.flagsState(.combinedSessionState).rawValue))
     }
 
     func flagsChanged(_ event: NSEvent) {
@@ -161,9 +162,12 @@ final class RemoteDesktopInput: NSObject {
     /// Both routes use the same eligibility, shortcut policy, and pressed-key state.
     private func receiveKeyboardEvent(_ event: NSEvent) -> Bool {
         guard hasFocus, let input else { return false }
-        switch keyboardRouting.route(keyCode: event.keyCode, rawFlags: event.modifierFlags.rawValue,
-                                     event: event.type == .flagsChanged ? .flagsChanged
-                                        : event.type == .keyDown ? .keyDown : .keyUp) {
+        switch keyboardRouting.route(
+            keyCode: event.keyCode, rawFlags: event.modifierFlags.rawValue,
+            event: event.type == .flagsChanged
+                ? .flagsChanged
+                : event.type == .keyDown ? .keyDown : .keyUp)
+        {
         case .local: return false
         case .deferModifiers: return true
         case .beginLocalChord:
@@ -175,13 +179,17 @@ final class RemoteDesktopInput: NSObject {
         case .remote:
             guard allowsHumanInput else { return !event.modifierFlags.contains(.command) }
             if event.type == .keyDown { onHumanInput?(.key) }
-            let keys = event.type == .flagsChanged
+            let keys =
+                event.type == .flagsChanged
                 ? keyboard.flagsChanged(keyCode: event.keyCode, rawFlags: event.modifierFlags.rawValue)
-                : keyboard.key(keyCode: event.keyCode, isDown: event.type == .keyDown,
-                               rawFlags: event.modifierFlags.rawValue)
+                : keyboard.key(
+                    keyCode: event.keyCode, isDown: event.type == .keyDown,
+                    rawFlags: event.modifierFlags.rawValue)
             for key in keys {
-                input.sendKey(KeyInput(keyCode: key.keyCode, isDown: key.isDown,
-                    characters: key.keyCode == event.keyCode && event.type == .keyDown ? event.characters : nil))
+                input.sendKey(
+                    KeyInput(
+                        keyCode: key.keyCode, isDown: key.isDown,
+                        characters: key.keyCode == event.keyCode && event.type == .keyDown ? event.characters : nil))
             }
             return true
         }
@@ -234,10 +242,12 @@ final class RemoteDesktopInput: NSObject {
 
     func scrollWheel(_ event: NSEvent) {
         guard allowsHumanInput, connected, let input, let view,
-              let point = view.remotePoint(for: view.convert(event.locationInWindow, from: nil)) else { return }
+            let point = view.remotePoint(for: view.convert(event.locationInWindow, from: nil))
+        else { return }
         onHumanInput?(.scroll)
-        let wheel = scroll.accumulate(x: event.scrollingDeltaX, y: event.scrollingDeltaY,
-                                      precise: event.hasPreciseScrollingDeltas)
+        let wheel = scroll.accumulate(
+            x: event.scrollingDeltaX, y: event.scrollingDeltaY,
+            precise: event.hasPreciseScrollingDeltas)
         guard wheel.vertical != 0 || wheel.horizontal != 0 else { return }
         // Pointer motion is not tracked while the window is inactive, so the
         // last pointer position can be stale. The wheel turns under the cursor.

@@ -1,5 +1,5 @@
-import Foundation
 import CoreGraphics
+import Foundation
 
 /// One session's input feedback. The transport, AppKit, and recorder can access it concurrently.
 public final class SessionOverlayState: @unchecked Sendable {
@@ -73,13 +73,17 @@ public final class SessionOverlayState: @unchecked Sendable {
             idleSince = nil
             clicks = []
             press = nil
-            humanKeys = KeyPressDisplay(); agentKeys = KeyPressDisplay()
-            humanButtons = []; agentButtons = []
+            humanKeys = KeyPressDisplay()
+            agentKeys = KeyPressDisplay()
+            humanButtons = []
+            agentButtons = []
         }
     }
 
-    public func configure(showPointerInRecordings: Bool, showKeyPresses: Bool, showAgentPointer: Bool, scale: Double,
-                          keyPressSize: Double = 1) {
+    public func configure(
+        showPointerInRecordings: Bool, showKeyPresses: Bool, showAgentPointer: Bool, scale: Double,
+        keyPressSize: Double = 1
+    ) {
         change {
             keySize = min(KeyPressPill.sizes.upperBound, max(KeyPressPill.sizes.lowerBound, keyPressSize))
             showPointer = showPointerInRecordings
@@ -103,7 +107,10 @@ public final class SessionOverlayState: @unchecked Sendable {
     }
 
     public func setReduceMotion(_ enabled: Bool) {
-        change { reduceMotion = enabled; agentCursor?.reduceMotion = enabled }
+        change {
+            reduceMotion = enabled
+            agentCursor?.reduceMotion = enabled
+        }
     }
 
     /// Control ownership alone sets visibility. Screen/recording settings only select outputs.
@@ -135,8 +142,7 @@ public final class SessionOverlayState: @unchecked Sendable {
             agentPoint = point
             if agentCursor == nil { replaceCursorGeometry() }
             let target = CGPoint(x: point.x / cursorUnit, y: point.y / cursorUnit)
-            if animated { agentCursor?.move(to: target) }
-            else { agentCursor?.place(at: target) }
+            if animated { agentCursor?.move(to: target) } else { agentCursor?.place(at: target) }
             delay = agentCursor?.arrivalDelay ?? 0
         }
         return delay
@@ -184,7 +190,10 @@ public final class SessionOverlayState: @unchecked Sendable {
     public func setDarkAppearance(_ dark: Bool) { change { self.dark = dark } }
 
     public func setCursor(_ image: CGImage?, hotspot: CGPoint) {
-        change { cursor = image; self.hotspot = hotspot }
+        change {
+            cursor = image
+            self.hotspot = hotspot
+        }
     }
 
     public func receive(_ source: InputSource, _ event: SessionInputFeedback) {
@@ -201,14 +210,20 @@ public final class SessionOverlayState: @unchecked Sendable {
                 }
                 if source == .human { humanButtons = buttons } else { agentButtons = buttons }
             case .key(let scancode, let down, let characters):
-                let next = source == .human
+                let next =
+                    source == .human
                     ? humanKeys.key(scancode: scancode, down: down, characters: characters)
                     : agentKeys.key(scancode: scancode, down: down, characters: characters)
                 if let next { append(next, at: now) }
             case .text(let text): append(KeyPressDisplay.text(text), at: now)
             case .release:
-                if source == .human { humanKeys = KeyPressDisplay(); humanButtons = [] }
-                else { agentKeys = KeyPressDisplay(); agentButtons = [] }
+                if source == .human {
+                    humanKeys = KeyPressDisplay()
+                    humanButtons = []
+                } else {
+                    agentKeys = KeyPressDisplay()
+                    agentButtons = []
+                }
             }
         }
     }
@@ -218,7 +233,9 @@ public final class SessionOverlayState: @unchecked Sendable {
             agentCursor?.advance(to: time)
             let age = time - keyTime
             let text = showKeys && age < 1.5 ? press.map { $0.text + (repeats > 1 ? " ×\(repeats)" : "") } : nil
-            return Snapshot(agentCursor: agentCursor.map { AgentCursorFrame(pose: $0.pose, unit: cursorUnit, isSettled: $0.isSettled) }, point: point, owner: owner, cursor: cursor, hotspot: hotspot,
+            return Snapshot(
+                agentCursor: agentCursor.map { AgentCursorFrame(pose: $0.pose, unit: cursorUnit, isSettled: $0.isSettled) }, point: point, owner: owner,
+                cursor: cursor, hotspot: hotspot,
                 clicks: clicks.filter { time - $0.time < 0.5 }, keyText: text, keyIsText: press?.isText ?? false,
                 keyOpacity: min(1, max(0, (1.5 - age) / 0.25)), keySize: keySize, dark: dark,
                 showPointerInRecordings: showPointer, showAgentPointer: showAgent, scale: scale, time: time)
@@ -243,9 +260,16 @@ public final class SessionOverlayState: @unchecked Sendable {
             if previous.isText && next.isText {
                 press = .init(text: String((previous.text + next.text).suffix(32)), isText: true)
                 repeats = 1
-            } else if previous == next && !next.isText { repeats += 1 }
-            else { press = next; repeats = 1 }
-        } else { press = next; repeats = 1 }
+            } else if previous == next && !next.isText {
+                repeats += 1
+            } else {
+                press = next
+                repeats = 1
+            }
+        } else {
+            press = next
+            repeats = 1
+        }
         keyTime = time
     }
 
@@ -278,6 +302,9 @@ public final class SessionOverlayState: @unchecked Sendable {
         clicks.removeAll { now - $0.time >= 0.5 }
         if now - keyTime >= 1.5 { press = nil }
         for observer in observers.values { observer(now) }
-        if !needsTicks { timer?.cancel(); timer = nil }
+        if !needsTicks {
+            timer?.cancel()
+            timer = nil
+        }
     }
 }

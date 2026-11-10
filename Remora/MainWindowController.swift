@@ -6,7 +6,8 @@ import SwiftUI
 /// Native window tabbing is off, so window managers see exactly one window.
 @MainActor
 final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolbarDelegate, NSSearchFieldDelegate,
-    NSMenuItemValidation, NSTextSuggestionsDelegate {
+    NSMenuItemValidation, NSTextSuggestionsDelegate
+{
     typealias SuggestionItemType = UUID
 
     private static let homeItem = NSToolbarItem.Identifier("home")
@@ -87,14 +88,16 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
         window.setFrameAutosaveName("Connections")
         window.initialFirstResponder = connectionsViewController.initialFirstResponder
 
-        tabMenuItems = [.separator()] + (1...9).map { number in
-            let item = NSMenuItem(title: "Tab \(number)", action: #selector(showTab(_:)), keyEquivalent: "\(number)")
-            item.keyEquivalentModifierMask = [.control, .option, .command]
-            item.tag = number - 1
-            item.target = self
-            item.isHidden = true
-            return item
-        }
+        tabMenuItems =
+            [.separator()]
+            + (1...9).map { number in
+                let item = NSMenuItem(title: "Tab \(number)", action: #selector(showTab(_:)), keyEquivalent: "\(number)")
+                item.keyEquivalentModifierMask = [.control, .option, .command]
+                item.tag = number - 1
+                item.target = self
+                item.isHidden = true
+                return item
+            }
         sessionTabs.onSelectionChange = { [weak self] _, selection in self?.showPage(selection) }
         eventMonitor = NSEvent.addLocalMonitorForEvents(matching: [.rightMouseDown, .leftMouseDown]) {
             [weak self] event in
@@ -288,7 +291,8 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
             item.representedObject = id
             items.append(item)
         }
-        add(control.canResume ? "Resume" : "Take Over", #selector(toggleAgentControl(_:)),
+        add(
+            control.canResume ? "Resume" : "Take Over", #selector(toggleAgentControl(_:)),
             control.canTakeOver || (control.canResume && sessionTabs.session(for: id)?.isConnected == true))
         add("Stop Agent Control", #selector(stopAgentControl(_:)), control.canStop)
         add("Stop All Agent Control", #selector(stopAllAgentControl(_:)), includingStopAll && canStopAnyAgent)
@@ -326,7 +330,8 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
             return !sessionTabs.tabs.isEmpty && canChangeTabs
         case #selector(showTab(_:)):
             let tabs = sessionTabs.tabs
-            menuItem.state = tabs.indices.contains(menuItem.tag) && tabs[menuItem.tag].id == sessionTabs.selection
+            menuItem.state =
+                tabs.indices.contains(menuItem.tag) && tabs[menuItem.tag].id == sessionTabs.selection
                 ? .on : .off
             return tabs.indices.contains(menuItem.tag) && canChangeTabs
         case #selector(closeTab(_:)):
@@ -434,7 +439,8 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
     /// Keeps the field open while a filter is active on the connections list.
     private func updateSearchWidth() {
         let field = searchToolbarItem.searchField
-        searchWidth.constant = field.stringValue.isEmpty && field.currentEditor() == nil
+        searchWidth.constant =
+            field.stringValue.isEmpty && field.currentEditor() == nil
             ? Self.collapsedSearchWidth : Self.expandedSearchWidth
     }
 
@@ -478,7 +484,8 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
     /// While suggestions show, the field gives the first Escape to them, and they only close.
     func control(_ control: NSControl, textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
         guard commandSelector == #selector(NSResponder.cancelOperation(_:)),
-              currentPage !== connectionsViewController else { return false }
+            currentPage !== connectionsViewController
+        else { return false }
         finishSessionSearch()
         return true
     }
@@ -486,15 +493,19 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
     /// Saved connections matching the search, offered while a session tab shows.
     func textField(_ textField: NSTextField, provideUpdatedSuggestions responseHandler: @escaping (ItemResponse) -> Void) {
         let query = textField.stringValue.trimmingCharacters(in: .whitespaces)
-        let matches = query.isEmpty ? [] : connectionStore.connections
-            .filter { $0.matches(query) }
-            .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
-        var response = ItemResponse(items: matches.map { connection in
-            var item = Item(representedValue: connection.id, title: connection.name)
-            item.secondaryTitle = ConnectionCellView.subtitle(for: connection)
-            item.image = NSImage(systemSymbolName: "desktopcomputer", accessibilityDescription: nil)
-            return item
-        })
+        let matches =
+            query.isEmpty
+            ? []
+            : connectionStore.connections
+                .filter { $0.matches(query) }
+                .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+        var response = ItemResponse(
+            items: matches.map { connection in
+                var item = Item(representedValue: connection.id, title: connection.name)
+                item.secondaryTitle = ConnectionCellView.subtitle(for: connection)
+                item.image = NSImage(systemSymbolName: "desktopcomputer", accessibilityDescription: nil)
+                return item
+            })
         response.phase = .final
         responseHandler(response)
     }
@@ -579,8 +590,9 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
 
     /// Looks like a bordered image item. Unlike one, it can carry an accessibility identifier.
     private func toolbarButton(_ symbol: String, _ description: String, action: Selector, identifier: String) -> NSButton {
-        let button = NSButton(image: NSImage(systemSymbolName: symbol, accessibilityDescription: description)!,
-                              target: self, action: action)
+        let button = NSButton(
+            image: NSImage(systemSymbolName: symbol, accessibilityDescription: description)!,
+            target: self, action: action)
         button.bezelStyle = .toolbar
         button.setAccessibilityIdentifier(identifier)
         return button

@@ -19,8 +19,10 @@ struct MoveCommand: AsyncParsableCommand {
     @Argument(help: "Horizontal pixel coordinate from the top-left.") var x: Int
     @Argument(help: "Vertical pixel coordinate from the top-left.") var y: Int
     @MainActor func run() async throws {
-        try await options.execute(.init(command: "move", session: target.target,
-            arguments: basis.adding(to: ["x": .number(Double(x)), "y": .number(Double(y))])))
+        try await options.execute(
+            .init(
+                command: "move", session: target.target,
+                arguments: basis.adding(to: ["x": .number(Double(x)), "y": .number(Double(y))])))
     }
 }
 
@@ -52,8 +54,10 @@ struct DragCommand: AsyncParsableCommand {
     @Option(help: "Modifier chord held during the action, such as Ctrl+Shift.") var modifiers: String?
     @Option(help: "Drag duration, 1ms to 10s. Bare numbers are seconds.") var duration = "500ms"
     @MainActor func run() async throws {
-        var args: [String: ControlValue] = ["from": try inputPoint(from), "to": try inputPoint(to), "button": .string(button),
-            "durationMs": .number(try CommandTimeout(duration).seconds * 1000)]
+        var args: [String: ControlValue] = [
+            "from": try inputPoint(from), "to": try inputPoint(to), "button": .string(button),
+            "durationMs": .number(try CommandTimeout(duration).seconds * 1000),
+        ]
         if let modifiers { args["modifiers"] = .string(modifiers) }
         try await options.execute(.init(command: "drag", session: target.target, arguments: basis.adding(to: args)), defaultTimeout: "60s")
     }
@@ -68,8 +72,8 @@ struct ScrollCommand: AsyncParsableCommand {
     @Option(parsing: .unconditional, help: "Horizontal notches. Positive scrolls right.") var dx: Double = 0
     @Option(parsing: .unconditional, help: "Vertical notches. Positive scrolls down.") var dy: Double = 0
     @MainActor func run() async throws {
-        try await options.execute(.init(command: "scroll", session: target.target, arguments: basis.adding(to:
-            ["at": try inputPoint(at), "dx": .number(dx), "dy": .number(dy)])))
+        try await options.execute(
+            .init(command: "scroll", session: target.target, arguments: basis.adding(to: ["at": try inputPoint(at), "dx": .number(dx), "dy": .number(dy)])))
     }
 }
 
@@ -82,8 +86,9 @@ struct TypeCommand: AsyncParsableCommand {
     @MainActor func run() async throws {
         guard text == nil || !readStdin else { throw ControlFailure(.invalidArgument, "Choose --text or --stdin.") }
         let value: String
-        if let text { value = text }
-        else {
+        if let text {
+            value = text
+        } else {
             guard let decoded = String(data: try await readStandardInput(), encoding: .utf8) else {
                 throw ControlFailure(.invalidArgument, "Text stdin must be UTF-8.")
             }
@@ -100,30 +105,34 @@ struct KeyCommand: AsyncParsableCommand {
     @Argument(help: "Physical key chord, such as Ctrl+Alt+Delete or Win+R.") var chord: String
     @Option(name: .customLong("repeat"), help: "Number of times to press the chord, 1 to 100.") var repetitions = 1
     @MainActor func run() async throws {
-        try await options.execute(.init(command: "key", session: target.target,
-            arguments: ["key": .string(chord), "repeat": .number(Double(repetitions))]))
+        try await options.execute(
+            .init(
+                command: "key", session: target.target,
+                arguments: ["key": .string(chord), "repeat": .number(Double(repetitions))]))
     }
 }
 
 struct InputCommand: AsyncParsableCommand {
-    static let configuration = CommandConfiguration(commandName: "input", abstract: "Run up to 256 ordered JSON actions within 60 seconds.", discussion: """
-        Stdin holds a JSON array, such as [{"action":"click","x":100,"y":200}]. Points are pixels from the top-left, or [x,y] pairs for from, to and at.
+    static let configuration = CommandConfiguration(
+        commandName: "input", abstract: "Run up to 256 ordered JSON actions within 60 seconds.",
+        discussion: """
+            Stdin holds a JSON array, such as [{"action":"click","x":100,"y":200}]. Points are pixels from the top-left, or [x,y] pairs for from, to and at.
 
-        ACTION       FIELDS
-        move         x, y
-        click        x, y, button, count 1-3, modifiers
-        drag         from, to, button, modifiers, durationMs 1-10000 (default 500)
-        scroll       at, dx, dy (notches, positive is right or down)
-        type         text
-        key          key (a chord), repeat 1-100
-        delay        durationMs 0-60000
-        key-down     key (one physical key)
-        key-up       key
-        button-down  x, y, button
-        button-up    x, y, button
+            ACTION       FIELDS
+            move         x, y
+            click        x, y, button, count 1-3, modifiers
+            drag         from, to, button, modifiers, durationMs 1-10000 (default 500)
+            scroll       at, dx, dy (notches, positive is right or down)
+            type         text
+            key          key (a chord), repeat 1-100
+            delay        durationMs 0-60000
+            key-down     key (one physical key)
+            key-up       key
+            button-down  x, y, button
+            button-up    x, y, button
 
-        Buttons are left, right, middle, back and forward. key-up and button-up need a matching down earlier in the batch. Anything still held is released when the batch ends.
-        """)
+            Buttons are left, right, middle, back and forward. key-up and button-up need a matching down earlier in the batch. Anything still held is released when the batch ends.
+            """)
     @OptionGroup var options: CommonOptions
     @OptionGroup var target: SessionOptions
     @OptionGroup var basis: ImageOptions
@@ -131,9 +140,9 @@ struct InputCommand: AsyncParsableCommand {
     @MainActor func run() async throws {
         guard readStdin else { throw ControlFailure(.invalidArgument, "Use input --stdin with a JSON action array.") }
         let actions: ControlValue
-        do { actions = try JSONDecoder().decode(ControlValue.self, from: try await readStandardInput()) }
-        catch let failure as ControlFailure { throw failure }
-        catch { throw ControlFailure(.invalidArgument, "Stdin must contain a JSON action array.") }
+        do { actions = try JSONDecoder().decode(ControlValue.self, from: try await readStandardInput()) } catch let failure as ControlFailure {
+            throw failure
+        } catch { throw ControlFailure(.invalidArgument, "Stdin must contain a JSON action array.") }
         try await options.execute(.init(command: "input", session: target.target, arguments: basis.adding(to: ["actions": actions])), defaultTimeout: "60s")
     }
 }

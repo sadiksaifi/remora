@@ -2,16 +2,28 @@ import Foundation
 
 /// JSON payloads keep the transport independent of app stores and command adapters.
 public enum ControlValue: Codable, Sendable, Equatable {
-    case null, bool(Bool), number(Double), string(String), array([ControlValue]), object([String: ControlValue])
+    case null
+    case bool(Bool)
+    case number(Double)
+    case string(String)
+    case array([ControlValue])
+    case object([String: ControlValue])
 
     public init(from decoder: any Decoder) throws {
         let value = try decoder.singleValueContainer()
-        if value.decodeNil() { self = .null }
-        else if let decoded = try? value.decode(Bool.self) { self = .bool(decoded) }
-        else if let decoded = try? value.decode(Double.self) { self = .number(decoded) }
-        else if let decoded = try? value.decode(String.self) { self = .string(decoded) }
-        else if let decoded = try? value.decode([ControlValue].self) { self = .array(decoded) }
-        else { self = .object(try value.decode([String: ControlValue].self)) }
+        if value.decodeNil() {
+            self = .null
+        } else if let decoded = try? value.decode(Bool.self) {
+            self = .bool(decoded)
+        } else if let decoded = try? value.decode(Double.self) {
+            self = .number(decoded)
+        } else if let decoded = try? value.decode(String.self) {
+            self = .string(decoded)
+        } else if let decoded = try? value.decode([ControlValue].self) {
+            self = .array(decoded)
+        } else {
+            self = .object(try value.decode([String: ControlValue].self))
+        }
     }
 
     public func encode(to encoder: any Encoder) throws {
@@ -50,7 +62,8 @@ public struct ControlRequest: Codable, Sendable {
     public init(from decoder: any Decoder) throws {
         let fields = try [String: ControlValue](from: decoder)
         guard Set(fields.keys).isSubset(of: ["command", "session", "timeout", "arguments", "agent"]),
-              case .string(let command) = fields["command"], !command.isEmpty else {
+            case .string(let command) = fields["command"], !command.isEmpty
+        else {
             throw ControlFailure(.invalidArgument, "A request needs a command and only known fields.")
         }
         self.command = command
@@ -79,26 +92,48 @@ public struct ControlRequest: Codable, Sendable {
 
 public struct ControlFailure: Error, Codable, Sendable, Equatable, LocalizedError {
     public enum Code: String, Codable, Sendable, CaseIterable {
-        case captureFailed = "capture-failed", noFrame = "no-frame", recordingBusy = "recording-busy"
-        case `internal`, ioFailed = "io-failed", outcomeUnknown = "outcome-unknown"
-        case invalidArgument = "invalid-argument", unknownCommand = "unknown-command"
-        case appUnavailable = "app-unavailable", notFound = "not-found", ambiguousTarget = "ambiguous-target"
-        case unsupported, sessionRequired = "session-required", sessionEnded = "session-ended"
-        case notConnected = "not-connected", promptRequired = "prompt-required", userActive = "user-active"
+        case captureFailed = "capture-failed"
+        case noFrame = "no-frame"
+        case recordingBusy = "recording-busy"
+        case `internal`
+        case ioFailed = "io-failed"
+        case outcomeUnknown = "outcome-unknown"
+        case invalidArgument = "invalid-argument"
+        case unknownCommand = "unknown-command"
+        case appUnavailable = "app-unavailable"
+        case notFound = "not-found"
+        case ambiguousTarget = "ambiguous-target"
+        case unsupported
+        case sessionRequired = "session-required"
+        case sessionEnded = "session-ended"
+        case notConnected = "not-connected"
+        case promptRequired = "prompt-required"
+        case userActive = "user-active"
         case agentStopped = "agent-stopped"
-        case inputBusy = "input-busy", observationRequired = "observation-required"
-        case backendFailed = "backend-failed", connectionDeleted = "connection-deleted", sessionExists = "session-exists"
-        case storeFailed = "store-failed", credentialFailed = "credential-failed", promptResolved = "prompt-resolved"
-        case destinationExists = "destination-exists", frameTimeout = "frame-timeout"
-        case streamOverflow = "stream-overflow", imageExpired = "image-expired"
+        case inputBusy = "input-busy"
+        case observationRequired = "observation-required"
+        case backendFailed = "backend-failed"
+        case connectionDeleted = "connection-deleted"
+        case sessionExists = "session-exists"
+        case storeFailed = "store-failed"
+        case credentialFailed = "credential-failed"
+        case promptResolved = "prompt-resolved"
+        case destinationExists = "destination-exists"
+        case frameTimeout = "frame-timeout"
+        case streamOverflow = "stream-overflow"
+        case imageExpired = "image-expired"
         case timeout, cancelled
 
         public var exitCode: Int32 {
             switch self {
             case .internal, .captureFailed, .ioFailed, .outcomeUnknown, .storeFailed, .credentialFailed, .backendFailed: 1
             case .invalidArgument, .unknownCommand: 2
-            case .appUnavailable, .notFound, .ambiguousTarget, .unsupported, .sessionRequired, .sessionEnded, .promptResolved, .connectionDeleted, .streamOverflow, .imageExpired: 3
-            case .notConnected, .promptRequired, .userActive, .agentStopped, .inputBusy, .observationRequired, .sessionExists, .noFrame, .recordingBusy, .destinationExists: 4
+            case .appUnavailable, .notFound, .ambiguousTarget, .unsupported, .sessionRequired, .sessionEnded, .promptResolved, .connectionDeleted,
+                .streamOverflow, .imageExpired:
+                3
+            case .notConnected, .promptRequired, .userActive, .agentStopped, .inputBusy, .observationRequired, .sessionExists, .noFrame, .recordingBusy,
+                .destinationExists:
+                4
             case .timeout, .frameTimeout: 5
             case .cancelled: 130
             }
@@ -167,8 +202,10 @@ public struct AppStatus: Codable, Sendable {
     public let settingsVisible: Bool
     public let sessions: Int
 
-    public init(running: Bool, pid: Int32? = nil, hidden: Bool = false,
-                windowVisible: Bool = false, settingsVisible: Bool = false, sessions: Int = 0) {
+    public init(
+        running: Bool, pid: Int32? = nil, hidden: Bool = false,
+        windowVisible: Bool = false, settingsVisible: Bool = false, sessions: Int = 0
+    ) {
         self.running = running
         self.pid = pid
         self.hidden = hidden
@@ -184,13 +221,23 @@ public struct CommandTimeout: Sendable, Equatable {
     public init(_ text: String) throws {
         let multiplier: Double
         let digits: Substring
-        if text.hasSuffix("ms") { multiplier = 0.001; digits = text.dropLast(2) }
-        else if text.hasSuffix("s") { multiplier = 1; digits = text.dropLast() }
-        else if text.hasSuffix("m") { multiplier = 60; digits = text.dropLast() }
-        else { multiplier = 1; digits = text[...] }
+        if text.hasSuffix("ms") {
+            multiplier = 0.001
+            digits = text.dropLast(2)
+        } else if text.hasSuffix("s") {
+            multiplier = 1
+            digits = text.dropLast()
+        } else if text.hasSuffix("m") {
+            multiplier = 60
+            digits = text.dropLast()
+        } else {
+            multiplier = 1
+            digits = text[...]
+        }
         guard !digits.isEmpty, digits.allSatisfy({ $0.isASCII && ($0.isNumber || $0 == ".") }),
-              let number = Double(digits), number.isFinite, number >= 0,
-              (number * multiplier).isFinite, number * multiplier <= 86_400 else {
+            let number = Double(digits), number.isFinite, number >= 0,
+            (number * multiplier).isFinite, number * multiplier <= 86_400
+        else {
             throw ControlFailure(.invalidArgument, "Invalid timeout '\(text)'.", hint: "Use seconds, ms, s or m, from 0 to 24h.")
         }
         seconds = number * multiplier

@@ -36,9 +36,11 @@ struct SessionCredentialsView: View {
         case password
     }
 
-    init(challenge: CredentialsChallenge, computerName: String, address: String, showsDomain: Bool,
-         draft: SessionCredentialDraft,
-         onCancel: @escaping () -> Void, onConnect: @escaping (SessionCredentials, Bool) -> Void) {
+    init(
+        challenge: CredentialsChallenge, computerName: String, address: String, showsDomain: Bool,
+        draft: SessionCredentialDraft,
+        onCancel: @escaping () -> Void, onConnect: @escaping (SessionCredentials, Bool) -> Void
+    ) {
         self.challenge = challenge
         self.computerName = computerName
         self.address = address

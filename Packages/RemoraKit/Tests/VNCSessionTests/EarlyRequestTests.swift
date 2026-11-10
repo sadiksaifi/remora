@@ -10,10 +10,12 @@ import VNCSession
         let frames = MarkerFrames()
         let pins = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: pins) }
-        let session = VNCSession(configuration: .init(host: "127.0.0.1", port: peer.port, username: "", desktopSize: .init(width: 16, height: 16)), frameSink: frames, certificateStoreURL: pins)
+        let session = VNCSession(
+            configuration: .init(host: "127.0.0.1", port: peer.port, username: "", desktopSize: .init(width: 16, height: 16)), frameSink: frames,
+            certificateStoreURL: pins)
         defer { session.disconnect() }
         session.connect()
-        _ = try await peer.wait("request", count: 2) // Startup full response and trailing incremental.
+        _ = try await peer.wait("request", count: 2)  // Startup full response and trailing incremental.
         #expect(frames.values == [1])
         try peer.command("start")
         _ = try await peer.wait("body_started")
@@ -24,7 +26,7 @@ import VNCSession
         let next = try await peer.wait("request", count: 3)
         #expect(next["body_finished"] as? Bool == false)
         let body = try await peer.wait("body_done")
-        #expect(try #require(peer.events("key").last?["ms"] as? Int) < #require(body["ms"] as? Int)-200)
+        #expect(try #require(peer.events("key").last?["ms"] as? Int) < #require(body["ms"] as? Int) - 200)
         let marker = try #require(try await peer.wait("marker")["value"] as? Int)
         let deadline = ContinuousClock.now.advanced(by: .seconds(1))
         while frames.values.count < 2, ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(5)) }
@@ -33,7 +35,7 @@ import VNCSession
         try peer.command("counts")
         let counts = try await peer.wait("counts")
         #expect(counts["full"] as? Int == 1)
-        #expect(counts["incremental"] as? Int == 2) // Early write replaces the trailer.
+        #expect(counts["incremental"] as? Int == 2)  // Early write replaces the trailer.
         #expect(peer.events("pointer").count == 1)
         #expect(peer.events("error").isEmpty)
         session.disconnect()
@@ -46,7 +48,9 @@ import VNCSession
     let frames = MarkerFrames()
     let pins = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     defer { try? FileManager.default.removeItem(at: pins) }
-    let session = VNCSession(configuration: .init(host: "127.0.0.1", port: peer.port, username: "", desktopSize: .init(width: 16, height: 16)), frameSink: frames, certificateStoreURL: pins)
+    let session = VNCSession(
+        configuration: .init(host: "127.0.0.1", port: peer.port, username: "", desktopSize: .init(width: 16, height: 16)), frameSink: frames,
+        certificateStoreURL: pins)
     defer { session.disconnect() }
     session.connect()
     _ = try await peer.wait("response_done", count: 3)
@@ -56,12 +60,12 @@ import VNCSession
     let headers = peer.events("response_header")
     let interval = try #require(headers[1]["at_us"] as? Int) - #require(headers[0]["at_us"] as? Int)
     print("Early request preparation overlap start_to_start_us=\(interval) wait_us=200000 transfer_us=300000")
-    #expect(interval < 450_000) // Secondary bound: max(wait, transfer), rather than their sum.
+    #expect(interval < 450_000)  // Secondary bound: max(wait, transfer), rather than their sum.
     let deadline = ContinuousClock.now.advanced(by: .seconds(1))
     while frames.values.count < 4, ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(5)) }
     #expect(frames.values.count == 4)
     _ = try await peer.wait("request", count: 5)
-    try await Task.sleep(for: .milliseconds(150)) // Peer deliberately defers unchanged damage.
+    try await Task.sleep(for: .milliseconds(150))  // Peer deliberately defers unchanged damage.
     #expect(peer.events("request").count == 5)
     #expect(peer.events("error").isEmpty)
 }
@@ -70,7 +74,7 @@ private final class EdgeFrames: FrameSink, @unchecked Sendable {
     private let lock = NSLock()
     private var records: [(DesktopSize, UInt8)] = []
     func consume(_ frame: BorrowedFrame) {
-        let edge = frame.pixels.load(fromByteOffset: (frame.height-1)*frame.stride + (frame.width-1)*4, as: UInt8.self)
+        let edge = frame.pixels.load(fromByteOffset: (frame.height - 1) * frame.stride + (frame.width - 1) * 4, as: UInt8.self)
         lock.withLock { records.append((.init(width: frame.width, height: frame.height), edge)) }
     }
     var last: (DesktopSize, UInt8)? { lock.withLock { records.last } }
@@ -83,7 +87,9 @@ private final class EdgeFrames: FrameSink, @unchecked Sendable {
         let frames = EdgeFrames()
         let pins = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: pins) }
-        let session = VNCSession(configuration: .init(host: "127.0.0.1", port: peer.port, username: "", desktopSize: .init(width: 16, height: 16)), frameSink: frames, certificateStoreURL: pins)
+        let session = VNCSession(
+            configuration: .init(host: "127.0.0.1", port: peer.port, username: "", desktopSize: .init(width: 16, height: 16)), frameSink: frames,
+            certificateStoreURL: pins)
         defer { session.disconnect() }
         session.connect()
         _ = try await peer.wait("request", count: 2)
@@ -97,7 +103,7 @@ private final class EdgeFrames: FrameSink, @unchecked Sendable {
             let deadline = ContinuousClock.now.advanced(by: .seconds(1))
             while frames.last?.0 != .init(width: 17, height: 17), ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(5)) }
             #expect(frames.last?.0 == .init(width: 17, height: 17))
-            #expect(frames.last?.1 == 7) // The newly added edge was actually decoded.
+            #expect(frames.last?.1 == 7)  // The newly added edge was actually decoded.
         }
         try await Task.sleep(for: .milliseconds(80))
         try peer.command("counts")
@@ -115,7 +121,9 @@ private final class EdgeFrames: FrameSink, @unchecked Sendable {
         let frames = MarkerFrames()
         let pins = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: pins) }
-        let session = VNCSession(configuration: .init(host: "127.0.0.1", port: peer.port, username: "", desktopSize: .init(width: 16, height: 16)), frameSink: frames, certificateStoreURL: pins)
+        let session = VNCSession(
+            configuration: .init(host: "127.0.0.1", port: peer.port, username: "", desktopSize: .init(width: 16, height: 16)), frameSink: frames,
+            certificateStoreURL: pins)
         defer { session.disconnect() }
         session.connect()
         _ = try await peer.wait("request", count: 2)
@@ -123,7 +131,7 @@ private final class EdgeFrames: FrameSink, @unchecked Sendable {
         session.setDisplayUpdatesEnabled(true)
         // Neither peer sends incremental damage until explicitly instructed.
         _ = try await peer.wait("request", count: 4)
-        #expect(frames.values == [1, 1]) // A fresh revision, despite unchanged pixels.
+        #expect(frames.values == [1, 1])  // A fresh revision, despite unchanged pixels.
         try peer.command("damage")
         _ = try await peer.wait("request", count: 5)
         #expect(frames.values == [1, 1, 3])
@@ -141,12 +149,14 @@ private final class EdgeFrames: FrameSink, @unchecked Sendable {
         defer { peer.stop() }
         let pins = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: pins) }
-        let session = VNCSession(configuration: .init(host: "127.0.0.1", port: peer.port, username: "", desktopSize: .init(width: 16, height: 16)), frameSink: MarkerFrames(), certificateStoreURL: pins)
+        let session = VNCSession(
+            configuration: .init(host: "127.0.0.1", port: peer.port, username: "", desktopSize: .init(width: 16, height: 16)), frameSink: MarkerFrames(),
+            certificateStoreURL: pins)
         defer { session.disconnect() }
         session.connect()
         _ = try await peer.wait("request", count: 2)
         try peer.command(cancelled ? "start" : "invalid")
-        _ = try await peer.wait("request", count: 3) // Sent before the later failure/stop.
+        _ = try await peer.wait("request", count: 3)  // Sent before the later failure/stop.
         if cancelled { session.disconnect() }
         for await _ in session.events {}
         try await Task.sleep(for: .milliseconds(50))

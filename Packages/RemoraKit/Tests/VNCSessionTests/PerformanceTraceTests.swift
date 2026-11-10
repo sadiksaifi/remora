@@ -1,8 +1,9 @@
 import Foundation
 import OSLog
-import os
 import RemoraCore
 import Testing
+import os
+
 @testable import VNCSession
 
 /// Public protocol fixture used by the external xctrace verifier. OSLogStore
@@ -16,7 +17,9 @@ import Testing
     let frames = MarkerFrames()
     let pins = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     defer { try? FileManager.default.removeItem(at: pins) }
-    let session = VNCSession(configuration: .init(host: "127.0.0.1", port: peer.port, username: "", desktopSize: .init(width: 32, height: 16)), frameSink: frames, certificateStoreURL: pins)
+    let session = VNCSession(
+        configuration: .init(host: "127.0.0.1", port: peer.port, username: "", desktopSize: .init(width: 32, height: 16)), frameSink: frames,
+        certificateStoreURL: pins)
     defer { session.disconnect() }
     session.connect()
     _ = try await peer.wait("request", count: 3)
@@ -35,11 +38,14 @@ import Testing
     #expect(await agent.finish())
     let key = try await peer.wait("key", count: 2)
     let body = try await peer.wait("body_done")
-    #expect(try #require(key["ms"] as? Int) < #require(body["ms"] as? Int)-200)
+    #expect(try #require(key["ms"] as? Int) < #require(body["ms"] as? Int) - 200)
     #expect(peer.events("pointer").count == 1)
     var terminal = false
     for await event in session.events {
-        if case .stateChanged(.disconnected) = event { terminal = true; break }
+        if case .stateChanged(.disconnected) = event {
+            terminal = true
+            break
+        }
     }
     #expect(terminal)
     #expect(frames.values.count == 2)

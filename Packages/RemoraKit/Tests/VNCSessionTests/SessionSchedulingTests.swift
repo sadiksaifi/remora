@@ -2,6 +2,7 @@ import Foundation
 import OSLog
 import RemoraCore
 import Testing
+
 @testable import VNCSession
 
 /// A real network peer with numeric reports. Its reader never waits for frame delivery.
@@ -14,7 +15,8 @@ final class SessionPeer: @unchecked Sendable {
 
     init(arguments: [String] = []) throws {
         process.executableURL = URL(fileURLWithPath: "/usr/bin/python3")
-        process.arguments = ["-u", try #require(Bundle.module.url(forResource: "session_peer", withExtension: "py", subdirectory: "Fixtures")).path] + arguments
+        process.arguments =
+            ["-u", try #require(Bundle.module.url(forResource: "session_peer", withExtension: "py", subdirectory: "Fixtures")).path] + arguments
         let output = Pipe()
         process.standardInput = input
         process.standardOutput = output
@@ -39,7 +41,7 @@ final class SessionPeer: @unchecked Sendable {
     func wait(_ event: String, count: Int = 1) async throws -> [String: Any] {
         let deadline = ContinuousClock.now.advanced(by: .seconds(4))
         while ContinuousClock.now < deadline {
-            if let result = events(event).dropFirst(count-1).first { return result }
+            if let result = events(event).dropFirst(count - 1).first { return result }
             try await Task.sleep(for: .milliseconds(5))
         }
         throw PeerTimeout()
@@ -49,7 +51,12 @@ final class SessionPeer: @unchecked Sendable {
         let deadline = ContinuousClock.now.advanced(by: .seconds(1))
         while events("reset").isEmpty && ContinuousClock.now < deadline { Thread.sleep(forTimeInterval: 0.001) }
     }
-    func stop() { if process.isRunning { process.terminate(); process.waitUntilExit() } }
+    func stop() {
+        if process.isRunning {
+            process.terminate()
+            process.waitUntilExit()
+        }
+    }
     struct PeerTimeout: Error {}
 }
 final class MarkerFrames: FrameSink, @unchecked Sendable {
@@ -65,9 +72,11 @@ final class MarkerFrames: FrameSink, @unchecked Sendable {
     let frames = MarkerFrames()
     let pins = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     defer { try? FileManager.default.removeItem(at: pins) }
-    let session = VNCSession(configuration: .init(host: "127.0.0.1", port: peer.port, username: "", desktopSize: .init(width: 16, height: 16)), frameSink: frames, certificateStoreURL: pins)
+    let session = VNCSession(
+        configuration: .init(host: "127.0.0.1", port: peer.port, username: "", desktopSize: .init(width: 16, height: 16)), frameSink: frames,
+        certificateStoreURL: pins)
     defer { session.disconnect() }
-    session.setDisplayUpdatesEnabled(true) // Startup owns its one full request.
+    session.setDisplayUpdatesEnabled(true)  // Startup owns its one full request.
     session.connect()
     _ = try await peer.wait("request", count: 2)
     #expect(frames.values == [1])
@@ -80,7 +89,7 @@ final class MarkerFrames: FrameSink, @unchecked Sendable {
     #expect(repeated["full"] as? Int == 1)
     session.setDisplayUpdatesEnabled(false)
     session.setDisplayUpdatesEnabled(false)
-    session.setDisplayUpdatesEnabled(true) // Off/on coalesced before the worker runs.
+    session.setDisplayUpdatesEnabled(true)  // Off/on coalesced before the worker runs.
     try await Task.sleep(for: .milliseconds(80))
     try peer.command("counts")
     let resumed = try await peer.wait("counts", count: 2)
@@ -94,7 +103,6 @@ final class MarkerFrames: FrameSink, @unchecked Sendable {
     #expect((resumed["incremental"] as? Int ?? 0) > 0)
 }
 
-
 @Test @MainActor func vncInputReachesTheWireBeforeAnIncompleteFrameFinishes() async throws {
     for mode in ["paced-small", "paced-large", "unpaced"] {
         let peer = try SessionPeer(arguments: [mode])
@@ -102,7 +110,9 @@ final class MarkerFrames: FrameSink, @unchecked Sendable {
         let frames = MarkerFrames()
         let pins = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: pins) }
-        let session = VNCSession(configuration: .init(host: "127.0.0.1", port: peer.port, username: "", desktopSize: .init(width: 16, height: 16)), frameSink: frames, certificateStoreURL: pins)
+        let session = VNCSession(
+            configuration: .init(host: "127.0.0.1", port: peer.port, username: "", desktopSize: .init(width: 16, height: 16)), frameSink: frames,
+            certificateStoreURL: pins)
         defer { session.disconnect() }
         session.connect()
         _ = try await peer.wait("request")
@@ -113,10 +123,11 @@ final class MarkerFrames: FrameSink, @unchecked Sendable {
             session.sendPointer(position: .init(x: UInt16(index % 16), y: UInt16(index / 16)), buttons: [])
         }
         _ = try await peer.wait("pointer", count: 64)
-        #expect(peer.events("pointer").prefix(64).enumerated().allSatisfy { index, event in
-            event["x"] as? Int == index % 16 && event["y"] as? Int == index / 16
-        })
-        session.sendKey(.init(keyCode: 56, isDown: true)) // Human Shift owns the wire key.
+        #expect(
+            peer.events("pointer").prefix(64).enumerated().allSatisfy { index, event in
+                event["x"] as? Int == index % 16 && event["y"] as? Int == index / 16
+            })
+        session.sendKey(.init(keyCode: 56, isDown: true))  // Human Shift owns the wire key.
         let agent = try #require(session.beginAgentInput())
         try await agent.send(.key(try PhysicalKey.chord("ShiftLeft")[0], down: true), deadline: .now.advanced(by: .seconds(3)))
         agent.cancel()
@@ -141,11 +152,10 @@ final class MarkerFrames: FrameSink, @unchecked Sendable {
         #expect(peer.events("key").allSatisfy { $0["symbol"] as? Int == 65505 })
         #expect(peer.events("key").last?["down"] as? Int == 0)
         _ = try await peer.wait("pointer", count: 66)
-        #expect(peer.events("pointer").count == 66) // 64 events plus agent and human release.
+        #expect(peer.events("pointer").count == 66)  // 64 events plus agent and human release.
         #expect(peer.events("error").isEmpty)
     }
 }
-
 
 @Test @MainActor func vncInputWriteFailureDuringAFrameKeepsItsOwnFailureReason() async throws {
     for mode in ["paced-small", "paced-large"] {
@@ -154,13 +164,20 @@ final class MarkerFrames: FrameSink, @unchecked Sendable {
         let frames = MarkerFrames()
         let pins = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: pins) }
-        let session = VNCSession(configuration: .init(host: "127.0.0.1", port: peer.port, username: "", desktopSize: .init(width: 16, height: 16)), frameSink: frames, inputFeedback: { _, _ in
-            // Reset at a real acknowledged write boundary. The next queued
-            // write fails while the same worker is still inside the frame read.
-            peer.resetAndWait()
-        }, certificateStoreURL: pins)
+        let session = VNCSession(
+            configuration: .init(host: "127.0.0.1", port: peer.port, username: "", desktopSize: .init(width: 16, height: 16)), frameSink: frames,
+            inputFeedback: { _, _ in
+                // Reset at a real acknowledged write boundary. The next queued
+                // write fails while the same worker is still inside the frame read.
+                peer.resetAndWait()
+            }, certificateStoreURL: pins)
         defer { session.disconnect() }
-        let fallback = Task { do { try await Task.sleep(for: .seconds(3)); session.disconnect() } catch {} }
+        let fallback = Task {
+            do {
+                try await Task.sleep(for: .seconds(3))
+                session.disconnect()
+            } catch {}
+        }
         defer { fallback.cancel() }
         session.connect()
         _ = try await peer.wait("request")
@@ -179,7 +196,6 @@ final class MarkerFrames: FrameSink, @unchecked Sendable {
     }
 }
 
-
 @Test @MainActor func vncSuccessfulInReadInputPreservesTheLaterReadFailureContext() async throws {
     let started = Date()
     let peer = try SessionPeer(arguments: ["paced-small"])
@@ -187,7 +203,9 @@ final class MarkerFrames: FrameSink, @unchecked Sendable {
     let frames = MarkerFrames()
     let pins = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     defer { try? FileManager.default.removeItem(at: pins) }
-    let session = VNCSession(configuration: .init(host: "127.0.0.1", port: peer.port, username: "", desktopSize: .init(width: 16, height: 16)), frameSink: frames, certificateStoreURL: pins)
+    let session = VNCSession(
+        configuration: .init(host: "127.0.0.1", port: peer.port, username: "", desktopSize: .init(width: 16, height: 16)), frameSink: frames,
+        certificateStoreURL: pins)
     defer { session.disconnect() }
     session.connect()
     _ = try await peer.wait("request")

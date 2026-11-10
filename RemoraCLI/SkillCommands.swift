@@ -11,7 +11,8 @@ enum SkillAgent: String, CaseIterable, ExpressibleByArgument {
 }
 
 struct SkillCommand: ParsableCommand {
-    static let configuration = CommandConfiguration(commandName: "skill", abstract: "Link the bundled agent skill into AI agents' skills folders.",
+    static let configuration = CommandConfiguration(
+        commandName: "skill", abstract: "Link the bundled agent skill into AI agents' skills folders.",
         subcommands: [Path.self, Install.self, Uninstall.self])
 
     static var skill: AgentSkill { AgentSkill(app: ApplicationClient.bundleURL) }
@@ -61,12 +62,17 @@ struct SkillCommand: ParsableCommand {
                     }
                 } catch { throw ControlFailure(.ioFailed, error.localizedDescription) }
                 results.append(.object(["agent": .string(name), "path": .string(link.link.path), "state": .string(link.state.rawValue)]))
-                if !options.json { print("\(name): \(link.state == .conflict ? "in use by another skill" : link.state == .notInstalled ? "not installed" : "installed") at \(link.displayPath)") }
+                if !options.json {
+                    print(
+                        "\(name): \(link.state == .conflict ? "in use by another skill" : link.state == .notInstalled ? "not installed" : "installed") at \(link.displayPath)"
+                    )
+                }
             }
             let inUse = links.filter { $0.link.state == .conflict }.map(\.link.displayPath)
             guard inUse.isEmpty else {
-                throw ControlFailure(.destinationExists, "Another skill is in use at \(inUse.joined(separator: ", ")). Remora left it unchanged.",
-                                     details: .array(results))
+                throw ControlFailure(
+                    .destinationExists, "Another skill is in use at \(inUse.joined(separator: ", ")). Remora left it unchanged.",
+                    details: .array(results))
             }
             if options.json { Output.write(.success(.array(results))) }
         }

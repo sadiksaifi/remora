@@ -20,8 +20,10 @@ public final class RDPSession: AgentInputSession, @unchecked Sendable {
     private let state = StateBox()
 
     @MainActor
-    public init(configuration: SessionConfiguration, frameSink: any FrameSink,
-                inputFeedback: @escaping @Sendable (InputSource, SessionInputFeedback) -> Void = { _, _ in }) {
+    public init(
+        configuration: SessionConfiguration, frameSink: any FrameSink,
+        inputFeedback: @escaping @Sendable (InputSource, SessionInputFeedback) -> Void = { _, _ in }
+    ) {
         self.inputFeedback = inputFeedback
         self.configuration = configuration
         self.frameSink = frameSink
@@ -78,7 +80,8 @@ public final class RDPSession: AgentInputSession, @unchecked Sendable {
 
     public func requestResize(_ size: DesktopSize, scale: Double) {
         guard configuration.allowsDynamicResize,
-              let width = UInt32(exactly: size.width), let height = UInt32(exactly: size.height) else { return }
+            let width = UInt32(exactly: size.width), let height = UInt32(exactly: size.height)
+        else { return }
         enqueue { rm_rdp_request_resize($0, width, height, scale) }
     }
 
@@ -178,7 +181,10 @@ public final class RDPSession: AgentInputSession, @unchecked Sendable {
                     if state.cancelled { rm_rdp_abort(handle) }
                 }
                 rm_rdp_run(handle)
-                state.lock.withLock { state.connected = false; state.handle = nil }
+                state.lock.withLock {
+                    state.connected = false
+                    state.handle = nil
+                }
                 // run has stopped all channel workers. No callback can use the Unmanaged
                 // pointer after free. The Thread's strong capture keeps self alive here.
                 rm_rdp_free(handle)
@@ -194,11 +200,14 @@ public final class RDPSession: AgentInputSession, @unchecked Sendable {
         guard let width = UInt32(exactly: size.width), let height = UInt32(exactly: size.height) else {
             return nil
         }
-        let strings = [configuration.host, configuration.username, configuration.domain,
-                       configuration.password, configPath].map { $0.flatMap { strdup($0) } }
+        let strings = [
+            configuration.host, configuration.username, configuration.domain,
+            configuration.password, configPath,
+        ].map { $0.flatMap { strdup($0) } }
         defer { strings.forEach { free($0) } }
         guard strings[0] != nil, strings[1] != nil, strings[2] != nil, strings[4] != nil,
-              configuration.password == nil || strings[3] != nil else { return nil }
+            configuration.password == nil || strings[3] != nil
+        else { return nil }
         var config = RMRDPConfiguration(
             host: UnsafePointer(strings[0]), port: configuration.port,
             username: UnsafePointer(strings[1]), domain: UnsafePointer(strings[2]),
@@ -247,19 +256,22 @@ public final class RDPSession: AgentInputSession, @unchecked Sendable {
             let dirty = UnsafeBufferPointer(start: rectangles, count: count).map {
                 DirtyRectangle(x: Int($0.x), y: Int($0.y), width: Int($0.width), height: Int($0.height))
             }
-            session(user).frameSink.consume(BorrowedFrame(
-                pixels: UnsafeRawPointer(pixels), width: Int(width), height: Int(height),
-                stride: Int(stride), dirtyRectangles: dirty
-            ))
+            session(user).frameSink.consume(
+                BorrowedFrame(
+                    pixels: UnsafeRawPointer(pixels), width: Int(width), height: Int(height),
+                    stride: Int(stride), dirtyRectangles: dirty
+                ))
         }
         callbacks.cursor = { user, kind, pixels, width, height, hotspotX, hotspotY in
             let cursor: RemoteCursor
             switch kind {
             case RMRDP_CURSOR_IMAGE:
                 guard let pixels, width > 0, height > 0,
-                      let x = UInt16(exactly: hotspotX), let y = UInt16(exactly: hotspotY) else { return }
-                cursor = .image(pixels: Data(bytes: pixels, count: Int(width) * Int(height) * 4),
-                                width: Int(width), height: Int(height), hotspot: RemotePoint(x: x, y: y))
+                    let x = UInt16(exactly: hotspotX), let y = UInt16(exactly: hotspotY)
+                else { return }
+                cursor = .image(
+                    pixels: Data(bytes: pixels, count: Int(width) * Int(height) * 4),
+                    width: Int(width), height: Int(height), hotspot: RemotePoint(x: x, y: y))
             case RMRDP_CURSOR_HIDDEN: cursor = .hidden
             default: cursor = .systemDefault
             }
@@ -281,10 +293,14 @@ public final class RDPSession: AgentInputSession, @unchecked Sendable {
         callbacks.credentials = { user, username, domain, rejected, newUsername, newDomain, newPassword in
             let owner = session(user)
             let answer: SessionCredentials? = owner.challenge(cancel: nil) { responder in
-                [.stateChanged(.awaitingCredentials), .credentialsChallenge(CredentialsChallenge(
-                    username: string(username), domain: string(domain),
-                    reason: rejected ? .rejected : .missing, responder: responder
-                ))]
+                [
+                    .stateChanged(.awaitingCredentials),
+                    .credentialsChallenge(
+                        CredentialsChallenge(
+                            username: string(username), domain: string(domain),
+                            reason: rejected ? .rejected : .missing, responder: responder
+                        )),
+                ]
             }
             guard let answer else { return false }
             let u = strdup(answer.username)
@@ -305,12 +321,16 @@ public final class RDPSession: AgentInputSession, @unchecked Sendable {
         callbacks.trust = { user, host, port, subject, issuer, fingerprint, oldFingerprint in
             let owner = session(user)
             let decision: CertificateDecision = owner.challenge(cancel: .reject) { responder in
-                [.stateChanged(.awaitingTrust), .trustChallenge(TrustChallenge(
-                    host: string(host), port: port, subject: string(subject), issuer: string(issuer),
-                    fingerprint: string(fingerprint),
-                    status: oldFingerprint.map { .changed(oldFingerprint: string($0)) } ?? .new,
-                    responder: responder
-                ))]
+                [
+                    .stateChanged(.awaitingTrust),
+                    .trustChallenge(
+                        TrustChallenge(
+                            host: string(host), port: port, subject: string(subject), issuer: string(issuer),
+                            fingerprint: string(fingerprint),
+                            status: oldFingerprint.map { .changed(oldFingerprint: string($0)) } ?? .new,
+                            responder: responder
+                        )),
+                ]
             }
             if decision == .trust { owner.emit(.stateChanged(.connecting)) }
             return decision == .trust

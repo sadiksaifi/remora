@@ -64,9 +64,10 @@ struct ConnectionEditor: View {
         _username = State(initialValue: connection.username)
         _password = State(initialValue: password)
         _domain = State(initialValue: connection.domain ?? "")
-        _resolutionChoice = State(initialValue: ResolutionChoice.allCases.first {
-            $0.resolution == connection.resolution
-        } ?? .custom)
+        _resolutionChoice = State(
+            initialValue: ResolutionChoice.allCases.first {
+                $0.resolution == connection.resolution
+            } ?? .custom)
         if case .fixed(let width, let height) = connection.resolution {
             _customWidth = State(initialValue: String(width))
             _customHeight = State(initialValue: String(height))
@@ -160,10 +161,12 @@ struct ConnectionEditor: View {
                             .foregroundStyle(.secondary)
                             .accessibilityIdentifier("editorPasswordRemoved")
                     } else {
-                        Text(kind == .vnc
-                            ? "Some VNC servers ask only for a password. Remora saves the password in your keychain."
-                            : "Remora saves the password in your keychain.")
-                            .foregroundStyle(.secondary)
+                        Text(
+                            kind == .vnc
+                                ? "Some VNC servers ask only for a password. Remora saves the password in your keychain."
+                                : "Remora saves the password in your keychain."
+                        )
+                        .foregroundStyle(.secondary)
                     }
                 }
                 if kind == .vnc {
@@ -179,10 +182,12 @@ struct ConnectionEditor: View {
                     } header: {
                         Text("Display")
                     } footer: {
-                        Text(vncMode == .apple
-                            ? "Apple mode uses Apple Screen Sharing’s faster, lossy encoding and works only with Macs. Clipboard sharing and display resizing are unavailable."
-                            : "Remora scales the remote screen to fit the window. Servers that allow resizing match the window’s size.")
-                            .foregroundStyle(.secondary)
+                        Text(
+                            vncMode == .apple
+                                ? "Apple mode uses Apple Screen Sharing’s faster, lossy encoding and works only with Macs. Clipboard sharing and display resizing are unavailable."
+                                : "Remora scales the remote screen to fit the window. Servers that allow resizing match the window’s size."
+                        )
+                        .foregroundStyle(.secondary)
                     }
                 } else {
                     Section {
@@ -302,7 +307,8 @@ struct ConnectionEditor: View {
     /// The edited connection, or nil while the host is empty or the address is invalid.
     private var draft: Connection? {
         guard !trimmedHost.isEmpty, hostProblem == nil, let port = parsedPort,
-              let resolution, resolution.isValid else { return nil }
+            let resolution, resolution.isValid
+        else { return nil }
         let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
         let trimmedDomain = domain.trimmingCharacters(in: .whitespacesAndNewlines)
         var connection = original

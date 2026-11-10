@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+
 @testable import RemoraControl
 
 @Test func installRepairsAndUninstallsOnlyItsOwnLink() throws {
@@ -38,8 +39,9 @@ func foreignLinksAreNeverReplacedOrRemoved(destination: String) throws {
     try manager.createDirectory(at: root, withIntermediateDirectories: true)
     defer { try? manager.removeItem(at: root) }
     let target = root.appending(path: destination)
-    let tool = CommandLineTool(target: root.appending(path: "Remora.app/Contents/Helpers/remora"),
-                               link: root.appending(path: "remora"))
+    let tool = CommandLineTool(
+        target: root.appending(path: "Remora.app/Contents/Helpers/remora"),
+        link: root.appending(path: "remora"))
     try manager.createSymbolicLink(at: tool.link, withDestinationURL: target)
 
     // Both a dangling foreign link and a link to an existing foreign helper are conflicts.

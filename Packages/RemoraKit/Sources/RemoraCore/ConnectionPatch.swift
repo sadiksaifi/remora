@@ -12,22 +12,31 @@ public struct ConnectionPatch: Sendable {
     public var kind: Connection.Kind?
     public var vncMode: VNCMode?
 
-    public init(name: String? = nil, host: String? = nil, port: Int? = nil,
-                username: String? = nil, domain: String? = nil, resolution: ConnectionResolution? = nil, kind: Connection.Kind? = nil,
-                vncMode: VNCMode? = nil) {
-        self.name = name; self.host = host; self.port = port
-        self.username = username; self.domain = domain; self.resolution = resolution; self.kind = kind; self.vncMode = vncMode
+    public init(
+        name: String? = nil, host: String? = nil, port: Int? = nil,
+        username: String? = nil, domain: String? = nil, resolution: ConnectionResolution? = nil, kind: Connection.Kind? = nil,
+        vncMode: VNCMode? = nil
+    ) {
+        self.name = name
+        self.host = host
+        self.port = port
+        self.username = username
+        self.domain = domain
+        self.resolution = resolution
+        self.kind = kind
+        self.vncMode = vncMode
     }
 
     public init(from original: Connection, to edited: Connection) {
-        self.init(name: edited.name == original.name ? nil : edited.name,
-                  host: edited.host == original.host ? nil : edited.host,
-                  port: edited.port == original.port ? nil : edited.port,
-                  username: edited.username == original.username ? nil : edited.username,
-                  domain: edited.domain == original.domain ? nil : edited.domain ?? "",
-                  resolution: edited.resolution == original.resolution ? nil : edited.resolution,
-                  kind: edited.kind == original.kind ? nil : edited.kind,
-                  vncMode: edited.vncMode == original.vncMode ? nil : edited.vncMode)
+        self.init(
+            name: edited.name == original.name ? nil : edited.name,
+            host: edited.host == original.host ? nil : edited.host,
+            port: edited.port == original.port ? nil : edited.port,
+            username: edited.username == original.username ? nil : edited.username,
+            domain: edited.domain == original.domain ? nil : edited.domain ?? "",
+            resolution: edited.resolution == original.resolution ? nil : edited.resolution,
+            kind: edited.kind == original.kind ? nil : edited.kind,
+            vncMode: edited.vncMode == original.vncMode ? nil : edited.vncMode)
     }
 
     public func applying(to original: Connection) throws -> Connection {

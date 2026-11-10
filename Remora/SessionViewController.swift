@@ -1,7 +1,7 @@
 import AppKit
 import RDPSession
-import RemoraCore
 import RemoraControl
+import RemoraCore
 import SwiftUI
 import VNCSession
 import os
@@ -51,9 +51,8 @@ final class SessionViewController: NSViewController {
     private(set) var remoteClipboard = RemoteClipboard()
 
     private var canSyncMacClipboard: Bool {
-        allowsMacClipboardSync && state == .connected && session?.supportsClipboardSynchronization == true && NSApp.isActive &&
-            view.window?.isKeyWindow == true && view.window?.isVisible == true &&
-            view.window?.isMiniaturized == false && view.window?.firstResponder === desktopView
+        allowsMacClipboardSync && state == .connected && session?.supportsClipboardSynchronization == true && NSApp.isActive && view.window?.isKeyWindow == true
+            && view.window?.isVisible == true && view.window?.isMiniaturized == false && view.window?.firstResponder === desktopView
     }
 
     func offerClipboardText(_ text: String, agent: String?) throws {
@@ -71,7 +70,9 @@ final class SessionViewController: NSViewController {
         case credentials(UUID, CredentialsChallenge)
         case certificate(UUID, TrustChallenge)
         var id: UUID {
-            switch self { case .credentials(let id, _), .certificate(let id, _): id }
+            switch self {
+            case .credentials(let id, _), .certificate(let id, _): id
+            }
         }
     }
     private(set) var pendingPrompt: Prompt? {
@@ -86,7 +87,8 @@ final class SessionViewController: NSViewController {
         commandLine = agent != nil
         startedBy = agent ?? "you"
         if let agent { agentName = agent }
-        attemptResolution = commandLine ? resolution ?? (connection.resolution == .fitToWindow ? .fixed(width: 1920, height: 1080) : connection.resolution) : nil
+        attemptResolution =
+            commandLine ? resolution ?? (connection.resolution == .fitToWindow ? .fixed(width: 1920, height: 1080) : connection.resolution) : nil
     }
 
     func addFrameDemand() {
@@ -103,7 +105,9 @@ final class SessionViewController: NSViewController {
     func resize(_ resolution: ConnectionResolution) throws {
         guard state == .connected else { throw ControlFailure(.notConnected, "The session is not connected.") }
         guard supportsDynamicResize else { throw ControlFailure(.unsupported, "The server does not support dynamic resizing.") }
-        guard case .fixed(let width, let height) = resolution, resolution.isValid else { throw ControlFailure(.invalidArgument, "Resize requires fixed dimensions.") }
+        guard case .fixed(let width, let height) = resolution, resolution.isValid else {
+            throw ControlFailure(.invalidArgument, "Resize requires fixed dimensions.")
+        }
         if let area = session?.maximumResizeArea, UInt64(width) * UInt64(height) > area {
             throw ControlFailure(.unsupported, "The requested desktop exceeds the server's negotiated pixel area.", hint: "Choose a smaller resolution.")
         }
@@ -118,7 +122,10 @@ final class SessionViewController: NSViewController {
             if let answer, remember { try onRememberCredentials(answer) }
             credentials = answer
             // Cancelling keeps the rejection, so the saved password isn't sent next time.
-            if answer != nil { rejectedCredentials = nil; attemptWithholdsRejectedPassword = false }
+            if answer != nil {
+                rejectedCredentials = nil
+                attemptWithholdsRejectedPassword = false
+            }
             cancelChallenge = nil
             dismissChallenge(action: answer == nil ? "cancel" : "connect")
             challenge.responder.respond(answer)
@@ -128,7 +135,6 @@ final class SessionViewController: NSViewController {
             challenge.responder.respond(trust ? .trust : .reject)
         }
     }
-
 
     var inputBackend: (any AgentInputSession)? { session as? any AgentInputSession }
     private(set) var control = SessionControl()
@@ -165,7 +171,10 @@ final class SessionViewController: NSViewController {
     /// The state the tab shows. Setup failures and teardown count as disconnected.
     private(set) var state: SessionState = .connecting {
         didSet {
-            if state != oldValue { onStateChange(state); onControlEvent?("session.state", nil) }
+            if state != oldValue {
+                onStateChange(state)
+                onControlEvent?("session.state", nil)
+            }
             updateDesktopAccessibility()
         }
     }
@@ -204,9 +213,11 @@ final class SessionViewController: NSViewController {
             overlayScale = scale
             refreshOverlaySettings()
         }
-        NotificationCenter.default.addObserver(self, selector: #selector(refreshOverlaySettings),
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(refreshOverlaySettings),
             name: UserDefaults.didChangeNotification, object: nil)
-        NSWorkspace.shared.notificationCenter.addObserver(self, selector: #selector(refreshReduceMotion),
+        NSWorkspace.shared.notificationCenter.addObserver(
+            self, selector: #selector(refreshReduceMotion),
             name: NSWorkspace.accessibilityDisplayOptionsDidChangeNotification, object: nil)
         refreshReduceMotion()
         refreshOverlaySettings()
@@ -431,9 +442,10 @@ final class SessionViewController: NSViewController {
                 )
                 credentials = currentCredentials
             }
-            attemptWithholdsRejectedPassword = rejectedCredentials.map {
-                ($0.username, $0.domain, $0.password) == (currentCredentials.username, currentCredentials.domain, currentCredentials.password)
-            } ?? false
+            attemptWithholdsRejectedPassword =
+                rejectedCredentials.map {
+                    ($0.username, $0.domain, $0.password) == (currentCredentials.username, currentCredentials.domain, currentCredentials.password)
+                } ?? false
             let renderer = try FrameRenderer()
             self.renderer = renderer
             view.window?.contentView?.layoutSubtreeIfNeeded()
@@ -447,7 +459,8 @@ final class SessionViewController: NSViewController {
             switch resolution {
             case .fitToWindow:
                 // Hidden tabs start at 1920x1080 until a visible window can supply its size.
-                desktopSize = view.window != nil && points.width > 0 && points.height > 0
+                desktopSize =
+                    view.window != nil && points.width > 0 && points.height > 0
                     ? DesktopSize(width: Int(points.width * backingScale), height: Int(points.height * backingScale))
                     : DesktopSize(width: 1920, height: 1080)
                 scaleFactor = view.window == nil ? 1 : backingScale
@@ -472,10 +485,11 @@ final class SessionViewController: NSViewController {
             let inputFeedback: @Sendable (InputSource, SessionInputFeedback) -> Void = { source, event in
                 inputOverlays.receive(source, event)
             }
-            let session: any RemoteSession = switch connection.kind {
-            case .rdp: RDPSession(configuration: configuration, frameSink: renderer, inputFeedback: inputFeedback)
-            case .vnc: VNCSession(configuration: configuration, frameSink: renderer, inputFeedback: inputFeedback)
-            }
+            let session: any RemoteSession =
+                switch connection.kind {
+                case .rdp: RDPSession(configuration: configuration, frameSink: renderer, inputFeedback: inputFeedback)
+                case .vnc: VNCSession(configuration: configuration, frameSink: renderer, inputFeedback: inputFeedback)
+                }
             let desktopView = RemoteDesktopView(renderer: renderer)
             desktopView.allowsHumanInput = control.allowsHumanInput
             desktopView.onHumanInput = { [weak self] kind in self?.control.record(kind) }
@@ -557,7 +571,8 @@ final class SessionViewController: NSViewController {
                 if let window = view.window, window.firstResponder === desktopView {
                     window.makeFirstResponder(nil)
                 }
-                if case .reconnecting = previous {} else {
+                if case .reconnecting = previous {
+                } else {
                     announce("Reconnecting to “\(connection.name)”, attempt \(attempt) of \(SessionStatusView.reconnectAttemptLimit)")
                 }
                 overlays?.reconnecting(attempt: attempt)
@@ -591,9 +606,11 @@ final class SessionViewController: NSViewController {
             desktopView.apply(cursor: cursor)
             updateOverlayCursor(cursor)
         case .credentialsChallenge(let reported):
-            let challenge = reported.reason == .missing && attemptWithholdsRejectedPassword
-                ? CredentialsChallenge(username: reported.username, domain: reported.domain, reason: .rejected,
-                                       responder: reported.responder, fields: reported.fields)
+            let challenge =
+                reported.reason == .missing && attemptWithholdsRejectedPassword
+                ? CredentialsChallenge(
+                    username: reported.username, domain: reported.domain, reason: .rejected,
+                    responder: reported.responder, fields: reported.fields)
                 : reported
             dismissChallenge()
             credentialDraft = SessionCredentialDraft(challenge: challenge, password: credentials?.password ?? "")
@@ -644,12 +661,15 @@ final class SessionViewController: NSViewController {
                 try? respondToPrompt(promptID, credentials: nil)
             },
             onConnect: { [weak self] answer, remember in
-                guard let self else { challenge.responder.respond(nil); return }
+                guard let self else {
+                    challenge.responder.respond(nil)
+                    return
+                }
                 guard let promptID, pendingPrompt?.id == promptID else { return }
-                do { try respondToPrompt(promptID, credentials: answer, remember: remember) }
-                catch {
-                    NSApplication.shared.presentError(error, modalFor: self.sheet ?? window, delegate: nil,
-                                                      didPresent: nil, contextInfo: nil)
+                do { try respondToPrompt(promptID, credentials: answer, remember: remember) } catch {
+                    NSApplication.shared.presentError(
+                        error, modalFor: self.sheet ?? window, delegate: nil,
+                        didPresent: nil, contextInfo: nil)
                 }
             }
         )
@@ -662,7 +682,8 @@ final class SessionViewController: NSViewController {
     }
 
     private func showTrust(_ challenge: TrustChallenge, on window: NSWindow) {
-        let address = Int(challenge.port) == attemptConnection.defaultPort
+        let address =
+            Int(challenge.port) == attemptConnection.defaultPort
             ? challenge.host : "\(challenge.host):\(challenge.port)"
         let alert = NSAlert()
         var details = [("Subject", challenge.subject), ("Issuer", challenge.issuer), ("SHA-256", challenge.fingerprint)]
@@ -706,7 +727,8 @@ final class SessionViewController: NSViewController {
             title.font = .systemFont(ofSize: NSFont.smallSystemFontSize, weight: .semibold)
             title.textColor = .secondaryLabelColor
             let field = NSTextField(wrappingLabelWithString: value)
-            field.font = label.hasSuffix("SHA-256")
+            field.font =
+                label.hasSuffix("SHA-256")
                 ? .monospacedSystemFont(ofSize: NSFont.smallSystemFontSize, weight: .regular)
                 : .systemFont(ofSize: NSFont.smallSystemFontSize)
             field.lineBreakMode = .byCharWrapping
@@ -731,8 +753,12 @@ final class SessionViewController: NSViewController {
             pendingPrompt = nil
             credentialDraft = nil
             onPromptResolved(prompt.id)
-            onControlEvent?("prompt.resolved", .object(["prompt": .string(prompt.id.uuidString),
-                "session": .string(attemptID.uuidString), "action": .string(action)]))
+            onControlEvent?(
+                "prompt.resolved",
+                .object([
+                    "prompt": .string(prompt.id.uuidString),
+                    "session": .string(attemptID.uuidString), "action": .string(action),
+                ]))
         }
         let cancel = cancelChallenge
         cancelChallenge = nil
@@ -792,8 +818,9 @@ final class SessionViewController: NSViewController {
     }
 
     private func announce(_ message: String) {
-        NSAccessibility.post(element: view, notification: .announcementRequested,
-                             userInfo: [.announcement: message, .priority: NSAccessibilityPriorityLevel.high.rawValue])
+        NSAccessibility.post(
+            element: view, notification: .announcementRequested,
+            userInfo: [.announcement: message, .priority: NSAccessibilityPriorityLevel.high.rawValue])
     }
 
     /// The desktop's accessibility value: session status, keyboard capture, and recording.
@@ -858,9 +885,9 @@ private final class SessionContainerView: NSView {
 
 extension SessionViewController {
     func checkAgentInput() throws {
-        do { try control.checkInput() }
-        catch SessionControl.Refusal.userActive {
-            throw ControlFailure(.userActive, "The user has taken control of this session.",
+        do { try control.checkInput() } catch SessionControl.Refusal.userActive {
+            throw ControlFailure(
+                .userActive, "The user has taken control of this session.",
                 hint: "Wait for user.resumed, then take a new screenshot.")
         } catch SessionControl.Refusal.agentStopped {
             throw Self.agentStopped
@@ -871,7 +898,8 @@ extension SessionViewController {
         }
     }
 
-    static let agentStopped = ControlFailure(.agentStopped, "The user stopped agent control of this session.",
+    static let agentStopped = ControlFailure(
+        .agentStopped, "The user stopped agent control of this session.",
         hint: "End the task. Only the user can resume agent control, from Remora.")
 
     /// A nil `agent` comes from a request that did not name its program.
@@ -883,7 +911,8 @@ extension SessionViewController {
     }
 
     @objc private func refreshOverlaySettings() {
-        inputOverlays.configure(showPointerInRecordings: AppSettings.showPointerInRecordings,
+        inputOverlays.configure(
+            showPointerInRecordings: AppSettings.showPointerInRecordings,
             showKeyPresses: AppSettings.showKeyPresses,
             showAgentPointer: AppSettings.showAgentPointer,
             scale: overlayScale, keyPressSize: AppSettings.keyPressSize)
@@ -901,7 +930,10 @@ extension SessionViewController {
     }
 
     private func updateOverlayCursor(_ cursor: RemoteCursor) {
-        if cursor == .hidden { inputOverlays.setCursor(nil, hotspot: .zero); return }
+        if cursor == .hidden {
+            inputOverlays.setCursor(nil, hotspot: .zero)
+            return
+        }
         let native = cursor.cursor(pointsPerPixel: 1)
         inputOverlays.setCursor(native.image.cgImage(forProposedRect: nil, context: nil, hints: nil), hotspot: native.hotSpot)
     }
@@ -911,8 +943,7 @@ extension SessionViewController {
         guard !control.isTransferring else { return }
         Task {
             do {
-                if control.canResume { try resumeAgentControl() }
-                else { try await handoverAgentControl(.takeOver) }
+                if control.canResume { try resumeAgentControl() } else { try await handoverAgentControl(.takeOver) }
             } catch { NSApp.presentError(error) }
         }
     }
@@ -928,12 +959,15 @@ extension SessionViewController {
         guard control.beginHandover(kind, frame: frameRevision) else { return }
         inputGeometryRevision += 1
         applyControl()
-        let failure = switch kind {
-        case .takeOver: ControlFailure(.userActive, "The user has taken control of this session.",
-            hint: "Wait for user.resumed, then take a new screenshot.")
-        case .stop: Self.agentStopped
-        case .release: ControlFailure(.cancelled, "Agent control was released.")
-        }
+        let failure =
+            switch kind {
+            case .takeOver:
+                ControlFailure(
+                    .userActive, "The user has taken control of this session.",
+                    hint: "Wait for user.resumed, then take a new screenshot.")
+            case .stop: Self.agentStopped
+            case .release: ControlFailure(.cancelled, "Agent control was released.")
+            }
         cancelAgentInput(failure)
         // The executor owns finish(). A failed release closes the transport, and a
         // recovered reconnect releases every source before new input, so neither
@@ -944,9 +978,12 @@ extension SessionViewController {
         }
         control.completeHandover()
         applyControl()
-        onControlEvent?(kind == .takeOver ? "user.tookOver" : "control.stopped", .object([
-            "session": .string(attemptID.uuidString), "by": .string(kind == .release ? "cli" : "ui"), "from": .string(from),
-            "screenStale": .bool(true)]))
+        onControlEvent?(
+            kind == .takeOver ? "user.tookOver" : "control.stopped",
+            .object([
+                "session": .string(attemptID.uuidString), "by": .string(kind == .release ? "cli" : "ui"), "from": .string(from),
+                "screenStale": .bool(true),
+            ]))
     }
 
     /// Throws `user-active` or `agent-stopped` while the user holds control or is taking it.
@@ -964,11 +1001,16 @@ extension SessionViewController {
         }
         inputGeometryRevision += 1
         applyControl()
-        onControlEvent?("user.resumed", .object([
-            "session": .string(attemptID.uuidString), "by": .string("ui"), "from": .string(from),
-            "counts": .object(["clicks": .number(Double(summary.counts.clicks)),
-                "keys": .number(Double(summary.counts.keys)), "scrolls": .number(Double(summary.counts.scrolls))]),
-            "screenChanged": .bool(summary.screenChanged), "screenStale": .bool(true), "observationRequired": .bool(true)]))
+        onControlEvent?(
+            "user.resumed",
+            .object([
+                "session": .string(attemptID.uuidString), "by": .string("ui"), "from": .string(from),
+                "counts": .object([
+                    "clicks": .number(Double(summary.counts.clicks)),
+                    "keys": .number(Double(summary.counts.keys)), "scrolls": .number(Double(summary.counts.scrolls)),
+                ]),
+                "screenChanged": .bool(summary.screenChanged), "screenStale": .bool(true), "observationRequired": .bool(true),
+            ]))
     }
 
     private func endAgentControl() {

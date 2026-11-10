@@ -1,9 +1,10 @@
-import Testing
-import Foundation
 import AVFoundation
-import ImageIO
 import CoreGraphics
+import Foundation
+import ImageIO
 import Metal
+import Testing
+
 @testable import RemoraCore
 
 private func desktop(width: Int, height: Int, bgra: [UInt8], sink: MetalDesktop) {
@@ -14,8 +15,10 @@ private func desktop(width: Int, height: Int, bgra: [UInt8], sink: MetalDesktop)
         for x in 0..<width { pixels.replaceSubrange((y * stride + x * 4)..<(y * stride + x * 4 + 4), with: bgra) }
     }
     _ = pixels.withUnsafeBytes {
-        try! sink.ingest(BorrowedFrame(pixels: $0.baseAddress!, width: width, height: height, stride: stride,
-                                   dirtyRectangles: [.init(x: 0, y: 0, width: 1, height: 1)]))
+        try! sink.ingest(
+            BorrowedFrame(
+                pixels: $0.baseAddress!, width: width, height: height, stride: stride,
+                dirtyRectangles: [.init(x: 0, y: 0, width: 1, height: 1)]))
     }
     // Destroy the borrowed storage. A later screenshot must retain the whole desktop.
     _ = pixels.withUnsafeMutableBytes { $0.initializeMemory(as: UInt8.self, repeating: 0) }
@@ -34,9 +37,11 @@ private func desktop(width: Int, height: Int, bgra: [UInt8], sink: MetalDesktop)
     #expect(image.height == 6)
     var rgba = [UInt8](repeating: 0, count: 8 * 6 * 4)
     try rgba.withUnsafeMutableBytes {
-        let context = try #require(CGContext(data: $0.baseAddress, width: 8, height: 6, bitsPerComponent: 8,
-                                             bytesPerRow: 32, space: CGColorSpace(name: CGColorSpace.sRGB)!,
-                                             bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+        let context = try #require(
+            CGContext(
+                data: $0.baseAddress, width: 8, height: 6, bitsPerComponent: 8,
+                bytesPerRow: 32, space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
         context.draw(image, in: CGRect(x: 0, y: 0, width: 8, height: 6))
     }
     for offset in stride(from: 0, to: rgba.count, by: 4) {
@@ -46,8 +51,10 @@ private func desktop(width: Int, height: Int, bgra: [UInt8], sink: MetalDesktop)
     var update = [UInt8](repeating: 0, count: 8 * 6 * 4)
     update.replaceSubrange((update.count - 4)..<update.count, with: [201, 31, 17, 0])
     let copied = try update.withUnsafeBytes {
-        try frames.ingest(BorrowedFrame(pixels: $0.baseAddress!, width: 8, height: 6, stride: 32,
-            dirtyRectangles: [.init(x: 7, y: 5, width: 1, height: 1)]))
+        try frames.ingest(
+            BorrowedFrame(
+                pixels: $0.baseAddress!, width: 8, height: 6, stride: 32,
+                dirtyRectangles: [.init(x: 7, y: 5, width: 1, height: 1)]))
     }
     #expect(copied == 4)
     // A failed consumer must still commit its queued upload and return the staging slot.
@@ -105,8 +112,10 @@ private struct RecordingTestDestination: CaptureDestination {
     let frames = try MetalDesktop(device: #require(MTLCreateSystemDefaultDevice()))
     desktop(width: 320, height: 240, bgra: [20, 30, 240, 0], sink: frames)
     let overlays = SessionOverlayState()
-    let cursor = try #require(CGContext(data: nil, width: 32, height: 32, bitsPerComponent: 8,
-        bytesPerRow: 0, space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+    let cursor = try #require(
+        CGContext(
+            data: nil, width: 32, height: 32, bitsPerComponent: 8,
+            bytesPerRow: 0, space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
     cursor.setFillColor(CGColor(srgbRed: 1, green: 0, blue: 1, alpha: 1))
     cursor.fill(CGRect(x: 0, y: 0, width: 32, height: 32))
     overlays.setCursor(cursor.makeImage(), hotspot: CGPoint(x: 16, y: 16))
@@ -124,8 +133,10 @@ private struct RecordingTestDestination: CaptureDestination {
     for index in 0..<40 {
         burst[0] = UInt8(index)
         _ = burst.withUnsafeBytes {
-            try! frames.ingest(BorrowedFrame(pixels: $0.baseAddress!, width: 160, height: 240, stride: 640,
-                                         dirtyRectangles: [.init(x: 0, y: 0, width: index == 0 ? 160 : 1, height: index == 0 ? 80 : 1)]))
+            try! frames.ingest(
+                BorrowedFrame(
+                    pixels: $0.baseAddress!, width: 160, height: 240, stride: 640,
+                    dirtyRectangles: [.init(x: 0, y: 0, width: index == 0 ? 160 : 1, height: index == 0 ? 80 : 1)]))
         }
     }
     try await Task.sleep(for: .milliseconds(520))
@@ -143,9 +154,11 @@ private struct RecordingTestDestination: CaptureDestination {
     #expect(CMFormatDescriptionGetMediaSubType(try #require(formats.first)) == kCMVideoCodecType_HEVC)
     #expect(try await asset.loadTracks(withMediaType: .audio).isEmpty)
     let reader = try AVAssetReader(asset: asset)
-    let output = AVAssetReaderTrackOutput(track: track, outputSettings: [
-        kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA
-    ])
+    let output = AVAssetReaderTrackOutput(
+        track: track,
+        outputSettings: [
+            kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA
+        ])
     reader.add(output)
     #expect(reader.startReading())
     var lastBuffer: CVPixelBuffer?
@@ -233,7 +246,10 @@ private func movieMediaDuration(_ data: Data, range: Range<Int>? = nil) -> Doubl
             return Double(integer(field + 4, bytes: bytes)) / Double(integer(field))
         }
         if ["moov", "trak", "mdia"].contains(type),
-           let duration = movieMediaDuration(data, range: offset + 8..<offset + size) { return duration }
+            let duration = movieMediaDuration(data, range: offset + 8..<offset + size)
+        {
+            return duration
+        }
         offset += size
     }
     return nil
@@ -257,8 +273,10 @@ private func movieMediaDuration(_ data: Data, range: Range<Int>? = nil) -> Doubl
     desktop(width: 640, height: 360, bgra: [80, 80, 80, 0], sink: frames)
     let overlays = SessionOverlayState()
     overlays.configure(showPointerInRecordings: true, showKeyPresses: true, showAgentPointer: true, scale: 1)
-    let cursorContext = try #require(CGContext(data: nil, width: 20, height: 20, bitsPerComponent: 8,
-        bytesPerRow: 0, space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+    let cursorContext = try #require(
+        CGContext(
+            data: nil, width: 20, height: 20, bitsPerComponent: 8,
+            bytesPerRow: 0, space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
     cursorContext.setFillColor(CGColor(srgbRed: 1, green: 0, blue: 1, alpha: 1))
     cursorContext.fill(CGRect(x: 0, y: 0, width: 20, height: 20))
     overlays.setCursor(cursorContext.makeImage(), hotspot: CGPoint(x: 5, y: 7))
@@ -296,7 +314,8 @@ private func movieMediaDuration(_ data: Data, range: Range<Int>? = nil) -> Doubl
     func rgb(_ buffer: CVPixelBuffer, x: Int, y: Int) -> [Int] {
         CVPixelBufferLockBaseAddress(buffer, .readOnly)
         defer { CVPixelBufferUnlockBaseAddress(buffer, .readOnly) }
-        let p = CVPixelBufferGetBaseAddress(buffer)!.assumingMemoryBound(to: UInt8.self)
+        let p =
+            CVPixelBufferGetBaseAddress(buffer)!.assumingMemoryBound(to: UInt8.self)
             + y * CVPixelBufferGetBytesPerRow(buffer) + x * 4
         return [Int(p[2]), Int(p[1]), Int(p[0])]
     }
@@ -350,17 +369,21 @@ private func movieMediaDuration(_ data: Data, range: Range<Int>? = nil) -> Doubl
     let asset = AVURLAsset(url: url)
     let reader = try AVAssetReader(asset: asset)
     let track = try #require(try await asset.loadTracks(withMediaType: .video).first)
-    let output = AVAssetReaderTrackOutput(track: track,
+    let output = AVAssetReaderTrackOutput(
+        track: track,
         outputSettings: [kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA])
     reader.add(output)
     #expect(reader.startReading())
-    var resting: CVPixelBuffer?, pressed: CVPixelBuffer?, human: CVPixelBuffer?
+    var resting: CVPixelBuffer?
+    var pressed: CVPixelBuffer?
+    var human: CVPixelBuffer?
     var centers: [Double] = []
     var count = 0
     func rgb(_ buffer: CVPixelBuffer, _ x: Int, _ y: Int) -> [Int] {
         CVPixelBufferLockBaseAddress(buffer, .readOnly)
         defer { CVPixelBufferUnlockBaseAddress(buffer, .readOnly) }
-        let bytes = CVPixelBufferGetBaseAddress(buffer)!.assumingMemoryBound(to: UInt8.self)
+        let bytes =
+            CVPixelBufferGetBaseAddress(buffer)!.assumingMemoryBound(to: UInt8.self)
             + y * CVPixelBufferGetBytesPerRow(buffer) + x * 4
         return [Int(bytes[2]), Int(bytes[1]), Int(bytes[0])]
     }
@@ -372,10 +395,12 @@ private func movieMediaDuration(_ data: Data, range: Range<Int>? = nil) -> Doubl
             CVPixelBufferLockBaseAddress(buffer, .readOnly)
             let bytes = CVPixelBufferGetBaseAddress(buffer)!.assumingMemoryBound(to: UInt8.self)
             let stride = CVPixelBufferGetBytesPerRow(buffer)
-            var sum = 0.0, pixels = 0.0
+            var sum = 0.0
+            var pixels = 0.0
             for y in 60..<230 {
                 for x in 40..<550 where bytes[y * stride + x * 4 + 2] > 145 {
-                    sum += Double(x); pixels += 1
+                    sum += Double(x)
+                    pixels += 1
                 }
             }
             if pixels > 0 { centers.append(sum / pixels) }
@@ -388,7 +413,8 @@ private func movieMediaDuration(_ data: Data, range: Range<Int>? = nil) -> Doubl
     #expect(count > 30)
     #expect(centers.count > 5)
     #expect((centers.max() ?? 0) - (centers.min() ?? 0) > 200)
-    let rest = try #require(resting), press = try #require(pressed)
+    let rest = try #require(resting)
+    let press = try #require(pressed)
     // The stroke covers the target tip. The fill is the specified premultiplied slate mixture.
     #expect(rgb(rest, 500, 140).allSatisfy { $0 > 145 })
     let fill = rgb(rest, 500 + Int(6 * unit), 140 + Int(6 * unit))

@@ -23,9 +23,11 @@ public final class VNCSession: AgentInputSession, @unchecked Sendable {
     let handshakeAttemptID = UUID().uuidString
 
     @MainActor
-    public init(configuration: SessionConfiguration, frameSink: any FrameSink,
-                inputFeedback: @escaping @Sendable (InputSource, SessionInputFeedback) -> Void = { _, _ in },
-                certificateStoreURL: URL = URL.applicationSupportDirectory.appending(path: "Remora/VNC/certificates", directoryHint: .isDirectory)) {
+    public init(
+        configuration: SessionConfiguration, frameSink: any FrameSink,
+        inputFeedback: @escaping @Sendable (InputSource, SessionInputFeedback) -> Void = { _, _ in },
+        certificateStoreURL: URL = URL.applicationSupportDirectory.appending(path: "Remora/VNC/certificates", directoryHint: .isDirectory)
+    ) {
         self.configuration = configuration
         self.frameSink = frameSink
         self.inputFeedback = inputFeedback
@@ -50,7 +52,10 @@ public final class VNCSession: AgentInputSession, @unchecked Sendable {
                     let expired = state.lock.withLock {
                         !state.ended && state.networkDeadline.map { ContinuousClock.now >= $0 } == true
                     }
-                    if expired { stop(.connectionTimedOut); return }
+                    if expired {
+                        stop(.connectionTimedOut)
+                        return
+                    }
                 }
             }
         }
@@ -66,7 +71,8 @@ public final class VNCSession: AgentInputSession, @unchecked Sendable {
             state.cancelChallenge?()
             if let handle = state.handle { rm_vnc_abort(handle) }
             if !state.started {
-                state.started = true; state.ended = true
+                state.started = true
+                state.ended = true
                 continuation.yield(.stateChanged(.disconnected(reason)))
                 continuation.finish()
             }
@@ -85,7 +91,8 @@ public final class VNCSession: AgentInputSession, @unchecked Sendable {
 
     public func requestResize(_ size: DesktopSize, scale: Double) {
         guard configuration.allowsDynamicResize, (1...16384).contains(size.width), (1...16384).contains(size.height),
-              UInt64(size.width) * UInt64(size.height) <= 67_108_864 else { return }
+            UInt64(size.width) * UInt64(size.height) <= 67_108_864
+        else { return }
         state.lock.withLock {
             if state.connected, !state.stopping, state.resizeSupported { state.resize = size }
         }
@@ -102,7 +109,9 @@ public final class VNCSession: AgentInputSession, @unchecked Sendable {
         }
     }
     public func sendKey(_ key: KeyInput) { enqueue(.humanKey(key)) }
-    public func sendPointer(position: RemotePoint, buttons: PointerButtons) { enqueue(.human(.pointer(position, PointerButtons(rawValue: buttons.rawValue & 7)))) }
+    public func sendPointer(position: RemotePoint, buttons: PointerButtons) {
+        enqueue(.human(.pointer(position, PointerButtons(rawValue: buttons.rawValue & 7))))
+    }
     public func sendWheel(_ wheel: WheelInput, at position: RemotePoint) { enqueue(.humanWheel(wheel, position)) }
     public func synchronize(locks: LockKeys) {
         // RFB has no portable lock-state synchronize message. Caps Lock key
@@ -113,7 +122,10 @@ public final class VNCSession: AgentInputSession, @unchecked Sendable {
 
     public func setLocalClipboard(text: String) {
         guard supportsClipboardSynchronization else { return }
-        guard text.utf8.count <= 1_048_576 else { clipboard(.failed); return }
+        guard text.utf8.count <= 1_048_576 else {
+            clipboard(.failed)
+            return
+        }
         state.lock.withLock { if !state.stopping, !state.ended { state.clipboard = text } }
     }
 
@@ -122,7 +134,8 @@ public final class VNCSession: AgentInputSession, @unchecked Sendable {
             guard state.connected, !state.stopping, state.agent == nil else { return nil }
             state.nextAgent &+= 1
             let id = state.nextAgent
-            state.agent = id; state.agentCancelled = false
+            state.agent = id
+            state.agentCancelled = false
             return Request(session: self, id: id)
         }
     }
@@ -144,7 +157,8 @@ public final class VNCSession: AgentInputSession, @unchecked Sendable {
     private func submit(_ event: AgentInputEvent?, id: UInt64) -> Receipt? {
         state.lock.withLock {
             guard state.connected, !state.stopping, state.agent == id,
-                  event == nil || (!state.agentCancelled && !state.agentPending) else { return nil }
+                event == nil || (!state.agentCancelled && !state.agentPending)
+            else { return nil }
             let receipt = Receipt()
             state.receipts.append(receipt)
             if event != nil { state.agentPending = true }
@@ -171,9 +185,9 @@ public final class VNCSession: AgentInputSession, @unchecked Sendable {
         let cancelled = diagnostic.cancelled || state.lock.withLock { state.reason == .cancelledByUser }
         // Every interpolated value is local numeric state or a random attempt ID.
         // Never route upstream's variadic logs or peer-controlled strings here.
-        let summary = "Handshake attempt=\(handshakeAttemptID) elapsed_ms=\(diagnostic.elapsedMS) connected=\(connected ? 1 : 0) native_error=\(rm_vnc_error(handle)) phase=\(diagnostic.phase) last_success=\(diagnostic.lastSuccess) failure=\(diagnostic.failure) errno=\(diagnostic.systemError) openssl=\(diagnostic.opensslError) server=\(diagnostic.serverMajor).\(diagnostic.serverMinor) negotiated=\(diagnostic.negotiatedMajor).\(diagnostic.negotiatedMinor) offered=\(offered) offered_count=\(diagnostic.offeredCount) selected=\(diagnostic.selected) suboffered=\(suboffered) suboffered_count=\(diagnostic.subofferedCount) subtype=\(diagnostic.subtype) ard_bits=\(diagnostic.ardBits) cancelled=\(cancelled ? 1 : 0)"
-        if connected { log.info("\(summary, privacy: .public)") }
-        else { log.error("\(summary, privacy: .public)") }
+        let summary =
+            "Handshake attempt=\(handshakeAttemptID) elapsed_ms=\(diagnostic.elapsedMS) connected=\(connected ? 1 : 0) native_error=\(rm_vnc_error(handle)) phase=\(diagnostic.phase) last_success=\(diagnostic.lastSuccess) failure=\(diagnostic.failure) errno=\(diagnostic.systemError) openssl=\(diagnostic.opensslError) server=\(diagnostic.serverMajor).\(diagnostic.serverMinor) negotiated=\(diagnostic.negotiatedMajor).\(diagnostic.negotiatedMinor) offered=\(offered) offered_count=\(diagnostic.offeredCount) selected=\(diagnostic.selected) suboffered=\(suboffered) suboffered_count=\(diagnostic.subofferedCount) subtype=\(diagnostic.subtype) ard_bits=\(diagnostic.ardBits) cancelled=\(cancelled ? 1 : 0)"
+        if connected { log.info("\(summary, privacy: .public)") } else { log.error("\(summary, privacy: .public)") }
     }
 
     private func appleRuntimeDetail(_ code: Int32) -> String? {
@@ -194,7 +208,8 @@ public final class VNCSession: AgentInputSession, @unchecked Sendable {
         let diagnostic = rm_vnc_runtime_diagnostic(handle)
         guard diagnostic.failure != 0 else { return }
         // One fixed numeric snapshot. No upstream strings or payloads enter Logger.
-        let summary = "Runtime failure attempt=\(handshakeAttemptID) elapsed_ms=\(diagnostic.elapsedMS) stage=\(diagnostic.stage) failure=\(diagnostic.failure) operation=\(diagnostic.operation) errno=\(diagnostic.systemError) ssl=\(diagnostic.sslError) openssl=\(diagnostic.opensslError) message=\(diagnostic.messageType) rect_index=\(diagnostic.rectIndex) rect_count=\(diagnostic.rectCount) encoding=\(diagnostic.encoding) x=\(diagnostic.x) y=\(diagnostic.y) width=\(diagnostic.width) height=\(diagnostic.height) fb_width=\(diagnostic.framebufferWidth) fb_height=\(diagnostic.framebufferHeight) callbacks=\(diagnostic.callbacks) cancelled=\(diagnostic.cancelled ? 1 : 0)"
+        let summary =
+            "Runtime failure attempt=\(handshakeAttemptID) elapsed_ms=\(diagnostic.elapsedMS) stage=\(diagnostic.stage) failure=\(diagnostic.failure) operation=\(diagnostic.operation) errno=\(diagnostic.systemError) ssl=\(diagnostic.sslError) openssl=\(diagnostic.opensslError) message=\(diagnostic.messageType) rect_index=\(diagnostic.rectIndex) rect_count=\(diagnostic.rectCount) encoding=\(diagnostic.encoding) x=\(diagnostic.x) y=\(diagnostic.y) width=\(diagnostic.width) height=\(diagnostic.height) fb_width=\(diagnostic.framebufferWidth) fb_height=\(diagnostic.framebufferHeight) callbacks=\(diagnostic.callbacks) cancelled=\(diagnostic.cancelled ? 1 : 0)"
         log.error("\(summary, privacy: .public)")
     }
 
@@ -242,8 +257,7 @@ public final class VNCSession: AgentInputSession, @unchecked Sendable {
                 }
                 failed = !accepted
                 if accepted {
-                    if let event { feedback(event, source: .agent) }
-                    else { inputFeedback(.agent, .release) }
+                    if let event { feedback(event, source: .agent) } else { inputFeedback(.agent, .release) }
                 }
                 receipt.resolve(accepted ? nil : .submissionFailed)
                 state.lock.withLock { state.receipts.removeAll { $0 === receipt } }
@@ -262,19 +276,32 @@ public final class VNCSession: AgentInputSession, @unchecked Sendable {
         autoreleasepool {
             var handle: OpaquePointer?
             defer {
-                state.lock.withLock { state.connected = false; state.handle = nil }
-                if let handle { logRuntimeFailure(handle); rm_vnc_free(handle) }
+                state.lock.withLock {
+                    state.connected = false
+                    state.handle = nil
+                }
+                if let handle {
+                    logRuntimeFailure(handle)
+                    rm_vnc_free(handle)
+                }
                 finish()
             }
             do {
-                let pinURL = certificateStoreURL.appendingPathComponent(SHA256.hash(data: Data("\(configuration.host.lowercased()):\(configuration.port)".utf8)).map { String(format: "%02x", $0) }.joined())
+                let pinURL = certificateStoreURL.appendingPathComponent(
+                    SHA256.hash(data: Data("\(configuration.host.lowercased()):\(configuration.port)".utf8)).map { String(format: "%02x", $0) }.joined())
                 let pin: Data?
-                do { pin = try Data(contentsOf: pinURL) }
-                catch let error as CocoaError where error.code == .fileReadNoSuchFile { pin = nil }
+                do { pin = try Data(contentsOf: pinURL) } catch let error as CocoaError where error.code == .fileReadNoSuchFile { pin = nil }
                 if let pin, pin.count != 32 { throw Failure("The saved VNC certificate fingerprint is invalid.") }
-                state.lock.withLock { state.pin = pin; state.pinURL = pinURL }
+                state.lock.withLock {
+                    state.pin = pin
+                    state.pinURL = pinURL
+                }
                 guard !state.lock.withLock({ state.stopping }) else { return }
-                guard let created = configuration.host.withCString({ rm_vnc_create($0, configuration.port, configuration.vncMode == .apple, callbacks(), Unmanaged.passUnretained(self).toOpaque()) }) else {
+                guard
+                    let created = configuration.host.withCString({
+                        rm_vnc_create($0, configuration.port, configuration.vncMode == .apple, callbacks(), Unmanaged.passUnretained(self).toOpaque())
+                    })
+                else {
                     throw Failure("LibVNCClient allocation failed.")
                 }
                 handle = created
@@ -286,27 +313,37 @@ public final class VNCSession: AgentInputSession, @unchecked Sendable {
                 logHandshake(created, connected: connected)
                 guard connected else {
                     let diagnostic = rm_vnc_diagnostic(created)
-                    let reason: DisconnectReason = switch rm_vnc_error(created) {
-                    case 1: .hostNotFound
-                    case 2: .connectionRefused
-                    case 3: .connectionTimedOut
-                    case 4: .authenticationFailed
-                    case 5: .certificateRejected
-                    case 8: .protocolError("The experimental Apple profile requires RFB 003.889, ARD authentication, and a supported shared desktop without session encryption.")
-                    case 9: .protocolError("The Apple desktop update could not be decoded.")
-                    case 10: .protocolError("The experimental Apple profile does not support changing the server desktop size.")
-                    case 7: .protocolError(unsupportedSizeDetail(width: diagnostic.framebufferWidth, height: diagnostic.framebufferHeight))
-                    // Diagnostic failure 2 is the vendor's local security-policy refusal.
-                    default: .protocolError(rm_vnc_diagnostic(created).failure == 2
-                        ? "Remora couldn't negotiate a supported security method with the VNC server."
-                        : "The VNC connection couldn't be set up.")
-                    }
+                    let reason: DisconnectReason =
+                        switch rm_vnc_error(created) {
+                        case 1: .hostNotFound
+                        case 2: .connectionRefused
+                        case 3: .connectionTimedOut
+                        case 4: .authenticationFailed
+                        case 5: .certificateRejected
+                        case 8:
+                            .protocolError(
+                                "The experimental Apple profile requires RFB 003.889, ARD authentication, and a supported shared desktop without session encryption."
+                            )
+                        case 9: .protocolError("The Apple desktop update could not be decoded.")
+                        case 10: .protocolError("The experimental Apple profile does not support changing the server desktop size.")
+                        case 7: .protocolError(unsupportedSizeDetail(width: diagnostic.framebufferWidth, height: diagnostic.framebufferHeight))
+                        // Diagnostic failure 2 is the vendor's local security-policy refusal.
+                        default:
+                            .protocolError(
+                                rm_vnc_diagnostic(created).failure == 2
+                                    ? "Remora couldn't negotiate a supported security method with the VNC server."
+                                    : "The VNC connection couldn't be set up.")
+                        }
                     state.lock.withLock { if state.reason == nil { state.reason = reason } }
                     return
                 }
                 let security = String(cString: rm_vnc_security(created))
                 log.info("Connected using \(security, privacy: .public)")
-                state.lock.withLock { state.connected = true; state.networkDeadline = nil; state.security = security }
+                state.lock.withLock {
+                    state.connected = true
+                    state.networkDeadline = nil
+                    state.security = security
+                }
                 emit(.stateChanged(.connected))
                 clipboard(configuration.vncMode == .apple ? .unavailable : .unknown)
                 if configuration.vncMode == .apple { emit(.cursorChanged(.systemDefault)) }
@@ -315,25 +352,38 @@ public final class VNCSession: AgentInputSession, @unchecked Sendable {
                     guard serviceInput(created, limit: Int.max) else { break }
                     let pending = state.lock.withLock {
                         let pending = (state.clipboard, state.resize, state.refresh, state.displayDemandChanged ? state.displayUpdatesEnabled : nil)
-                        state.clipboard = nil; state.resize = nil; state.refresh = false; state.displayDemandChanged = false
+                        state.clipboard = nil
+                        state.resize = nil
+                        state.refresh = false
+                        state.displayDemandChanged = false
                         return pending
                     }
-                    if let demand = pending.3, !rm_vnc_set_display_demand(created, demand) { throw Failure("The Apple display subscription could not be updated.") }
+                    if let demand = pending.3, !rm_vnc_set_display_demand(created, demand) {
+                        throw Failure("The Apple display subscription could not be updated.")
+                    }
                     if let text = pending.0 {
                         let utf8 = rm_vnc_clipboard_utf8(created)
                         if let data = text.data(using: utf8 ? .utf8 : .isoLatin1, allowLossyConversion: false) {
-                            let accepted = data.withUnsafeBytes { raw in rm_vnc_clipboard(created, raw.baseAddress?.assumingMemoryBound(to: CChar.self), Int32(data.count), utf8) }
+                            let accepted = data.withUnsafeBytes { raw in
+                                rm_vnc_clipboard(created, raw.baseAddress?.assumingMemoryBound(to: CChar.self), Int32(data.count), utf8)
+                            }
                             if !accepted { throw Failure("The VNC clipboard submission failed.") }
                             clipboard(.offered(text))
-                        } else { clipboard(.failed) }
+                        } else {
+                            clipboard(.failed)
+                        }
                     }
-                    if let size = pending.1, !rm_vnc_resize(created, UInt16(size.width), UInt16(size.height)) { throw Failure("The VNC resize submission failed.") }
+                    if let size = pending.1, !rm_vnc_resize(created, UInt16(size.width), UInt16(size.height)) {
+                        throw Failure("The VNC resize submission failed.")
+                    }
                     if pending.2, !rm_vnc_refresh(created) { throw Failure("The VNC framebuffer refresh failed.") }
                     guard rm_vnc_step(created) else {
                         let diagnostic = rm_vnc_runtime_diagnostic(created)
-                        let detail = appleRuntimeDetail(rm_vnc_error(created)) ?? (diagnostic.failure == 18
-                            ? unsupportedSizeDetail(width: diagnostic.framebufferWidth, height: diagnostic.framebufferHeight)
-                            : "The VNC connection closed or a framebuffer read failed.")
+                        let detail =
+                            appleRuntimeDetail(rm_vnc_error(created))
+                            ?? (diagnostic.failure == 18
+                                ? unsupportedSizeDetail(width: diagnostic.framebufferWidth, height: diagnostic.framebufferHeight)
+                                : "The VNC connection closed or a framebuffer read failed.")
                         state.lock.withLock { if state.reason == nil { state.reason = .serverEndedSession(detail) } }
                         break
                     }
@@ -354,16 +404,20 @@ public final class VNCSession: AgentInputSession, @unchecked Sendable {
     private func finish() {
         state.lock.withLock {
             guard !state.ended else { return }
-            state.ended = true; state.connected = false; state.networkDeadline = nil
+            state.ended = true
+            state.connected = false
+            state.networkDeadline = nil
             state.cancelChallenge = nil
-            state.watchdog?.cancel(); state.watchdog = nil
+            state.watchdog?.cancel()
+            state.watchdog = nil
             for receipt in state.receipts { receipt.resolve(.sessionEnded) }
             state.receipts.removeAll()
             state.commands.removeAll()
             continuation.yield(.stateChanged(.disconnected(state.reason)))
             continuation.finish()
         }
-        inputFeedback(.human, .release); inputFeedback(.agent, .release)
+        inputFeedback(.human, .release)
+        inputFeedback(.agent, .release)
     }
 
     private func emit(_ event: SessionEvent) {
@@ -390,8 +444,9 @@ public final class VNCSession: AgentInputSession, @unchecked Sendable {
         let wait = Wait<Answer>()
         let responder = SessionResponder<Answer> { wait.resolve($0) }
         state.lock.withLock {
-            if state.stopping { responder.respond(cancel) }
-            else {
+            if state.stopping {
+                responder.respond(cancel)
+            } else {
                 state.networkDeadline = nil
                 state.cancelChallenge = { responder.respond(cancel) }
                 make(responder).forEach { continuation.yield($0) }
@@ -407,15 +462,24 @@ public final class VNCSession: AgentInputSession, @unchecked Sendable {
 
     private func callbacks() -> RMVNCCallbacks {
         var cb = RMVNCCallbacks()
-        cb.size = { user, width, height, requested in owner(user).emit(.desktopSizeChanged(.init(width: Int(width), height: Int(height)), requested: requested)) }
+        cb.size = { user, width, height, requested in owner(user).emit(.desktopSizeChanged(.init(width: Int(width), height: Int(height)), requested: requested))
+        }
         cb.frame = { user, pixels, width, height, x, y, w, h in
             guard let pixels else { return }
-            owner(user).frameSink.consume(.init(pixels: pixels, width: Int(width), height: Int(height), stride: Int(width)*4,
-                dirtyRectangles: [.init(x: Int(x), y: Int(y), width: Int(w), height: Int(h))]))
+            owner(user).frameSink.consume(
+                .init(
+                    pixels: pixels, width: Int(width), height: Int(height), stride: Int(width) * 4,
+                    dirtyRectangles: [.init(x: Int(x), y: Int(y), width: Int(w), height: Int(h))]))
         }
         cb.cursor = { user, pixels, width, height, x, y in
-            guard width > 0, height > 0, let pixels, let x = UInt16(exactly: x), let y = UInt16(exactly: y) else { owner(user).emit(.cursorChanged(.hidden)); return }
-            owner(user).emit(.cursorChanged(.image(pixels: Data(bytes: pixels, count: Int(width)*Int(height)*4), width: Int(width), height: Int(height), hotspot: .init(x: x, y: y))))
+            guard width > 0, height > 0, let pixels, let x = UInt16(exactly: x), let y = UInt16(exactly: y) else {
+                owner(user).emit(.cursorChanged(.hidden))
+                return
+            }
+            owner(user).emit(
+                .cursorChanged(
+                    .image(pixels: Data(bytes: pixels, count: Int(width) * Int(height) * 4), width: Int(width), height: Int(height), hotspot: .init(x: x, y: y))
+                ))
         }
         cb.clipboard = { user, text, length, utf8 in
             guard let text else { return }
@@ -433,15 +497,29 @@ public final class VNCSession: AgentInputSession, @unchecked Sendable {
                 answer = .init(username: config.username, password: password)
             } else {
                 answer = session.challenge(cancel: nil) { responder in
-                    [.stateChanged(.awaitingCredentials), .credentialsChallenge(.init(username: config.username, domain: "", reason: .missing,
-                        responder: responder, fields: usernameRequired ? .usernamePassword : .password))]
+                    [
+                        .stateChanged(.awaitingCredentials),
+                        .credentialsChallenge(
+                            .init(
+                                username: config.username, domain: "", reason: .missing,
+                                responder: responder, fields: usernameRequired ? .usernamePassword : .password)),
+                    ]
                 }
             }
             // A nil answer is the user's cancellation, not a rejected account.
-            guard let answer else { session.state.lock.withLock { if session.state.reason == nil { session.state.reason = .cancelledByUser } }; return false }
-            let username = strdup(answer.username), password = strdup(answer.password)
-            guard let username, let password else { free(username); free(password); return false }
-            newUsername?.pointee = username; newPassword?.pointee = password
+            guard let answer else {
+                session.state.lock.withLock { if session.state.reason == nil { session.state.reason = .cancelledByUser } }
+                return false
+            }
+            let username = strdup(answer.username)
+            let password = strdup(answer.password)
+            guard let username, let password else {
+                free(username)
+                free(password)
+                return false
+            }
+            newUsername?.pointee = username
+            newPassword?.pointee = password
             session.emit(.stateChanged(.connecting))
             return true
         }
@@ -462,9 +540,14 @@ public final class VNCSession: AgentInputSession, @unchecked Sendable {
             let previous = session.state.lock.withLock { session.state.pin }
             let config = session.configuration
             let accepted: CertificateDecision = session.challenge(cancel: .reject) { responder in
-                [.stateChanged(.awaitingTrust), .trustChallenge(.init(host: config.host, port: config.port,
-                    subject: subject.map { String(cString: $0) } ?? "", issuer: "", fingerprint: fingerprint(pin),
-                    status: previous.map { .changed(oldFingerprint: fingerprint($0)) } ?? .new, responder: responder))]
+                [
+                    .stateChanged(.awaitingTrust),
+                    .trustChallenge(
+                        .init(
+                            host: config.host, port: config.port,
+                            subject: subject.map { String(cString: $0) } ?? "", issuer: "", fingerprint: fingerprint(pin),
+                            status: previous.map { .changed(oldFingerprint: fingerprint($0)) } ?? .new, responder: responder)),
+                ]
             }
             guard accepted == .trust, !session.state.lock.withLock({ session.state.stopping }) else { return false }
             do {
@@ -475,7 +558,9 @@ public final class VNCSession: AgentInputSession, @unchecked Sendable {
                 session.emit(.stateChanged(.connecting))
                 return true
             } catch {
-                session.state.lock.withLock { session.state.reason = .protocolError("Could not save the VNC certificate fingerprint: \(error.localizedDescription)") }
+                session.state.lock.withLock {
+                    session.state.reason = .protocolError("Could not save the VNC certificate fingerprint: \(error.localizedDescription)")
+                }
                 return false
             }
         }
@@ -483,12 +568,15 @@ public final class VNCSession: AgentInputSession, @unchecked Sendable {
     }
 }
 
-private extension VNCSession {
-    enum Command {
-        case humanKey(KeyInput), human(AgentInputEvent), humanWheel(WheelInput, RemotePoint), releaseHuman
+extension VNCSession {
+    fileprivate enum Command {
+        case humanKey(KeyInput)
+        case human(AgentInputEvent)
+        case humanWheel(WheelInput, RemotePoint)
+        case releaseHuman
         case agent(UInt64, AgentInputEvent?, Receipt)
     }
-    final class State: @unchecked Sendable {
+    fileprivate final class State: @unchecked Sendable {
         let lock = NSLock()
         var started = false, ended = false, stopping = false, connected = false, resizeSupported = false
         var handle: OpaquePointer?
@@ -505,7 +593,7 @@ private extension VNCSession {
         var networkDeadline: ContinuousClock.Instant?
         var pin: Data?, pinURL: URL?, security: String?
     }
-    final class Receipt: Sendable {
+    fileprivate final class Receipt: Sendable {
         let lock = NSLock()
         nonisolated(unsafe) var result: Result<Void, AgentInputFailure>?
         func resolve(_ failure: AgentInputFailure?) {
@@ -520,21 +608,32 @@ private extension VNCSession {
             throw AgentInputFailure.timedOut
         }
     }
-    final class Request: AgentInputRequest, Sendable {
+    fileprivate final class Request: AgentInputRequest, Sendable {
         let session: VNCSession
         let id: UInt64
         let lock = NSLock()
         nonisolated(unsafe) var finished = false
-        init(session: VNCSession, id: UInt64) { self.session = session; self.id = id }
+        init(session: VNCSession, id: UInt64) {
+            self.session = session
+            self.id = id
+        }
         func cancel() { session.cancel(id) }
         func send(_ event: AgentInputEvent, deadline: ContinuousClock.Instant) async throws {
             try Task.checkCancellation()
             guard !lock.withLock({ finished }), let receipt = session.submit(event, id: id) else { throw AgentInputFailure.submissionFailed }
-            do { try await receipt.wait(until: deadline) }
-            catch { cancel(); throw error }
+            do { try await receipt.wait(until: deadline) } catch {
+                cancel()
+                throw error
+            }
         }
         @discardableResult func finish() async -> Bool {
-            guard lock.withLock({ if finished { return false }; finished = true; return true }) else { return false }
+            guard
+                lock.withLock({
+                    if finished { return false }
+                    finished = true
+                    return true
+                })
+            else { return false }
             return await Task.detached { [self] in
                 guard let receipt = session.submit(nil, id: id) else { return false }
                 do {
@@ -547,12 +646,15 @@ private extension VNCSession {
             }.value
         }
     }
-    struct Transport: VNCInputTransport {
+    fileprivate struct Transport: VNCInputTransport {
         let handle: OpaquePointer
         func key(_ key: VNCKey, down: Bool) -> Bool { rm_vnc_key(handle, key.keysym, key.code, down) }
         func pointer(_ point: RemotePoint, mask: UInt8) -> Bool { rm_vnc_pointer(handle, point.x, point.y, mask) }
     }
-    struct Failure: LocalizedError { let errorDescription: String?; init(_ text: String) { errorDescription = text } }
+    fileprivate struct Failure: LocalizedError {
+        let errorDescription: String?
+        init(_ text: String) { errorDescription = text }
+    }
 }
 
 private final class Wait<Value: Sendable>: @unchecked Sendable {
@@ -560,12 +662,16 @@ private final class Wait<Value: Sendable>: @unchecked Sendable {
     private var value: Value?
     private var resolved = false
     func resolve(_ answer: Value) {
-        condition.lock(); defer { condition.unlock() }
+        condition.lock()
+        defer { condition.unlock() }
         guard !resolved else { return }
-        value = answer; resolved = true; condition.broadcast()
+        value = answer
+        resolved = true
+        condition.broadcast()
     }
     func answer() -> Value {
-        condition.lock(); defer { condition.unlock() }
+        condition.lock()
+        defer { condition.unlock() }
         while !resolved { condition.wait() }
         return value!
     }

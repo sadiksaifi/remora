@@ -104,14 +104,16 @@ final class ConnectionCellView: NSTableCellView {
             setAccessibilityLabel([connection.name, session.statusTitle.lowercased(), subtitle].joined(separator: ", "))
         } else {
             statusView.isHidden = true
-            detailField.stringValue = connection.lastConnected.map {
-                $0.formatted(Date.RelativeFormatStyle(
-                    allowedFields: [.year, .month, .week, .day],
-                    presentation: .named,
-                    unitsStyle: .wide,
-                    capitalizationContext: .beginningOfSentence
-                ))
-            } ?? ""
+            detailField.stringValue =
+                connection.lastConnected.map {
+                    $0.formatted(
+                        Date.RelativeFormatStyle(
+                            allowedFields: [.year, .month, .week, .day],
+                            presentation: .named,
+                            unitsStyle: .wide,
+                            capitalizationContext: .beginningOfSentence
+                        ))
+                } ?? ""
             actionButton.title = "Connect"
             var label = [connection.name, subtitle]
             if !detailField.stringValue.isEmpty {
@@ -122,10 +124,12 @@ final class ConnectionCellView: NSTableCellView {
         // AppKit's row and cell elements drop identifiers, so the name carries the connection's ID.
         // It also offers the hover button's action, so agents and VoiceOver reach it without a pointer.
         nameField.cell?.setAccessibilityIdentifier("connection-\(connection.id.uuidString)")
-        nameField.cell?.setAccessibilityCustomActions([NSAccessibilityCustomAction(name: actionButton.title) { [weak self] in
-            guard let self, let action = actionButton.action else { return false }
-            return actionButton.sendAction(action, to: actionButton.target)
-        }])
+        nameField.cell?.setAccessibilityCustomActions([
+            NSAccessibilityCustomAction(name: actionButton.title) { [weak self] in
+                guard let self, let action = actionButton.action else { return false }
+                return actionButton.sendAction(action, to: actionButton.target)
+            }
+        ])
         isHovered = hovered
     }
 
@@ -140,15 +144,17 @@ final class ConnectionCellView: NSTableCellView {
     /// The account, the address unless the name already shows it, and the protocol.
     static func subtitle(for connection: Connection) -> String {
         let name = connection.name.trimmingCharacters(in: .whitespacesAndNewlines)
-        let showsAddress = name.caseInsensitiveCompare(connection.host) != .orderedSame
+        let showsAddress =
+            name.caseInsensitiveCompare(connection.host) != .orderedSame
             && name.caseInsensitiveCompare(connection.displayAddress) != .orderedSame
         let address = showsAddress ? connection.displayAddress : (connection.port == connection.defaultPort ? "" : "Port \(connection.port)")
-        let account: String? = switch (connection.username.isEmpty, address.isEmpty) {
-        case (true, true): nil
-        case (true, false): address
-        case (false, true): connection.username
-        case (false, false): showsAddress ? "\(connection.username)@\(address)" : "\(connection.username) · \(address)"
-        }
+        let account: String? =
+            switch (connection.username.isEmpty, address.isEmpty) {
+            case (true, true): nil
+            case (true, false): address
+            case (false, true): connection.username
+            case (false, false): showsAddress ? "\(connection.username)@\(address)" : "\(connection.username) · \(address)"
+            }
         return [account, connection.kind.title].compactMap { $0 }.joined(separator: " · ")
     }
 

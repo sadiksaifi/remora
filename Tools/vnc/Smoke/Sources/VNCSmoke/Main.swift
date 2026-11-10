@@ -1,10 +1,15 @@
-import Foundation
 import Darwin
+import Foundation
 import Metal
 import RemoraCore
 import VNCSession
 
-struct Target: Decodable { let host: String; let port: UInt16; let username: String; let password: String }
+struct Target: Decodable {
+    let host: String
+    let port: UInt16
+    let username: String
+    let password: String
+}
 struct SmokeFailure: Error { let message: String }
 final class Sink: FrameSink, @unchecked Sendable {
     let desktop: MetalDesktop
@@ -15,14 +20,21 @@ final class Sink: FrameSink, @unchecked Sendable {
         guard let device = MTLCreateSystemDefaultDevice() else { throw SmokeFailure(message: "Metal is unavailable") }
         desktop = try MetalDesktop(device: device)
     }
-    func consume(_ frame: BorrowedFrame) { do { _ = try desktop.ingest(frame); lock.withLock { frames += 1 } } catch { lock.withLock { failed = true }; print("INGEST_FAILED \(error)") } }
+    func consume(_ frame: BorrowedFrame) {
+        do {
+            _ = try desktop.ingest(frame)
+            lock.withLock { frames += 1 }
+        } catch {
+            lock.withLock { failed = true }
+            print("INGEST_FAILED \(error)")
+        }
+    }
     var count: Int { lock.withLock { frames } }
     var ingestFailed: Bool { lock.withLock { failed } }
 }
 @main struct Main {
     @MainActor static func main() async {
-        do { try await run() }
-        catch {
+        do { try await run() } catch {
             FileHandle.standardError.write(Data("FAIL \(error)\n".utf8))
             exit(EXIT_FAILURE)
         }
@@ -31,7 +43,9 @@ final class Sink: FrameSink, @unchecked Sendable {
     @MainActor static func run() async throws {
         umask(0o077)
         let args = CommandLine.arguments
-        let modes: Set<String> = ["accept", "reject", "wrong-password", "input", "prompt-cancel", "disconnect", "resize", "clipboard", "pointer", "hidden", "recording", "cursor"]
+        let modes: Set<String> = [
+            "accept", "reject", "wrong-password", "input", "prompt-cancel", "disconnect", "resize", "clipboard", "pointer", "hidden", "recording", "cursor",
+        ]
         guard args.count == 4 || args.count == 5, modes.contains(args[3]) else {
             throw SmokeFailure(message: "Usage: VNCSmoke TARGET_JSON PIN_DIRECTORY \(modes.sorted().joined(separator: "|")) [OUTPUT_PNG_OR_MOV]")
         }
@@ -39,7 +53,8 @@ final class Sink: FrameSink, @unchecked Sendable {
         let mode = args[3]
         guard mode != "recording" || args.count == 5 else { throw SmokeFailure(message: "recording requires an output MOV path") }
         let sink = try Sink()
-        let config = SessionConfiguration(host: target.host, port: target.port, username: target.username,
+        let config = SessionConfiguration(
+            host: target.host, port: target.port, username: target.username,
             password: mode == "wrong-password" ? "deliberately-invalid-vnc-password" : mode == "prompt-cancel" ? nil : target.password,
             desktopSize: .init(width: 1280, height: 800))
         let session = VNCSession(configuration: config, frameSink: sink, certificateStoreURL: URL(fileURLWithPath: args[2], isDirectory: true))
@@ -63,7 +78,12 @@ final class Sink: FrameSink, @unchecked Sendable {
             session.disconnect()
         }
         session.connect()
-        if mode == "disconnect" { Task { try? await Task.sleep(for: .milliseconds(5)); session.disconnect() } }
+        if mode == "disconnect" {
+            Task {
+                try? await Task.sleep(for: .milliseconds(5))
+                session.disconnect()
+            }
+        }
         for await event in session.events {
             switch event {
             case .stateChanged(let state):
@@ -84,14 +104,19 @@ final class Sink: FrameSink, @unchecked Sendable {
                                 try await request.send(.pointer(.init(x: 500, y: 75), []), deadline: deadline)
                                 for scalar in "Remora äöüß €".unicodeScalars { try await request.send(.unicode(scalar), deadline: deadline) }
                                 try await request.send(.key(shift, down: true), deadline: deadline)
-                                session.sendKey(.init(keyCode: 0x38, isDown: true)); session.releaseHumanInput()
+                                session.sendKey(.init(keyCode: 0x38, isDown: true))
+                                session.releaseHumanInput()
                                 try await request.send(.key(a, down: true), deadline: deadline)
                                 try await request.send(.key(a, down: false), deadline: deadline)
                                 try await request.send(.wheel(.init(vertical: -120, horizontal: 120)), deadline: deadline)
                                 request.cancel()
                                 operationPassed = await request.finish()
                                 print("INPUT_RELEASE \(operationPassed)")
-                            } catch { operationFailure = "Input failed: \(error)"; request.cancel(); print("INPUT_RELEASE \(await request.finish())") }
+                            } catch {
+                                operationFailure = "Input failed: \(error)"
+                                request.cancel()
+                                print("INPUT_RELEASE \(await request.finish())")
+                            }
                         }
                         if mode == "resize" {
                             resizeRequestSent = true
@@ -120,7 +145,11 @@ final class Sink: FrameSink, @unchecked Sendable {
                                 }
                                 operationPassed = await request.finish()
                                 print("POINTER_RELEASE \(operationPassed)")
-                            } catch { operationFailure = "Pointer failed: \(error)"; request.cancel(); print("POINTER_RELEASE \(await request.finish())") }
+                            } catch {
+                                operationFailure = "Pointer failed: \(error)"
+                                request.cancel()
+                                print("POINTER_RELEASE \(await request.finish())")
+                            }
                         }
                         if mode == "hidden" {
                             let before = sink.count
@@ -167,8 +196,11 @@ final class Sink: FrameSink, @unchecked Sendable {
             case .credentialsChallenge(let challenge):
                 credentialsSeen = true
                 print("CREDENTIALS \(challenge.fields)")
-                if mode == "prompt-cancel" { challenge.responder.respond(nil) }
-                else { challenge.responder.respond(.init(username: target.username, password: target.password)) }
+                if mode == "prompt-cancel" {
+                    challenge.responder.respond(nil)
+                } else {
+                    challenge.responder.respond(.init(username: target.username, password: target.password))
+                }
             case .desktopSizeChanged(let size, let requested):
                 print("SIZE \(size) REQUESTED \(requested)")
                 if resizeRequestSent, size == .init(width: 1100, height: 720) { resizeOrigin = requested }
@@ -199,7 +231,9 @@ final class Sink: FrameSink, @unchecked Sendable {
         }
         switch mode {
         case "reject":
-            guard trustSeen, !connected, endedReason == .certificateRejected else { throw SmokeFailure(message: "Expected certificate rejection before connecting; use a fresh or mismatched pin directory") }
+            guard trustSeen, !connected, endedReason == .certificateRejected else {
+                throw SmokeFailure(message: "Expected certificate rejection before connecting; use a fresh or mismatched pin directory")
+            }
         case "wrong-password":
             guard !connected, endedReason == .authenticationFailed else { throw SmokeFailure(message: "Expected authentication failure before connecting") }
         case "prompt-cancel":
@@ -208,10 +242,17 @@ final class Sink: FrameSink, @unchecked Sendable {
             guard !connected, endedReason == .cancelledByUser else { throw SmokeFailure(message: "Expected connection cancellation") }
         default:
             guard connected, sink.count > 0 else { throw SmokeFailure(message: "Expected a connected desktop and pixels") }
-            if ["input", "pointer", "clipboard", "hidden", "recording"].contains(mode), !operationPassed { throw SmokeFailure(message: "Operation did not finish successfully") }
+            if ["input", "pointer", "clipboard", "hidden", "recording"].contains(mode), !operationPassed {
+                throw SmokeFailure(message: "Operation did not finish successfully")
+            }
             if mode == "clipboard", !clipboardReceived { throw SmokeFailure(message: "Expected synthetic remote UTF-8 clipboard text") }
             if mode == "cursor", !cursorSeen { throw SmokeFailure(message: "Expected a cursor image") }
-            if mode == "resize", resizeOrigin != false || resizeCapabilityLost || !resizeCapableAtCompletion || sink.desktop.size != .init(width: 1100, height: 720) { throw SmokeFailure(message: "Expected wayvnc's asynchronous 1100x720 geometry, server-reported origin, matching frame, and retained resize capability") }
+            if mode == "resize",
+                resizeOrigin != false || resizeCapabilityLost || !resizeCapableAtCompletion || sink.desktop.size != .init(width: 1100, height: 720)
+            {
+                throw SmokeFailure(
+                    message: "Expected wayvnc's asynchronous 1100x720 geometry, server-reported origin, matching frame, and retained resize capability")
+            }
         }
         print("PASS \(mode)")
     }

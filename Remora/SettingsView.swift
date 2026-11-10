@@ -40,9 +40,9 @@ struct SettingsView: View {
     }
 }
 
-private extension View {
+extension View {
     /// Every pane is a grouped form, 500 pt wide and as tall as its rows.
-    func settingsPane() -> some View {
+    fileprivate func settingsPane() -> some View {
         formStyle(.grouped)
             .scrollDisabled(true)
             .frame(width: 500)
@@ -86,7 +86,9 @@ private struct GeneralPane: View {
             Section("Keyboard") {
                 Toggle(isOn: $captureShortcuts) {
                     Text(Self.captureShortcutsTitle)
-                    Text("While a session tab is active, shortcuts like Command-Tab and Command-Space go to the remote computer. Command-Q, Control-Command-F, and the Control-Option-Command tab and capture shortcuts stay on this Mac.")
+                    Text(
+                        "While a session tab is active, shortcuts like Command-Tab and Command-Space go to the remote computer. Command-Q, Control-Command-F, and the Control-Option-Command tab and capture shortcuts stay on this Mac."
+                    )
                 }
                 // The form shows the label beside the switch; this puts it on the switch itself.
                 .accessibilityLabel(Self.captureShortcutsTitle)
@@ -120,13 +122,18 @@ private struct GeneralPane: View {
                 .accessibilityIdentifier("keyPressSize")
             }
             Section("Screenshots and Recordings") {
-                Picker("Save screenshots and recordings to", selection: Binding(get: { Choice.current }, set: { choice in
-                    switch choice {
-                    case .current: break
-                    case .screenshotLocation: saveLocation = ""
-                    case .other: choosingFolder = true
-                    }
-                })) {
+                Picker(
+                    "Save screenshots and recordings to",
+                    selection: Binding(
+                        get: { Choice.current },
+                        set: { choice in
+                            switch choice {
+                            case .current: break
+                            case .screenshotLocation: saveLocation = ""
+                            case .other: choosingFolder = true
+                            }
+                        })
+                ) {
                     Label(FileManager.default.displayName(atPath: folder.path), systemImage: "folder").tag(Choice.current)
                     Divider()
                     Text("Screenshot location").tag(Choice.screenshotLocation)
@@ -273,7 +280,8 @@ private struct AgentSkillSection: View {
 
     var body: some View {
         Section {
-            LabeledContent {} label: {
+            LabeledContent {
+            } label: {
                 Text("Agent skill")
                 Text("Teaches AI agents to use the remora command.")
             }
