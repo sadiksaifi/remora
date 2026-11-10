@@ -11,7 +11,7 @@ description = "Regenerate Remora.xcodeproj from project.yml."
 run = "xcodegen generate"
 
 [tasks.build]
-description = "Build the Debug app."
+description = "Build the Debug app. Run the engine task once first."
 run = "xcodebuild -project Remora.xcodeproj -scheme Remora -configuration Debug -derivedDataPath build/DerivedData -quiet build"
 
 [tasks.run]
@@ -20,5 +20,5 @@ depends = ["build"]
 run = "open -n build/DerivedData/Build/Products/Debug/Remora.app"
 
 [tasks.test]
-description = "Run the RemoraKit tests. Extra arguments go to swift test, such as --filter."
+description = "Run the RemoraKit tests. Run the engine task once first. Extra arguments go to swift test, such as --filter."
 run = "swift test --package-path Packages/RemoraKit"

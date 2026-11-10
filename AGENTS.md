@@ -11,7 +11,7 @@ A native macOS desktop client for RDP and VNC.
 
 ## Development
 
-- `mise install` installs the pinned tools, and `mise tasks` lists the tasks. Run `mise run engine` once before the first `mise run build` or `mise run test`.
+- Run commands with `mise run`, and before running any command, check the source of truth in `mise.toml`.
 
 ## Agent skill
 
