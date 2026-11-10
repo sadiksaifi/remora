@@ -2,16 +2,16 @@
 cmake = "4.4.5"
 xcodegen = "2.46.0"
 
-[tasks.engine]
-description = "Build the RDP and VNC engines into Vendor/build. Pass --clean to rebuild every stage."
-run = "./Vendor/build-engine.sh"
+[tasks.setup]
+description = "Install the pinned tools and build the RDP and VNC engines into Vendor/build. Run it once after cloning. Pass --clean to rebuild every engine stage."
+run = ["mise install", "./Vendor/build-engine.sh"]
 
 [tasks.generate]
 description = "Regenerate Remora.xcodeproj from project.yml."
 run = "xcodegen generate"
 
 [tasks.build]
-description = "Build the Debug app. Run the engine task once first."
+description = "Build the Debug app. Run the setup task once first."
 run = "xcodebuild -project Remora.xcodeproj -scheme Remora -configuration Debug -derivedDataPath build/DerivedData -quiet build"
 
 [tasks.run]
@@ -20,5 +20,5 @@ depends = ["build"]
 run = "open -n build/DerivedData/Build/Products/Debug/Remora.app"
 
 [tasks.test]
-description = "Run the RemoraKit tests. Run the engine task once first. Extra arguments go to swift test, such as --filter."
+description = "Run the RemoraKit tests. Run the setup task once first. Extra arguments go to swift test, such as --filter."
 run = "swift test --package-path Packages/RemoraKit"
