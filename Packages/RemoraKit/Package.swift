@@ -1,4 +1,4 @@
-// swift-tools-version: 6.0
+// swift-tools-version: 6.2
 import PackageDescription
 
 let package = Package(
@@ -8,7 +8,7 @@ let package = Package(
         .library(name: "RemoraCore", targets: ["RemoraCore"]),
         .library(name: "RemoraControl", targets: ["RemoraControl"]),
         .library(name: "RDPSession", targets: ["RDPSession"]),
-        .library(name: "VNCSession", targets: ["VNCSession"])
+        .library(name: "VNCSession", targets: ["VNCSession"]),
     ],
     dependencies: [
         .package(url: "https://github.com/kishikawakatsumi/KeychainAccess", from: "4.2.2")
@@ -30,7 +30,7 @@ let package = Package(
                 .linkedFramework("CoreServices"),
                 .linkedFramework("VideoToolbox"),
                 .linkedFramework("CoreMedia"),
-                .linkedFramework("CoreVideo")
+                .linkedFramework("CoreVideo"),
             ]
         ),
         .target(name: "RemoraControl"),
@@ -43,7 +43,12 @@ let package = Package(
             name: "RemoraCore",
             dependencies: [.product(name: "KeychainAccess", package: "KeychainAccess")]
         ),
-        .testTarget(name: "RemoraCoreTests", dependencies: ["RemoraCore", "CFreeRDPBridge"], resources: [.copy("CursorReference")])
+        .testTarget(name: "RemoraCoreTests", dependencies: ["RemoraCore", "CFreeRDPBridge"], resources: [.copy("CursorReference")]),
     ],
     swiftLanguageModes: [.v6]
 )
+
+for target in package.targets where target.type != .binary {
+    target.swiftSettings = (target.swiftSettings ?? []) + [.treatAllWarnings(as: .error)]
+    target.cSettings = (target.cSettings ?? []) + [.treatAllWarnings(as: .error)]
+}

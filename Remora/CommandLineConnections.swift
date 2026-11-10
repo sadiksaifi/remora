@@ -5,8 +5,11 @@ import RemoraCore
 extension CommandLineController {
     func resolveConnection(_ target: String) throws -> Connection {
         let matches: [Connection]
-        if let id = UUID(uuidString: target) { matches = connectionStore.connections.filter { $0.id == id } }
-        else { matches = connectionStore.connections.filter { $0.name.caseInsensitiveCompare(target) == .orderedSame } }
+        if let id = UUID(uuidString: target) {
+            matches = connectionStore.connections.filter { $0.id == id }
+        } else {
+            matches = connectionStore.connections.filter { $0.name.caseInsensitiveCompare(target) == .orderedSame }
+        }
         guard let connection = matches.first else { throw ControlFailure(.notFound, "Connection not found.") }
         guard matches.count == 1 else { throw ControlFailure(.ambiguousTarget, "Several connections have that name.", hint: "Use a connection UUID.") }
         return connection
@@ -20,24 +23,25 @@ extension CommandLineController {
     }
 
     func credential<T>(_ operation: () throws -> T, metadataSaved: Bool = false) throws -> T {
-        do { return try operation() }
-        catch {
-            throw ControlFailure(.credentialFailed, metadataSaved
-                ? "Connection metadata was saved, but the password operation failed."
-                : "The password operation failed.", hint: "Inspect the connection before retrying the password operation.", details: .object(["recordSaved": .bool(metadataSaved)]))
+        do { return try operation() } catch {
+            throw ControlFailure(
+                .credentialFailed,
+                metadataSaved
+                    ? "Connection metadata was saved, but the password operation failed."
+                    : "The password operation failed.", hint: "Inspect the connection before retrying the password operation.",
+                details: .object(["recordSaved": .bool(metadataSaved)]))
         }
     }
 
     private func store(_ operation: () throws -> Void) throws {
-        do { try operation() }
-        catch { throw ControlFailure(.storeFailed, "Could not save connection metadata.") }
+        do { try operation() } catch { throw ControlFailure(.storeFailed, "Could not save connection metadata.") }
     }
 
     func savePassword(_ password: String, id: UUID, metadataSaved: Bool = false) throws {
-        try credential({
-            if password.isEmpty { try credentialStore.removePassword(for: id) }
-            else { try credentialStore.setPassword(password, for: id) }
-        }, metadataSaved: metadataSaved)
+        try credential(
+            {
+                if password.isEmpty { try credentialStore.removePassword(for: id) } else { try credentialStore.setPassword(password, for: id) }
+            }, metadataSaved: metadataSaved)
     }
 
     func handleConnection(_ request: ControlRequest) throws -> ControlValue {
@@ -57,7 +61,8 @@ extension CommandLineController {
             let search = try request.string("search")?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             // Listing never reads passwords or their Keychain items.
             let matches = connectionStore.connections.filter {
-                search.isEmpty || $0.name.localizedStandardContains(search) || $0.host.localizedStandardContains(search) || $0.username.localizedStandardContains(search)
+                search.isEmpty || $0.name.localizedStandardContains(search) || $0.host.localizedStandardContains(search)
+                    || $0.username.localizedStandardContains(search)
             }
             return .array(try matches.map { try .encoding($0) })
         }
@@ -68,12 +73,16 @@ extension CommandLineController {
             if let text = try request.string("kind") {
                 guard let parsed = Connection.Kind(rawValue: text) else { throw ControlFailure(.invalidArgument, "Protocol must be rdp or vnc.") }
                 kind = parsed
-            } else { kind = nil }
+            } else {
+                kind = nil
+            }
             let vncMode: VNCMode?
             if let text = try request.string("vncMode") {
                 guard let parsed = VNCMode(rawValue: text) else { throw ControlFailure(.invalidArgument, "VNC mode must be standard or apple.") }
                 vncMode = parsed
-            } else { vncMode = nil }
+            } else {
+                vncMode = nil
+            }
             let password = try request.string("password")
             let clear = try request.flag("clearPassword")
             guard password == nil || !clear else { throw ControlFailure(.invalidArgument, "Choose a password or clearPassword.") }
@@ -83,17 +92,22 @@ extension CommandLineController {
                     throw ControlFailure(.invalidArgument, "Port must be 1 to 65535.")
                 }
                 port = Int(number)
-            } else { port = nil }
-            let patch = try ConnectionPatch(name: request.string("name"), host: request.string("host", required: isNew),
+            } else {
+                port = nil
+            }
+            let patch = try ConnectionPatch(
+                name: request.string("name"), host: request.string("host", required: isNew),
                 port: port, username: request.string("username"), domain: request.string("domain"),
                 resolution: request.string("resolution").map { try parseResolution($0) }, kind: kind, vncMode: vncMode)
             let updated: Connection
-            do { updated = try patch.applying(to: original) }
-            catch { throw ControlFailure(.invalidArgument, error.localizedDescription) }
+            do { updated = try patch.applying(to: original) } catch { throw ControlFailure(.invalidArgument, error.localizedDescription) }
             try store { if isNew { try connectionStore.add(updated) } else { try connectionStore.update(updated) } }
             sessions.update(updated)
-            if let password { try savePassword(password, id: updated.id, metadataSaved: true) }
-            else if clear { try savePassword("", id: updated.id, metadataSaved: true) }
+            if let password {
+                try savePassword(password, id: updated.id, metadataSaved: true)
+            } else if clear {
+                try savePassword("", id: updated.id, metadataSaved: true)
+            }
             return try connectionInfo(updated, metadataSaved: true)
         }
         let original = try resolveConnection(request.string("connection", required: true)!)

@@ -1,8 +1,8 @@
 import CoreGraphics
 import Foundation
 import ImageIO
-import Testing
 import RemoraCore
+import Testing
 
 private func distance(_ a: CGPoint, _ b: CGPoint) -> Double { hypot(a.x - b.x, a.y - b.y) }
 
@@ -32,11 +32,14 @@ private func distance(_ a: CGPoint, _ b: CGPoint) -> Double { hypot(a.x - b.x, a
 @Test func cursorReferenceArtwork() throws {
     guard let folder = ProcessInfo.processInfo.environment["REMORA_CURSOR_ARTIFACTS"] else { return }
     let bounds = CGRect(x: 0, y: 0, width: 1512, height: 982)
-    let from = CGPoint(x: 116, y: 766), to = CGPoint(x: 781, y: 266)
+    let from = CGPoint(x: 116, y: 766)
+    let to = CGPoint(x: 781, y: 266)
     let drawing = SessionOverlayDrawing()
     func context(_ width: Int, _ height: Int) throws -> CGContext {
-        let context = try #require(CGContext(data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: 0,
-            space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+        let context = try #require(
+            CGContext(
+                data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: 0,
+                space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
         context.setFillColor(CGColor(gray: 0.106, alpha: 1))
         context.fill(CGRect(x: 0, y: 0, width: width, height: height))
         context.translateBy(x: 0, y: CGFloat(height))

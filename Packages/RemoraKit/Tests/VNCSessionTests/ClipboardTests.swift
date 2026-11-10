@@ -8,9 +8,16 @@ import VNCSession
     defer { peer.stop() }
     let pins = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     defer { try? FileManager.default.removeItem(at: pins) }
-    let session = VNCSession(configuration: .init(host: "127.0.0.1", port: peer.port, username: "", desktopSize: .init(width: 16, height: 16)), frameSink: MarkerFrames(), certificateStoreURL: pins)
+    let session = VNCSession(
+        configuration: .init(host: "127.0.0.1", port: peer.port, username: "", desktopSize: .init(width: 16, height: 16)), frameSink: MarkerFrames(),
+        certificateStoreURL: pins)
     defer { session.disconnect() }
-    let fallback = Task { do { try await Task.sleep(for: .seconds(3)); session.disconnect() } catch {} }
+    let fallback = Task {
+        do {
+            try await Task.sleep(for: .seconds(3))
+            session.disconnect()
+        } catch {}
+    }
     defer { fallback.cancel() }
     session.connect()
     _ = try await peer.wait("request")

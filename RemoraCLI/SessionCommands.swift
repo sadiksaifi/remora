@@ -13,22 +13,27 @@ struct ConnectCommand: AsyncParsableCommand {
     @Argument(help: "Saved connection name or UUID.") var connection: String
     @Flag(help: "Leave the selected tab unchanged and do not show the window.") var background = false
     @Flag(help: "Return without waiting for the first frame.") var noWait = false
-    @Option(help: """
-        Use fit (follow the window) or WIDTHxHEIGHT for this attempt only.
-        The saved connection is unchanged.
-        Each side must be 200 to 8192 pixels, with an even width.
-        RDP starts at the saved resolution, or 1920x1080 for fit-to-window connections.
-        VNC starts at the server's size; use session resize to request other dimensions.
-        """) var resolution: String?
+    @Option(
+        help: """
+            Use fit (follow the window) or WIDTHxHEIGHT for this attempt only.
+            The saved connection is unchanged.
+            Each side must be 200 to 8192 pixels, with an even width.
+            RDP starts at the saved resolution, or 1920x1080 for fit-to-window connections.
+            VNC starts at the server's size; use session resize to request other dimensions.
+            """) var resolution: String?
     @MainActor func run() async throws {
         var args: [String: ControlValue] = ["connection": .string(connection), "background": .bool(background), "noWait": .bool(noWait)]
-        if let resolution { _ = try ControlResolution(resolution); args["resolution"] = .string(resolution) }
+        if let resolution {
+            _ = try ControlResolution(resolution)
+            args["resolution"] = .string(resolution)
+        }
         try await options.execute(.init(command: "connect", arguments: args), defaultTimeout: "30s")
     }
 }
 
 struct SessionCommand: AsyncParsableCommand {
-    static let configuration = CommandConfiguration(commandName: "session", abstract: "Inspect and control session tabs.",
+    static let configuration = CommandConfiguration(
+        commandName: "session", abstract: "Inspect and control session tabs.",
         subcommands: [List.self, Get.self, Show.self, Disconnect.self, Reconnect.self, Close.self, Resize.self, Stop.self, Resume.self])
     @OptionGroup var options: CommonOptions
     struct List: AsyncParsableCommand {
@@ -72,8 +77,10 @@ struct SessionCommand: AsyncParsableCommand {
             if all, target.session != nil { throw ValidationError("Use --all without --session.") }
         }
         @MainActor func run() async throws {
-            try await options.execute(.init(command: "session.stop", session: all ? nil : target.target,
-                arguments: ["all": .bool(all)]))
+            try await options.execute(
+                .init(
+                    command: "session.stop", session: all ? nil : target.target,
+                    arguments: ["all": .bool(all)]))
         }
     }
     struct Resume: AsyncParsableCommand {
@@ -98,7 +105,8 @@ struct SessionCommand: AsyncParsableCommand {
 
 struct WaitCommand: AsyncParsableCommand {
     static let configuration = CommandConfiguration(commandName: "wait", abstract: "Wait for a session state, frame, or completed recording.")
-    enum State: String, CaseIterable, ExpressibleByArgument { case connected, disconnected, frame, resumed
+    enum State: String, CaseIterable, ExpressibleByArgument {
+        case connected, disconnected, frame, resumed
         case recordingFinished = "recording-finished"
     }
     @OptionGroup var options: CommonOptions

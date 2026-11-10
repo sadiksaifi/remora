@@ -9,6 +9,10 @@ A native macOS desktop client for RDP and VNC.
 - Use Apple's Human Interface Guidelines for macOS 27 as the UI design baseline.
 - Less code is better code: every line we own is maintenance. Prefer an Apple framework, FreeRDP, LibVNCClient, or a well-maintained library over writing our own, and cut features and flags that another path already covers.
 
+## Development
+
+- Run tasks with `mise run`. `.mise.toml` defines them. Before a commit, run only the checks for what changed, such as `mise run test --filter <name>`. Before pushing or opening a PR, run `mise run check`.
+
 ## Agent skill
 
 - When a change alters what the `remora` CLI does, update `skills/remora/SKILL.md` in the same change, with the smallest edit that keeps it true. The skill holds only what `remora --help` does not tell an agent.

@@ -64,7 +64,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 self, selector: #selector(windowWillClose(_:)), name: NSWindow.willCloseNotification, object: nil
             )
             if let mainWindowController {
-                let controller = CommandLineController(mainWindow: mainWindowController, sessions: sessionTabs,
+                let controller = CommandLineController(
+                    mainWindow: mainWindowController, sessions: sessionTabs,
                     connectionStore: connectionStore, credentialStore: credentialStore,
                     show: { [weak self] page in
                         switch page {
@@ -72,15 +73,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                         case "connections": self?.showConnections(nil)
                         default: self?.showMainWindow()
                         }
-                    }, quit: { [weak self] in
+                    },
+                    quit: { [weak self] in
                         self?.commandLineQuit = true
                         NSApplication.shared.terminate(nil)
                     })
                 commandLineController = controller
                 Task {
-                    do { try await controller.start() }
-                    catch {
-                        Logger(subsystem: "dev.sadiksaifi.Remora", category: "Control").error("Control listener failed: \(error.localizedDescription, privacy: .public)")
+                    do { try await controller.start() } catch {
+                        Logger(subsystem: "dev.sadiksaifi.Remora", category: "Control").error(
+                            "Control listener failed: \(error.localizedDescription, privacy: .public)")
                     }
                 }
             }
@@ -117,7 +119,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             if terminationPending {
                 let log = Logger(subsystem: "dev.sadiksaifi.Remora", category: "Capture")
                 for url in sessionTabs.unfinishedCaptureURLs {
-                    log.error("Quit timed out finishing \(url.path, privacy: .public). The reserved file and a hidden .Remora-*.partial.mov may remain in its folder.")
+                    log.error(
+                        "Quit timed out finishing \(url.path, privacy: .public). The reserved file and a hidden .Remora-*.partial.mov may remain in its folder."
+                    )
                 }
                 terminationPending = false
                 sender.reply(toApplicationShouldTerminate: true)

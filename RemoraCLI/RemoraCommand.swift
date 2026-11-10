@@ -23,9 +23,7 @@ enum RemoraEntry {
                 let words = line.1.matches(of: /"[^"]*"|\S+/).map { word in
                     word.0.count == 1 && word.0.first!.isUppercase ? "1" : word.0.trimmingCharacters(in: ["\""])
                 }
-                do { _ = try RemoraCommand.parseAsRoot(words) }
-                catch where RemoraCommand.exitCode(for: error) == .success {}
-                catch {
+                do { _ = try RemoraCommand.parseAsRoot(words) } catch  where RemoraCommand.exitCode(for: error) == .success {} catch {
                     print("\(arguments[1]): error: `remora \(line.1)` does not parse: \(RemoraCommand.message(for: error))")
                     failed = true
                 }
@@ -35,16 +33,16 @@ enum RemoraEntry {
         let task = Task { () -> Int32 in
             do {
                 var command = try RemoraCommand.parseAsRoot(arguments)
-                if var command = command as? any AsyncParsableCommand { try await command.run() }
-                else { try command.run() }
+                if var command = command as? any AsyncParsableCommand { try await command.run() } else { try command.run() }
                 return 0
             } catch let failure as ControlFailure {
                 return report(failure, json: arguments.contains("--json"))
             } catch {
                 let code = RemoraCommand.exitCode(for: error)
                 if code == .success { RemoraCommand.exit(withError: error) }
-                return report(ControlFailure(.invalidArgument, RemoraCommand.fullMessage(for: error)),
-                              json: arguments.contains("--json"))
+                return report(
+                    ControlFailure(.invalidArgument, RemoraCommand.fullMessage(for: error)),
+                    json: arguments.contains("--json"))
             }
         }
         signal(SIGINT, SIG_IGN)
@@ -57,8 +55,9 @@ enum RemoraEntry {
     }
 
     private static func report(_ failure: ControlFailure, json: Bool) -> Int32 {
-        if json { Output.write(.failure(failure)) }
-        else {
+        if json {
+            Output.write(.failure(failure))
+        } else {
             let hint = failure.hint.isEmpty ? "" : "\n\(failure.hint)"
             FileHandle.standardError.write(Data("\(failure.message)\(hint)\n".utf8))
         }
@@ -70,7 +69,11 @@ struct RemoraCommand: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "remora",
         abstract: "Control the Remora app. AI agents: run 'remora help agent' first.",
-        subcommands: [Capabilities.self, AppCommand.self, ConnectionCommand.self, ConnectCommand.self, SessionCommand.self, PromptCommand.self, WaitCommand.self, ClipboardCommand.self, SettingsCommand.self, ScreenshotCommand.self, RecordingCommand.self, EventsCommand.self, MoveCommand.self, ClickCommand.self, DragCommand.self, ScrollCommand.self, TypeCommand.self, KeyCommand.self, InputCommand.self, SkillCommand.self])
+        subcommands: [
+            Capabilities.self, AppCommand.self, ConnectionCommand.self, ConnectCommand.self, SessionCommand.self, PromptCommand.self, WaitCommand.self,
+            ClipboardCommand.self, SettingsCommand.self, ScreenshotCommand.self, RecordingCommand.self, EventsCommand.self, MoveCommand.self, ClickCommand.self,
+            DragCommand.self, ScrollCommand.self, TypeCommand.self, KeyCommand.self, InputCommand.self, SkillCommand.self,
+        ])
     @OptionGroup var options: CommonOptions
 }
 
@@ -82,8 +85,9 @@ struct CommonOptions: ParsableArguments {
 
     @MainActor func execute(_ request: ControlRequest, launch: Bool = true, defaultTimeout: String = "10s") async throws {
         let seconds = try CommandTimeout(timeout ?? defaultTimeout).seconds
-        let bounded = ControlRequest(command: request.command, session: request.session, timeout: seconds,
-                                     arguments: request.arguments, agent: AgentName.current)
+        let bounded = ControlRequest(
+            command: request.command, session: request.session, timeout: seconds,
+            arguments: request.arguments, agent: AgentName.current)
         let result = try await ApplicationClient().request(bounded, launch: launch, timeout: seconds + 1)
         switch result {
         case .success: Output.write(result, json: json)
@@ -103,15 +107,27 @@ struct Capabilities: AsyncParsableCommand {
             try await options.execute(.init(command: "capabilities", session: session))
             return
         }
-        Output.write(.success(.object([
-            "commands": .array(["help", "help agent", "capabilities", "app status", "app show", "app hide", "app close", "app quit", "connection list", "connection get", "connection create", "connection update", "connection duplicate", "connection delete", "connection password set", "connection password clear", "connect", "session list", "session get", "session show", "session disconnect", "session reconnect", "session close", "session resize", "session stop", "session resume", "prompt list", "prompt get", "prompt respond", "wait", "clipboard get", "clipboard set", "settings get", "settings set", "settings reset", "settings permission", "settings cli get", "settings cli repair", "settings cli uninstall", "screenshot", "recording start", "recording get", "recording stop", "events", "move", "click", "drag", "scroll", "type", "key", "input", "skill path", "skill install", "skill uninstall"].map(ControlValue.string)),
-            "protocols": .array([.string("rdp"), .string("vnc")])
-        ])), json: options.json)
+        Output.write(
+            .success(
+                .object([
+                    "commands": .array(
+                        [
+                            "help", "help agent", "capabilities", "app status", "app show", "app hide", "app close", "app quit", "connection list",
+                            "connection get", "connection create", "connection update", "connection duplicate", "connection delete", "connection password set",
+                            "connection password clear", "connect", "session list", "session get", "session show", "session disconnect", "session reconnect",
+                            "session close", "session resize", "session stop", "session resume", "prompt list", "prompt get", "prompt respond", "wait",
+                            "clipboard get", "clipboard set", "settings get", "settings set", "settings reset", "settings permission", "settings cli get",
+                            "settings cli repair", "settings cli uninstall", "screenshot", "recording start", "recording get", "recording stop", "events",
+                            "move", "click", "drag", "scroll", "type", "key", "input", "skill path", "skill install", "skill uninstall",
+                        ].map(ControlValue.string)),
+                    "protocols": .array([.string("rdp"), .string("vnc")]),
+                ])), json: options.json)
     }
 }
 
 struct AppCommand: AsyncParsableCommand {
-    static let configuration = CommandConfiguration(commandName: "app", abstract: "Inspect or control the app.",
+    static let configuration = CommandConfiguration(
+        commandName: "app", abstract: "Inspect or control the app.",
         subcommands: [Status.self, Show.self, Hide.self, Close.self, Quit.self])
     @OptionGroup var options: CommonOptions
 
@@ -161,7 +177,10 @@ enum Output {
         }
         guard case .success(let value) = response else { return }
         if case .object(let fields) = value, case .bool(let running) = fields["running"] {
-            guard running else { print("Remora is not running."); return }
+            guard running else {
+                print("Remora is not running.")
+                return
+            }
             let hidden = fields["hidden"] == .bool(true)
             let visible = fields["windowVisible"] == .bool(true)
             print("Remora is running. Main window: \(visible ? "open" : "closed"). App: \(hidden ? "hidden" : "shown").")

@@ -1,6 +1,7 @@
 import Foundation
 import RemoraCore
 import Testing
+
 @testable import VNCSession
 
 @Test func vncKeyboardPreservesPhysicalModifiersAndExtendedCodes() throws {
@@ -15,7 +16,7 @@ import Testing
     #expect(VNCKey(physical: try PhysicalKey.chord("MetaLeft")[0])?.keysym == 0xffeb)
     #expect(VNCKey(physical: try PhysicalKey.chord("AltRight")[0])?.keysym == 0xffea)
     #expect(VNCKey(scalar: "ä").keysym == 0xe4)
-    #expect(VNCKey(scalar: "界").keysym == 0x0100754c)
+    #expect(VNCKey(scalar: "界").keysym == 0x0100_754c)
     #expect(VNCKey(scalar: "€").keysym == 0x20ac)
     #expect(VNCKey(scalar: "α").keysym == 0x07e1)
     #expect(VNCKey(physical: try PhysicalKey.chord("Lang1")[0])?.keysym == 0xff31)
@@ -24,8 +25,14 @@ import Testing
 private final class Wire: VNCInputTransport {
     var keys: [(UInt32, Bool)] = []
     var pointers: [UInt8] = []
-    func key(_ key: VNCKey, down: Bool) -> Bool { keys.append((key.keysym, down)); return true }
-    func pointer(_ point: RemotePoint, mask: UInt8) -> Bool { pointers.append(mask); return true }
+    func key(_ key: VNCKey, down: Bool) -> Bool {
+        keys.append((key.keysym, down))
+        return true
+    }
+    func pointer(_ point: RemotePoint, mask: UInt8) -> Bool {
+        pointers.append(mask)
+        return true
+    }
 }
 
 @Test func vncFocusReleasePreservesAgentKeysAndButtons() throws {
@@ -60,8 +67,9 @@ private final class Wire: VNCInputTransport {
     let pins = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     defer { try? FileManager.default.removeItem(at: pins) }
     let feedback = PointerFeedback()
-    let session = VNCSession(configuration: .init(host: "127.0.0.1", port: peer.port, username: "", desktopSize: .init(width: 16, height: 16)), frameSink: MarkerFrames(),
-                             inputFeedback: { source, event in feedback.receive(source, event) }, certificateStoreURL: pins)
+    let session = VNCSession(
+        configuration: .init(host: "127.0.0.1", port: peer.port, username: "", desktopSize: .init(width: 16, height: 16)), frameSink: MarkerFrames(),
+        inputFeedback: { source, event in feedback.receive(source, event) }, certificateStoreURL: pins)
     defer { session.disconnect() }
     session.connect()
     _ = try await peer.wait("request")

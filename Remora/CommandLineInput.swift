@@ -13,20 +13,25 @@ extension CommandLineController {
         let capabilities = backend.inputCapabilities
         if request.command == "capabilities" {
             try request.validateArguments([], sessionAllowed: true)
-            return .object(["session": .string(id.uuidString), "keys": .array(PhysicalKey.names.map(ControlValue.string)),
+            return .object([
+                "session": .string(id.uuidString), "keys": .array(PhysicalKey.names.map(ControlValue.string)),
                 "unicode": .bool(capabilities.contains(.unicode)), "extendedButtons": .bool(capabilities.contains(.extendedButtons)),
-                "horizontalWheel": .bool(capabilities.contains(.horizontalWheel)), "maximumActions": .number(256), "maximumDurationMs": .number(60_000)])
+                "horizontalWheel": .bool(capabilities.contains(.horizontalWheel)), "maximumActions": .number(256), "maximumDurationMs": .number(60_000),
+            ])
         }
         try session.checkAgentInput()
         guard session.activeAgentInput == nil else { throw ControlFailure(.inputBusy, "Another input command is running on this session.") }
         let receipt: ScreenshotReceipt?
         if let image = try request.string("image") {
             guard let uuid = UUID(uuidString: image), let found = screenshotReceipts.first(where: { $0.id == uuid }),
-                  found.session == id, found.geometry.desktop == size, found.geometryRevision == session.inputGeometryRevision else {
+                found.session == id, found.geometry.desktop == size, found.geometryRevision == session.inputGeometryRevision
+            else {
                 throw ControlFailure(.imageExpired, "The screenshot mapping expired. Take a new screenshot.")
             }
             receipt = found
-        } else { receipt = nil }
+        } else {
+            receipt = nil
+        }
         let geometryRevision = session.inputGeometryRevision
         let plan = try InputPlan(request, size: size, geometry: receipt?.geometry, capabilities: capabilities)
         try session.attachAgentControl(agent: request.agent)
@@ -72,14 +77,16 @@ extension CommandLineController {
             if ContinuousClock.now.advanced(by: .seconds(seconds + remainingDelay / 1000 + 1)) > deadline {
                 skipCursorWaits = true
             }
-            try await wait(seconds, while: {
-                guard !skipCursorWaits, session.isAgentCursorPresented else {
-                    if let cursorTarget { session.inputOverlays.moveAgentCursor(to: cursorTarget, animated: false) }
-                    session.inputOverlays.releaseAgentCursor()
-                    return false
-                }
-                return true
-            })
+            try await wait(
+                seconds,
+                while: {
+                    guard !skipCursorWaits, session.isAgentCursorPresented else {
+                        if let cursorTarget { session.inputOverlays.moveAgentCursor(to: cursorTarget, animated: false) }
+                        session.inputOverlays.releaseAgentCursor()
+                        return false
+                    }
+                    return true
+                })
         }
         do {
             for step in plan.steps {
@@ -111,26 +118,34 @@ extension CommandLineController {
             finished = true
             guard await input.finish() else { throw ControlFailure(.backendFailed, "The remote input release failed. The transport was closed.") }
             try check()
-            return .object(["session": .string(id.uuidString), "submittedActions": .number(Double(completed)),
-                "submittedEvents": .number(Double(submitted)), "acknowledgment": .string("protocol-submission")])
+            return .object([
+                "session": .string(id.uuidString), "submittedActions": .number(Double(completed)),
+                "submittedEvents": .number(Double(submitted)), "acknowledgment": .string("protocol-submission"),
+            ])
         } catch {
             if !finished {
                 input.cancel()
                 await input.finish()
             }
             let failure: ControlFailure
-            if let cancelled = session.agentInputCancellation { failure = cancelled }
-            else if let known = error as? ControlFailure { failure = known }
-            else if Task.isCancelled || error is CancellationError { failure = ControlFailure(.cancelled, "The command was interrupted.") }
-            else if let backendFailure = error as? AgentInputFailure {
+            if let cancelled = session.agentInputCancellation {
+                failure = cancelled
+            } else if let known = error as? ControlFailure {
+                failure = known
+            } else if Task.isCancelled || error is CancellationError {
+                failure = ControlFailure(.cancelled, "The command was interrupted.")
+            } else if let backendFailure = error as? AgentInputFailure {
                 switch backendFailure {
                 case .timedOut: failure = ControlFailure(.timeout, "The input command timed out.")
                 case .sessionEnded: failure = ControlFailure(.sessionEnded, "The session ended during input.")
                 case .cancelled: failure = ControlFailure(.cancelled, "The input request was cancelled.")
                 case .submissionFailed: failure = ControlFailure(.backendFailed, "The remote input submission failed.")
                 }
-            } else { failure = ControlFailure(.backendFailed, "The remote input submission failed.") }
-            throw ControlFailure(failure.code, failure.message, hint: failure.hint,
+            } else {
+                failure = ControlFailure(.backendFailed, "The remote input submission failed.")
+            }
+            throw ControlFailure(
+                failure.code, failure.message, hint: failure.hint,
                 details: .object(["submittedActions": .number(Double(completed)), "submittedEvents": .number(Double(submitted))]))
         }
     }
@@ -140,8 +155,14 @@ extension CommandLineController {
 /// capabilities, before admission. Only send() adds work to the C queue.
 private struct InputPlan {
     enum Step {
-        case event(AgentInputEvent), delay(Double), completed
-        case cursorMove(RemotePoint), cursorFollow(RemotePoint), cursorPress(Double), cursorRelease, cursorWait(Double)
+        case event(AgentInputEvent)
+        case delay(Double)
+        case completed
+        case cursorMove(RemotePoint)
+        case cursorFollow(RemotePoint)
+        case cursorPress(Double)
+        case cursorRelease
+        case cursorWait(Double)
     }
     var steps: [Step] = []
     private var keys: Set<PhysicalKey> = []
@@ -152,7 +173,9 @@ private struct InputPlan {
     private let capabilities: AgentInputCapabilities
 
     init(_ request: ControlRequest, size: DesktopSize, geometry: ScreenshotGeometry?, capabilities: AgentInputCapabilities) throws {
-        self.size = size; self.geometry = geometry; self.capabilities = capabilities
+        self.size = size
+        self.geometry = geometry
+        self.capabilities = capabilities
         let actions: [ControlValue]
         if request.command == "input" {
             try request.validateArguments(["image", "actions"], sessionAllowed: true)
@@ -186,7 +209,10 @@ private struct InputPlan {
     private mutating func event(_ event: AgentInputEvent) {
         steps.append(.event(event))
     }
-    private mutating func delay(_ ms: Double) { steps.append(.delay(ms)); duration += ms }
+    private mutating func delay(_ ms: Double) {
+        steps.append(.delay(ms))
+        duration += ms
+    }
 
     private func number(_ request: ControlRequest, _ field: String, default fallback: Double? = nil) throws -> Double {
         if request.arguments[field] == nil, let fallback { return fallback }
@@ -205,17 +231,24 @@ private struct InputPlan {
     }
 
     private func point(_ request: ControlRequest, _ field: String? = nil) throws -> RemotePoint {
-        let x: Double, y: Double
+        let x: Double
+        let y: Double
         if let field {
             guard case .array(let pair) = request.arguments[field], pair.count == 2,
-                  case .number(let a) = pair[0], case .number(let b) = pair[1] else {
+                case .number(let a) = pair[0], case .number(let b) = pair[1]
+            else {
                 throw ControlFailure(.invalidArgument, "\(field) requires [x,y].")
             }
-            x = a; y = b
-        } else { x = try number(request, "x"); y = try number(request, "y") }
+            x = a
+            y = b
+        } else {
+            x = try number(request, "x")
+            y = try number(request, "y")
+        }
         let bounds = geometry?.encoded ?? size
         guard x.isFinite, y.isFinite, x.rounded() == x, y.rounded() == y,
-              x >= 0, y >= 0, x < Double(bounds.width), y < Double(bounds.height) else {
+            x >= 0, y >= 0, x < Double(bounds.width), y < Double(bounds.height)
+        else {
             throw ControlFailure(.invalidArgument, "Coordinates must be integer pixels inside the image or remote desktop.")
         }
         let mapped = try geometry?.remotePoint(x: Int(x), y: Int(y)) ?? (x: Int(x), y: Int(y))
@@ -243,8 +276,7 @@ private struct InputPlan {
     }
 
     private func chord(_ text: String, modifiersOnly: Bool = false) throws -> [PhysicalKey] {
-        do { return try PhysicalKey.chord(text, modifiersOnly: modifiersOnly) }
-        catch { throw ControlFailure(.invalidArgument, error.localizedDescription) }
+        do { return try PhysicalKey.chord(text, modifiersOnly: modifiersOnly) } catch { throw ControlFailure(.invalidArgument, error.localizedDescription) }
     }
 
     private mutating func modifiers(_ request: ControlRequest) throws -> [PhysicalKey] {
@@ -271,7 +303,9 @@ private struct InputPlan {
             let start = try point(request, drag ? "from" : nil)
             let end = drag ? try point(request, "to") : start
             let button = try button(request)
-            guard buttons.intersection(button).isEmpty else { throw ControlFailure(.invalidArgument, "Release the held button before clicking or dragging with it.") }
+            guard buttons.intersection(button).isEmpty else {
+                throw ControlFailure(.invalidArgument, "Release the held button before clicking or dragging with it.")
+            }
             let count = drag ? 1 : try integer(request, "count", range: 1...3, default: 1)
             let milliseconds = drag ? try number(request, "durationMs", default: 500) : 0
             guard !drag || (1...10_000).contains(milliseconds) else { throw ControlFailure(.invalidArgument, "Drag duration must be 1 to 10000 milliseconds.") }
@@ -294,7 +328,9 @@ private struct InputPlan {
                         event(.pointer(point, buttons.union(button)))
                         steps.append(.cursorFollow(point))
                     }
-                } else { delay(20) }
+                } else {
+                    delay(20)
+                }
                 event(.pointer(end, buttons))
                 steps.append(.cursorRelease)
                 if index + 1 < count { delay(80) }
@@ -303,13 +339,16 @@ private struct InputPlan {
         case "scroll":
             try request.validateArguments(["at", "dx", "dy"])
             let at = try point(request, "at")
-            let dx = try number(request, "dx", default: 0), dy = try number(request, "dy", default: 0)
+            let dx = try number(request, "dx", default: 0)
+            let dy = try number(request, "dy", default: 0)
             if dx != 0, !capabilities.contains(.horizontalWheel) { throw ControlFailure(.unsupported, "The server did not negotiate a horizontal wheel.") }
-            let h = (dx * 120).rounded(), v = (-dy * 120).rounded()
+            let h = (dx * 120).rounded()
+            let v = (-dy * 120).rounded()
             guard h >= Double(Int32.min), h <= Double(Int32.max), v >= Double(Int32.min), v <= Double(Int32.max) else {
                 throw ControlFailure(.invalidArgument, "The wheel deltas exceed the protocol range.")
             }
-            let horizontal = Int32(h), vertical = Int32(v)
+            let horizontal = Int32(h)
+            let vertical = Int32(v)
             guard horizontal != 0 || vertical != 0 else { throw ControlFailure(.invalidArgument, "Scroll must move at least 1/120 notch.") }
             steps.append(.cursorMove(at))
             event(.pointer(at, buttons))
@@ -332,7 +371,10 @@ private struct InputPlan {
                     delay(5)
                 default:
                     guard capabilities.contains(.unicode) else { throw ControlFailure(.unsupported, "The server did not negotiate Unicode keyboard input.") }
-                    for scalar in character.unicodeScalars { event(.unicode(scalar)); delay(5) }
+                    for scalar in character.unicodeScalars {
+                        event(.unicode(scalar))
+                        delay(5)
+                    }
                 }
             }
         case "key":
@@ -343,8 +385,7 @@ private struct InputPlan {
             let additions = chord.filter { !keys.contains($0) }
             for index in 0..<count {
                 for key in additions {
-                    if key.isPause { event(.pause) }
-                    else { event(.key(key, down: true)) }
+                    if key.isPause { event(.pause) } else { event(.key(key, down: true)) }
                 }
                 delay(20)
                 release(additions.filter { !$0.isPause })
@@ -358,7 +399,9 @@ private struct InputPlan {
         case "key-down", "key-up":
             try request.validateArguments(["key"])
             let chord = try chord(request.string("key", required: true)!)
-            guard chord.count == 1, let key = chord.first, !key.isPause else { throw ControlFailure(.invalidArgument, "Raw key actions need one holdable physical key. Pause is a pulse.") }
+            guard chord.count == 1, let key = chord.first, !key.isPause else {
+                throw ControlFailure(.invalidArgument, "Raw key actions need one holdable physical key. Pause is a pulse.")
+            }
             let down = request.command == "key-down"
             guard keys.contains(key) != down else { throw ControlFailure(.invalidArgument, "The key must be pressed and released in order within this batch.") }
             if down { keys.insert(key) } else { keys.remove(key) }
@@ -368,7 +411,9 @@ private struct InputPlan {
             let point = try point(request)
             let button = try button(request)
             let down = request.command == "button-down"
-            guard buttons.contains(button) != down else { throw ControlFailure(.invalidArgument, "The button must be pressed and released in order within this batch.") }
+            guard buttons.contains(button) != down else {
+                throw ControlFailure(.invalidArgument, "The button must be pressed and released in order within this batch.")
+            }
             if down { buttons.insert(button) } else { buttons.remove(button) }
             steps.append(.cursorMove(point))
             if down {

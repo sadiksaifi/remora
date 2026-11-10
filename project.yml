@@ -1,7 +1,7 @@
 name: Remora
 options:
   minimumXcodeGenVersion: 2.46.0
-  xcodeVersion: "27.1"
+  xcodeVersion: "27.2"
   deploymentTarget:
     macOS: "26.0"
 packages:
@@ -16,6 +16,9 @@ settings:
     SWIFT_VERSION: "6.0"
     SWIFT_STRICT_CONCURRENCY: complete
     SWIFT_DEFAULT_ACTOR_ISOLATION: nonisolated
+    SWIFT_TREAT_WARNINGS_AS_ERRORS: YES
+    GCC_TREAT_WARNINGS_AS_ERRORS: YES
+    MTL_TREAT_WARNINGS_AS_ERRORS: YES
     MACOSX_DEPLOYMENT_TARGET: "26.0"
 targets:
   Remora:

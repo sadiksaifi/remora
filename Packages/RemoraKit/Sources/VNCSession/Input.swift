@@ -5,18 +5,31 @@ struct VNCKey: Sendable, Equatable {
     let keysym: UInt32
     let code: UInt32
 
-    init(scalar: Unicode.Scalar) { keysym = rm_vnc_unicode_keysym(scalar.value); code = 0 }
-    init(keysym: UInt32, code: UInt32) { self.keysym = keysym; self.code = code }
+    init(scalar: Unicode.Scalar) {
+        keysym = rm_vnc_unicode_keysym(scalar.value)
+        code = 0
+    }
+    init(keysym: UInt32, code: UInt32) {
+        self.keysym = keysym
+        self.code = code
+    }
 
     init?(physical key: PhysicalKey) {
         let name = key.name
         let symbol: UInt32
-        if name.hasPrefix("Key"), let scalar = name.lowercased().unicodeScalars.last { symbol = scalar.value }
-        else if name.hasPrefix("Digit"), let scalar = name.unicodeScalars.last { symbol = scalar.value }
-        else if name.hasPrefix("Numpad"), let n = Int(name.dropFirst(6)) { symbol = 0xffb0 + UInt32(n) }
-        else if name.hasPrefix("F"), let n = Int(name.dropFirst()) { symbol = 0xffbd + UInt32(n) }
-        else if let value = Self.symbols[name] { symbol = value }
-        else { return nil }
+        if name.hasPrefix("Key"), let scalar = name.lowercased().unicodeScalars.last {
+            symbol = scalar.value
+        } else if name.hasPrefix("Digit"), let scalar = name.unicodeScalars.last {
+            symbol = scalar.value
+        } else if name.hasPrefix("Numpad"), let n = Int(name.dropFirst(6)) {
+            symbol = 0xffb0 + UInt32(n)
+        } else if name.hasPrefix("F"), let n = Int(name.dropFirst()) {
+            symbol = 0xffbd + UInt32(n)
+        } else if let value = Self.symbols[name] {
+            symbol = value
+        } else {
+            return nil
+        }
         keysym = symbol
         switch name {
         case "PrintScreen": code = 0x54
@@ -26,20 +39,20 @@ struct VNCKey: Sendable, Equatable {
     }
 
     private static let symbols: [String: UInt32] = [
-        "ControlLeft":0xffe3,"ControlRight":0xffe4,"ShiftLeft":0xffe1,"ShiftRight":0xffe2,
-        "AltLeft":0xffe9,"AltRight":0xffea,"MetaLeft":0xffeb,"MetaRight":0xffec,
-        "Enter":0xff0d,"NumpadEnter":0xff8d,"Backspace":0xff08,"Delete":0xffff,
-        "Escape":0xff1b,"Tab":0xff09,"Space":0x20,"ArrowLeft":0xff51,"ArrowRight":0xff53,
-        "ArrowUp":0xff52,"ArrowDown":0xff54,"Home":0xff50,"End":0xff57,
-        "PageUp":0xff55,"PageDown":0xff56,"Insert":0xff63,"Minus":0x2d,"Equal":0x3d,
-        "BracketLeft":0x5b,"BracketRight":0x5d,"Backslash":0x5c,"Semicolon":0x3b,
-        "Quote":0x27,"Backquote":0x60,"Comma":0x2c,"Period":0x2e,"Slash":0x2f,
-        "IntlBackslash":0x3c,"IntlYen":0xa5,"IntlRo":0x5c,"NumpadDecimal":0xffae,
-        "NumpadAdd":0xffab,"NumpadSubtract":0xffad,"NumpadMultiply":0xffaa,"NumpadDivide":0xffaf,
-        "NumpadEqual":0xffbd,"NumpadComma":0xffac,"CapsLock":0xffe5,"NumLock":0xff7f,
-        "ScrollLock":0xff14,"ContextMenu":0xff67,"PrintScreen":0xff61,"Pause":0xff13,
-        "AudioVolumeUp":0x1008ff13,"AudioVolumeDown":0x1008ff11,"AudioVolumeMute":0x1008ff12,
-        "Lang1":0xff31,"Lang2":0xff34,"Convert":0xff23,"NonConvert":0xff22
+        "ControlLeft": 0xffe3, "ControlRight": 0xffe4, "ShiftLeft": 0xffe1, "ShiftRight": 0xffe2,
+        "AltLeft": 0xffe9, "AltRight": 0xffea, "MetaLeft": 0xffeb, "MetaRight": 0xffec,
+        "Enter": 0xff0d, "NumpadEnter": 0xff8d, "Backspace": 0xff08, "Delete": 0xffff,
+        "Escape": 0xff1b, "Tab": 0xff09, "Space": 0x20, "ArrowLeft": 0xff51, "ArrowRight": 0xff53,
+        "ArrowUp": 0xff52, "ArrowDown": 0xff54, "Home": 0xff50, "End": 0xff57,
+        "PageUp": 0xff55, "PageDown": 0xff56, "Insert": 0xff63, "Minus": 0x2d, "Equal": 0x3d,
+        "BracketLeft": 0x5b, "BracketRight": 0x5d, "Backslash": 0x5c, "Semicolon": 0x3b,
+        "Quote": 0x27, "Backquote": 0x60, "Comma": 0x2c, "Period": 0x2e, "Slash": 0x2f,
+        "IntlBackslash": 0x3c, "IntlYen": 0xa5, "IntlRo": 0x5c, "NumpadDecimal": 0xffae,
+        "NumpadAdd": 0xffab, "NumpadSubtract": 0xffad, "NumpadMultiply": 0xffaa, "NumpadDivide": 0xffaf,
+        "NumpadEqual": 0xffbd, "NumpadComma": 0xffac, "CapsLock": 0xffe5, "NumLock": 0xff7f,
+        "ScrollLock": 0xff14, "ContextMenu": 0xff67, "PrintScreen": 0xff61, "Pause": 0xff13,
+        "AudioVolumeUp": 0x1008_ff13, "AudioVolumeDown": 0x1008_ff11, "AudioVolumeMute": 0x1008_ff12,
+        "Lang1": 0xff31, "Lang2": 0xff34, "Convert": 0xff23, "NonConvert": 0xff22,
     ]
 }
 
@@ -96,7 +109,8 @@ struct VNCInputState {
             let mapped = VNCKey(scalar: scalar)
             // Do not release a key currently held by either source.
             guard !human.values.contains(where: { $0.keysym == mapped.keysym }),
-                  !agent.values.contains(where: { $0.keysym == mapped.keysym }) else { return false }
+                !agent.values.contains(where: { $0.keysym == mapped.keysym })
+            else { return false }
             return wire.key(mapped, down: true) && wire.key(mapped, down: false)
         case .pause:
             let mapped = VNCKey(keysym: 0xff13, code: 0xc6)
@@ -114,10 +128,11 @@ struct VNCInputState {
 
     mutating func humanKey(scan: UInt32, down: Bool, characters: String?, wire: any VNCInputTransport) -> Bool {
         guard let physical = PhysicalKey(scancode: scan), var mapped = VNCKey(physical: physical) else { return true }
-        let shortcutHeld = human.keys.contains { [0x1d,0x11d,0x38,0x138,0x15b,0x15c].contains($0) }
+        let shortcutHeld = human.keys.contains { [0x1d, 0x11d, 0x38, 0x138, 0x15b, 0x15c].contains($0) }
         if !physical.isModifier, !shortcutHeld, let chars = characters, chars.unicodeScalars.count == 1,
-           let scalar = chars.unicodeScalars.first, scalar.value >= 0x20, scalar.value != 0x7f,
-           !((0xf700...0xf8ff).contains(scalar.value)) {
+            let scalar = chars.unicodeScalars.first, scalar.value >= 0x20, scalar.value != 0x7f,
+            !((0xf700...0xf8ff).contains(scalar.value))
+        {
             mapped = VNCKey(keysym: VNCKey(scalar: scalar).keysym, code: mapped.code)
         }
         return key(scan, mapped: mapped, down: down, source: .human, wire: wire)
@@ -142,7 +157,8 @@ struct VNCInputState {
             guard self.key(scan, mapped: key, down: false, source: source, wire: wire) else { return false }
         }
         let index = source == .human ? 0 : 1
-        vertical[index] = 0; horizontal[index] = 0
+        vertical[index] = 0
+        horizontal[index] = 0
         if source == .human { humanButtons = [] } else { agentButtons = [] }
         return wire.pointer(position, mask: buttons)
     }

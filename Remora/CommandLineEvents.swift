@@ -18,9 +18,13 @@ extension CommandLineController {
         // Registration and snapshot run on the main actor without suspension.
         eventSubscribers[id] = EventSubscriber(session: filter, continuation: continuation)
         let selected = sessions.tabs.compactMap { sessions.session(for: $0.id) }.filter { filter == nil || $0.attemptID == filter }
-        continuation.yield(ControlEvent(type: "events.snapshot", cursor: nextEventCursor(), data: .object([
-            "sessions": .array(selected.map(sessionInfo)), "prompts": .array(selected.compactMap(promptInfo)),
-            "recordings": .array(selected.map(recordingInfo))])))
+        continuation.yield(
+            ControlEvent(
+                type: "events.snapshot", cursor: nextEventCursor(),
+                data: .object([
+                    "sessions": .array(selected.map(sessionInfo)), "prompts": .array(selected.compactMap(promptInfo)),
+                    "recordings": .array(selected.map(recordingInfo)),
+                ])))
         return ControlReply(.success(.object([:])), events: stream)
     }
 
@@ -29,14 +33,16 @@ extension CommandLineController {
         let value = data ?? (type == "prompt.opened" ? promptInfo(session) : type == "recording.state" ? recordingInfo(session) : sessionInfo(session)) ?? .null
         let event = ControlEvent(type: type, cursor: nextEventCursor(), data: value)
         let previous: UUID?
-        if case .object(let fields) = value, case .string(let id) = fields["previousSession"] { previous = UUID(uuidString: id) }
-        else { previous = nil }
+        if case .object(let fields) = value, case .string(let id) = fields["previousSession"] { previous = UUID(uuidString: id) } else { previous = nil }
         for (id, subscriber) in eventSubscribers {
             guard subscriber.session == nil || subscriber.session == session.attemptID || subscriber.session == previous else { continue }
             if case .dropped = subscriber.continuation.yield(event) {
-                subscriber.continuation.finish(throwing: ControlFailure(.streamOverflow, "The event reader fell behind.", hint: "Subscribe again and inspect the new snapshot."))
+                subscriber.continuation.finish(
+                    throwing: ControlFailure(.streamOverflow, "The event reader fell behind.", hint: "Subscribe again and inspect the new snapshot."))
                 eventSubscribers[id] = nil
-            } else if subscriber.session != nil && (type == "session.replaced" || value == .object(["session": .string(session.attemptID.uuidString), "state": .string("closed")])) {
+            } else if subscriber.session != nil
+                && (type == "session.replaced" || value == .object(["session": .string(session.attemptID.uuidString), "state": .string("closed")]))
+            {
                 subscriber.continuation.finish()
                 eventSubscribers[id] = nil
             }

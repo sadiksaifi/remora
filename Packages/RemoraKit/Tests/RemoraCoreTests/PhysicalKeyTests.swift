@@ -1,5 +1,5 @@
-import Testing
 import RemoraCore
+import Testing
 
 @Test func physicalChordsPreserveSidesAndOrder() throws {
     #expect(try PhysicalKey.chord("Ctrl+Shift+Escape").map(\.scancode) == [0x1D, 0x2A, 0x01])

@@ -6,7 +6,8 @@ extension DirtyRectangle {
         guard width > 0, height > 0, x < frameWidth, y < frameHeight else { return nil }
         let (endX, overflowX) = x.addingReportingOverflow(width)
         let (endY, overflowY) = y.addingReportingOverflow(height)
-        let left = max(0, x), top = max(0, y)
+        let left = max(0, x)
+        let top = max(0, y)
         let right = min(frameWidth, overflowX ? Int.max : endX)
         let bottom = min(frameHeight, overflowY ? Int.max : endY)
         guard right > left, bottom > top else { return nil }

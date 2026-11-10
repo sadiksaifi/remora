@@ -12,9 +12,10 @@ struct ApplicationClient {
     private var running: Bool {
         let developmentSocket = ProcessInfo.processInfo.environment["REMORA_SOCKET"] != nil
         return NSWorkspace.shared.runningApplications.contains {
-            !$0.isTerminated && (developmentSocket
-                ? $0.bundleURL?.resolvingSymlinksInPath() == Self.bundleURL
-                : $0.bundleIdentifier == "dev.sadiksaifi.Remora")
+            !$0.isTerminated
+                && (developmentSocket
+                    ? $0.bundleURL?.resolvingSymlinksInPath() == Self.bundleURL
+                    : $0.bundleIdentifier == "dev.sadiksaifi.Remora")
         }
     }
 
@@ -22,8 +23,9 @@ struct ApplicationClient {
         let client = ControlClient(endpoint: try ControlEndpoint())
         let wasRunning = running
         if !launch {
-            do { return try await client.request(request, timeout: timeout, isMutation: false) }
-            catch let failure as ControlFailure where failure.code == .appUnavailable && !wasRunning {
+            do { return try await client.request(request, timeout: timeout, isMutation: false) } catch let failure as ControlFailure
+                where failure.code == .appUnavailable && !wasRunning
+            {
                 return .success(try .encoding(AppStatus(running: false)))
             }
         }
@@ -57,7 +59,8 @@ struct ApplicationClient {
         }
         configuration.arguments = ["--cli-background"]
         // A second simultaneous CLI launch must not send a window-opening reopen event.
-        configuration.appleEvent = NSAppleEventDescriptor(eventClass: AEEventClass(kCoreEventClass),
+        configuration.appleEvent = NSAppleEventDescriptor(
+            eventClass: AEEventClass(kCoreEventClass),
             eventID: AEEventID(kAEOpenApplication), targetDescriptor: nil,
             returnID: AEReturnID(kAutoGenerateReturnID), transactionID: AETransactionID(kAnyTransactionID))
         NSWorkspace.shared.openApplication(at: Self.bundleURL, configuration: configuration, completionHandler: nil)
@@ -72,12 +75,10 @@ struct ApplicationClient {
                 let seconds = max(0, Double(remaining.seconds) + Double(remaining.attoseconds) / 1e18)
                 let response = try await client.request(ControlRequest(command: "app.status"), timeout: min(0.5, seconds), isMutation: false)
                 if case .success = response { return }
-            } catch let failure as ControlFailure where failure.code == .cancelled { throw failure }
-            catch { }
+            } catch let failure as ControlFailure where failure.code == .cancelled { throw failure } catch {}
             do {
                 try await Task.sleep(until: min(deadline, ContinuousClock.now.advanced(by: .seconds(delay))), clock: .continuous)
-            }
-            catch { throw ControlFailure(.cancelled, "The command was interrupted.") }
+            } catch { throw ControlFailure(.cancelled, "The command was interrupted.") }
             delay = min(delay * 2, 0.25)
         }
         throw ControlFailure(.appUnavailable, "Remora did not start its control listener within 10 seconds.", hint: "Open Remora and inspect its launch error.")

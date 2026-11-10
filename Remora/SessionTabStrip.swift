@@ -53,7 +53,9 @@ struct SessionTabStrip: View {
                             )
                             .frame(width: isSelected ? widths.selected : widths.other, height: proxy.size.height)
                             .id(tab.id)
-                            .onGeometryChange(for: CGRect.self) { $0.frame(in: .named(Self.coordinateSpace)) } action: {
+                            .onGeometryChange(for: CGRect.self) {
+                                $0.frame(in: .named(Self.coordinateSpace))
+                            } action: {
                                 layout.frames[tab.id] = $0
                             }
                             .onDisappear { layout.frames[tab.id] = nil }
@@ -198,7 +200,9 @@ private struct SessionTabView: View {
         // Outside the tab's element, so VoiceOver reaches the button on its own, after the tab.
         .overlay(alignment: .trailing) {
             if showsControls {
-                Button { onShowActions(actionsFrame) } label: {
+                Button {
+                    onShowActions(actionsFrame)
+                } label: {
                     Image(systemName: "slider.horizontal.3")
                         .font(.system(size: 13))
                         .frame(width: 16, height: 16)
@@ -209,7 +213,9 @@ private struct SessionTabView: View {
                 .help("Tab Actions")
                 .accessibilityLabel("Tab Actions, \(tab.title)")
                 .accessibilityIdentifier("tabActions-\(tab.id.uuidString)")
-                .onGeometryChange(for: CGRect.self) { $0.frame(in: .named(SessionTabStrip.coordinateSpace)) } action: {
+                .onGeometryChange(for: CGRect.self) {
+                    $0.frame(in: .named(SessionTabStrip.coordinateSpace))
+                } action: {
                     actionsFrame = $0
                 }
                 .padding(.trailing, 6)

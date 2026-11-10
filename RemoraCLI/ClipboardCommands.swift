@@ -3,7 +3,8 @@ import Foundation
 import RemoraControl
 
 struct ClipboardCommand: AsyncParsableCommand {
-    static let configuration = CommandConfiguration(commandName: "clipboard", abstract: "Read or offer remote clipboard text without accessing the Mac clipboard.",
+    static let configuration = CommandConfiguration(
+        commandName: "clipboard", abstract: "Read or offer remote clipboard text without accessing the Mac clipboard.",
         subcommands: [Get.self, Set.self])
     @OptionGroup var options: CommonOptions
 
@@ -22,8 +23,9 @@ struct ClipboardCommand: AsyncParsableCommand {
         @MainActor func run() async throws {
             guard text == nil || !readStdin else { throw ControlFailure(.invalidArgument, "Choose --text or --stdin.") }
             let value: String
-            if let text { value = text }
-            else {
+            if let text {
+                value = text
+            } else {
                 guard let decoded = String(data: try await readStandardInput(), encoding: .utf8) else {
                     throw ControlFailure(.invalidArgument, "Clipboard stdin must be UTF-8.")
                 }

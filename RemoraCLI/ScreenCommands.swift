@@ -20,7 +20,10 @@ struct ScreenshotCommand: AsyncParsableCommand {
         if let region { arguments["region"] = .string(region) }
         if let maxSize { arguments["maxSize"] = .string(maxSize) }
         let request = ControlRequest(command: "screenshot", session: target.target, arguments: arguments)
-        guard output == "-" else { try await options.execute(request); return }
+        guard output == "-" else {
+            try await options.execute(request)
+            return
+        }
         let seconds = try CommandTimeout(options.timeout ?? "10s").seconds
         let client = ControlClient(endpoint: try ControlEndpoint())
         try await ApplicationClient().prepare(client)
@@ -32,15 +35,18 @@ struct ScreenshotCommand: AsyncParsableCommand {
 }
 
 struct RecordingCommand: AsyncParsableCommand {
-    static let configuration = CommandConfiguration(commandName: "recording", abstract: "Record remote desktop video to a MOV file.", subcommands: [Start.self, Get.self, Stop.self])
+    static let configuration = CommandConfiguration(
+        commandName: "recording", abstract: "Record remote desktop video to a MOV file.", subcommands: [Start.self, Get.self, Stop.self])
     @OptionGroup var options: CommonOptions
     struct Start: AsyncParsableCommand {
         @OptionGroup var options: CommonOptions
         @OptionGroup var target: SessionOptions
         @Option(help: "Save to this unused path. Defaults to the configured save folder.") var output: String?
         @MainActor func run() async throws {
-            try await options.execute(.init(command: "recording.start", session: target.target,
-                arguments: output.map { ["output": .string(absoluteCapturePath($0))] } ?? [:]))
+            try await options.execute(
+                .init(
+                    command: "recording.start", session: target.target,
+                    arguments: output.map { ["output": .string(absoluteCapturePath($0))] } ?? [:]))
         }
     }
     struct Get: AsyncParsableCommand {
@@ -56,7 +62,8 @@ struct RecordingCommand: AsyncParsableCommand {
 }
 
 struct EventsCommand: AsyncParsableCommand {
-    static let configuration = CommandConfiguration(commandName: "events", abstract: "Stream a snapshot, then live session, prompt and recording metadata as NDJSON.")
+    static let configuration = CommandConfiguration(
+        commandName: "events", abstract: "Stream a snapshot, then live session, prompt and recording metadata as NDJSON.")
     @OptionGroup var options: CommonOptions
     @OptionGroup var target: SessionOptions
     @MainActor func run() async throws {

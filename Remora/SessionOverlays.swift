@@ -18,16 +18,19 @@ final class SessionOverlays: NSObject {
     private let toggleControl: () -> Void
     private static let dismissedPermissionKey = "ShortcutCapturePermissionDismissed"
 
-    init(desktop: RemoteDesktopView, computerName: String, address: String,
-         cancel: @escaping () -> Void, toggleControl: @escaping () -> Void) {
+    init(
+        desktop: RemoteDesktopView, computerName: String, address: String,
+        cancel: @escaping () -> Void, toggleControl: @escaping () -> Void
+    ) {
         self.desktop = desktop
         self.computerName = computerName
         self.address = address
         self.cancel = cancel
         self.toggleControl = toggleControl
         super.init()
-        NotificationCenter.default.addObserver(self, selector: #selector(appBecameActive),
-                                               name: NSApplication.didBecomeActiveNotification, object: nil)
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(appBecameActive),
+            name: NSApplication.didBecomeActiveNotification, object: nil)
     }
 
     /// Control changes post on every agent command, so only a new capsule state replaces the capsule.
@@ -61,13 +64,17 @@ final class SessionOverlays: NSObject {
             view.widthAnchor.constraint(lessThanOrEqualTo: desktop.widthAnchor, constant: -24),
         ])
         capsuleView = view
-        NSAccessibility.post(element: view, notification: .announcementRequested,
-                             userInfo: [.announcement: next.message, .priority: NSAccessibilityPriorityLevel.high.rawValue])
+        NSAccessibility.post(
+            element: view, notification: .announcementRequested,
+            userInfo: [.announcement: next.message, .priority: NSAccessibilityPriorityLevel.high.rawValue])
         guard next.state == .stopped else { return }
         Task { @MainActor [weak self, weak view] in
             try? await Task.sleep(for: .seconds(4))
             guard let self, let view, capsuleView === view else { return }
-            await NSAnimationContext.runAnimationGroup { $0.duration = 0.3; view.animator().alphaValue = 0 }
+            await NSAnimationContext.runAnimationGroup {
+                $0.duration = 0.3
+                view.animator().alphaValue = 0
+            }
             guard capsuleView === view else { return }
             view.removeFromSuperview()
             capsuleView = nil
@@ -81,11 +88,13 @@ final class SessionOverlays: NSObject {
         guard desktop?.allowsHumanInput == true, capsuleView == nil, !offeredPermission else { return }
         offeredPermission = true
         guard SystemShortcutCapture.isEnabled, !SystemShortcutCapture.isTrusted,
-              !UserDefaults.standard.bool(forKey: Self.dismissedPermissionKey), let desktop else { return }
-        let banner = NSHostingView(rootView: ShortcutPermissionBanner(
-            onOpenSettings: { [weak self] in self?.openSettings() },
-            onDismiss: { [weak self] in self?.dismissPermission() }
-        ))
+            !UserDefaults.standard.bool(forKey: Self.dismissedPermissionKey), let desktop
+        else { return }
+        let banner = NSHostingView(
+            rootView: ShortcutPermissionBanner(
+                onOpenSettings: { [weak self] in self?.openSettings() },
+                onDismiss: { [weak self] in self?.dismissPermission() }
+            ))
         banner.sizingOptions = .intrinsicContentSize
         banner.translatesAutoresizingMaskIntoConstraints = false
         desktop.addSubview(banner)
@@ -135,14 +144,18 @@ final class SessionOverlays: NSObject {
             note.centerXAnchor.constraint(equalTo: desktop.centerXAnchor),
         ])
         confirmationView = note
-        NSAccessibility.post(element: note, notification: .announcementRequested,
-                             userInfo: [.announcement: message, .priority: NSAccessibilityPriorityLevel.medium.rawValue])
+        NSAccessibility.post(
+            element: note, notification: .announcementRequested,
+            userInfo: [.announcement: message, .priority: NSAccessibilityPriorityLevel.medium.rawValue])
         if UserDefaults.standard.object(forKey: "com.apple.sound.uiaudio.enabled") as? Bool ?? true {
             Self.captureSound?.play()
         }
         Task { @MainActor [weak self, weak note] in
             try? await Task.sleep(for: .seconds(1.5))
-            await NSAnimationContext.runAnimationGroup { $0.duration = 0.3; note?.animator().alphaValue = 0 }
+            await NSAnimationContext.runAnimationGroup {
+                $0.duration = 0.3
+                note?.animator().alphaValue = 0
+            }
             note?.removeFromSuperview()
             if let self, confirmationView === note { confirmationView = nil }
         }

@@ -17,9 +17,11 @@ final class CommandLineController {
     let eventInstance = UUID()
     var eventSequence = 0
 
-    init(mainWindow: MainWindowController, sessions: SessionTabs,
-         connectionStore: ConnectionStore, credentialStore: CredentialStore,
-         show: @escaping (String?) -> Void, quit: @escaping () -> Void) {
+    init(
+        mainWindow: MainWindowController, sessions: SessionTabs,
+        connectionStore: ConnectionStore, credentialStore: CredentialStore,
+        show: @escaping (String?) -> Void, quit: @escaping () -> Void
+    ) {
         self.connectionStore = connectionStore
         self.credentialStore = credentialStore
         self.mainWindow = mainWindow
@@ -49,13 +51,15 @@ final class CommandLineController {
     }
 
     private func status() throws -> ControlResponse {
-        .success(try .encoding(AppStatus(
-            running: true, pid: ProcessInfo.processInfo.processIdentifier,
-            hidden: NSApplication.shared.isHidden,
-            windowVisible: mainWindow.window?.isVisible == true,
-            settingsVisible: NSApplication.shared.settingsWindow?.isVisible == true,
-            sessions: sessions.tabs.count
-        )))
+        .success(
+            try .encoding(
+                AppStatus(
+                    running: true, pid: ProcessInfo.processInfo.processIdentifier,
+                    hidden: NSApplication.shared.isHidden,
+                    windowVisible: mainWindow.window?.isVisible == true,
+                    settingsVisible: NSApplication.shared.settingsWindow?.isVisible == true,
+                    sessions: sessions.tabs.count
+                )))
     }
 
     private func handle(_ request: ControlRequest) async -> ControlReply {
@@ -72,8 +76,7 @@ final class CommandLineController {
             }
             if request.command == "events" { return try subscribeEvents(request) }
             let waitCondition = request.command == "wait" ? try request.string("for") : nil
-            if request.command == "screenshot" || request.command.hasPrefix("recording.") ||
-                ["frame", "recording-finished"].contains(waitCondition ?? "") {
+            if request.command == "screenshot" || request.command.hasPrefix("recording.") || ["frame", "recording-finished"].contains(waitCondition ?? "") {
                 return try await handleScreen(request)
             }
             if request.command.hasPrefix("connection.") {
@@ -100,7 +103,8 @@ final class CommandLineController {
                 let configuration = NSWorkspace.OpenConfiguration()
                 configuration.activates = true
                 configuration.allowsRunningApplicationSubstitution = false
-                configuration.appleEvent = NSAppleEventDescriptor(eventClass: AEEventClass(kCoreEventClass),
+                configuration.appleEvent = NSAppleEventDescriptor(
+                    eventClass: AEEventClass(kCoreEventClass),
                     eventID: AEEventID(kAEOpenApplication), targetDescriptor: nil,
                     returnID: AEReturnID(kAutoGenerateReturnID), transactionID: AETransactionID(kAnyTransactionID))
                 NSWorkspace.shared.openApplication(at: Bundle.main.bundleURL, configuration: configuration, completionHandler: nil)
@@ -109,7 +113,8 @@ final class CommandLineController {
             case "app.quit":
                 for tab in sessions.tabs { try sessions.session(for: tab.id)?.checkUserHold() }
                 let failures = await sessions.prepareToQuit()
-                let response: ControlResponse = failures.isEmpty
+                let response: ControlResponse =
+                    failures.isEmpty
                     ? .success(.object(["quitting": .bool(true)]))
                     : .failure(ControlFailure(.captureFailed, failures.map(\.localizedDescription).joined(separator: "\n")))
                 return ControlReply(response) { [weak self] in
@@ -119,7 +124,8 @@ final class CommandLineController {
                 throw ControlFailure(.unknownCommand, "Unknown command '\(request.command)'.", hint: "Run remora --help.")
             }
             return ControlReply(.success(.object([:])))
-        } catch let failure as ControlFailure { return ControlReply(.failure(failure)) }
-        catch { return ControlReply(.failure(ControlFailure(.internal, error.localizedDescription))) }
+        } catch let failure as ControlFailure { return ControlReply(.failure(failure)) } catch {
+            return ControlReply(.failure(ControlFailure(.internal, error.localizedDescription)))
+        }
     }
 }

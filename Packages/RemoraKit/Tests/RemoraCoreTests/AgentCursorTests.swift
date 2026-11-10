@@ -2,15 +2,20 @@ import CoreGraphics
 import Foundation
 import QuartzCore
 import Testing
+
 @testable import RemoraCore
 
 private let bounds = CGRect(x: 0, y: 0, width: 1512, height: 982)
 private func distance(_ a: CGPoint, _ b: CGPoint) -> Double { hypot(a.x - b.x, a.y - b.y) }
 private let moves: [(from: CGPoint, to: CGPoint, marks: [(Double, Double)])] = [
-    (CGPoint(x: 116, y: 766), CGPoint(x: 781, y: 266),
-     [(0.25, 0.108), (0.50, 0.142), (0.75, 0.192), (0.90, 0.267), (0.95, 0.308)]),
-    (CGPoint(x: 422, y: 464), CGPoint(x: 121, y: 771),
-     [(0.25, 0.083), (0.50, 0.117), (0.75, 0.150), (0.90, 0.200), (0.95, 0.233)])
+    (
+        CGPoint(x: 116, y: 766), CGPoint(x: 781, y: 266),
+        [(0.25, 0.108), (0.50, 0.142), (0.75, 0.192), (0.90, 0.267), (0.95, 0.308)]
+    ),
+    (
+        CGPoint(x: 422, y: 464), CGPoint(x: 121, y: 771),
+        [(0.25, 0.083), (0.50, 0.117), (0.75, 0.150), (0.90, 0.200), (0.95, 0.233)]
+    ),
 ]
 
 @Test func cursorMatchesMeasuredTravel() throws {
@@ -20,7 +25,8 @@ private let moves: [(from: CGPoint, to: CGPoint, marks: [(Double, Double)])] = [
         let rows = try String(contentsOf: url, encoding: .utf8).split(separator: "\n").dropFirst().map { row in
             row.split(separator: ",").map { Double($0)! }
         }
-        let first = try #require(rows.first), last = try #require(rows.last)
+        let first = try #require(rows.first)
+        let last = try #require(rows.last)
         let recordedEnd = CGPoint(x: last[1], y: last[2])
         let recordedChord = distance(CGPoint(x: first[1], y: first[2]), recordedEnd)
         var cursor = CursorMotion(hotspot: move.from, bounds: bounds)
@@ -55,7 +61,10 @@ private let moves: [(from: CGPoint, to: CGPoint, marks: [(Double, Double)])] = [
             let delay = cursor.arrivalDelay
             var stepped = cursor
             var elapsed = 0.0
-            while stepped.isMoving { stepped.step(1.0 / 480); elapsed += 1.0 / 480 }
+            while stepped.isMoving {
+                stepped.step(1.0 / 480)
+                elapsed += 1.0 / 480
+            }
             #expect(abs(delay - elapsed) < 0.000001)
             cursor.step(delay)
             #expect(!cursor.isMoving)
@@ -94,7 +103,9 @@ func cursorScootTiltDependsOnlyOnSignedHorizontalVelocity(dx: Double) {
     var base = CursorMotion(hotspot: moves[0].from, bounds: bounds, time: 100)
     base.isVisible = true
     base.move(to: moves[0].to)
-    var sixty = base, oneTwenty = base, once = base
+    var sixty = base
+    var oneTwenty = base
+    var once = base
     for tick in 1...30 { sixty.advance(to: 100 + Double(tick) / 60) }
     for tick in 1...60 { oneTwenty.advance(to: 100 + Double(tick) / 120) }
     once.advance(to: 100.5)
@@ -228,4 +239,3 @@ func cursorVisibilityBlurFollowsOpacity(reduceMotion: Bool) {
     let after = ProcessInfo.processInfo.systemUptime
     #expect(displayTime >= before - 0.001 && displayTime <= after + 0.001)
 }
-

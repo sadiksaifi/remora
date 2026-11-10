@@ -25,7 +25,10 @@ private final class StalledPeer: @unchecked Sendable {
         let bound = withUnsafePointer(to: &address) { pointer in
             pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) { bind(listener, $0, socklen_t(MemoryLayout<sockaddr_in>.size)) }
         }
-        guard bound == 0, listen(listener, 1) == 0 else { close(listener); throw POSIXError(.EIO) }
+        guard bound == 0, listen(listener, 1) == 0 else {
+            close(listener)
+            throw POSIXError(.EIO)
+        }
         var length = socklen_t(MemoryLayout<sockaddr_in>.size)
         _ = withUnsafeMutablePointer(to: &address) { pointer in
             pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) { getsockname(listener, $0, &length) }
@@ -37,7 +40,10 @@ private final class StalledPeer: @unchecked Sendable {
             var one: Int32 = 1
             setsockopt(client, SOL_SOCKET, SO_NOSIGPIPE, &one, socklen_t(MemoryLayout<Int32>.size))
             let ready = lock.withLock {
-                if closing { close(client); return false }
+                if closing {
+                    close(client)
+                    return false
+                }
                 accepted = client
                 return true
             }
@@ -49,9 +55,9 @@ private final class StalledPeer: @unchecked Sendable {
             } else if partialFrame {
                 // RFB 3.8, None, SecurityResult success, 16x16 ServerInit.
                 var bytes = Array("RFB 003.008\n".utf8) + [1, 1, 0, 0, 0, 0]
-                bytes += [0,16,0,16, 32,24,0,1, 0,255,0,255,0,255, 16,8,0, 0,0,0, 0,0,0,0]
+                bytes += [0, 16, 0, 16, 32, 24, 0, 1, 0, 255, 0, 255, 0, 255, 16, 8, 0, 0, 0, 0, 0, 0, 0, 0]
                 // One raw rectangle, with only 2 of its required 1024 pixels' bytes.
-                if stallRectangle { bytes += [0,0,0,1, 0,0,0,0,0,16,0,16, 0,0,0,0, 1,2] }
+                if stallRectangle { bytes += [0, 0, 0, 1, 0, 0, 0, 0, 0, 16, 0, 16, 0, 0, 0, 0, 1, 2] }
                 bytes.withUnsafeBytes { _ = Darwin.send(client, $0.baseAddress, $0.count, 0) }
             } else {
                 let bytes = Array("RFB 003.".utf8)
@@ -60,15 +66,18 @@ private final class StalledPeer: @unchecked Sendable {
         }.start()
     }
     func sendLayout(width: UInt8, origin: UInt8, result: UInt8, screens: UInt8 = 1) {
-        var bytes: [UInt8] = [0,0,0,1, 0,origin,0,result,0,width,0,16, 255,255,254,204,
-            screens,0,0,0, 0,0,0,1, 0,0,0,0, 0,width,0,16, 0,0,0,0]
-        if screens == 2 { bytes += [0,0,0,2, 0,0,0,0, 0,width,0,16, 0,0,0,0] }
+        var bytes: [UInt8] = [
+            0, 0, 0, 1, 0, origin, 0, result, 0, width, 0, 16, 255, 255, 254, 204,
+            screens, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, width, 0, 16, 0, 0, 0, 0,
+        ]
+        if screens == 2 { bytes += [0, 0, 0, 2, 0, 0, 0, 0, 0, width, 0, 16, 0, 0, 0, 0] }
         send(bytes)
     }
     func sendCursor(hidden: Bool) {
         // RichCursor: one opaque red pixel, or the protocol's empty shape.
-        let bytes: [UInt8] = [0,0,0,1, 0,0,0,0, 0,hidden ? 0 : 1,0,hidden ? 0 : 1, 255,255,255,17]
-            + (hidden ? [] : [0,0,255,0,128])
+        let bytes: [UInt8] =
+            [0, 0, 0, 1, 0, 0, 0, 0, 0, hidden ? 0 : 1, 0, hidden ? 0 : 1, 255, 255, 255, 17]
+            + (hidden ? [] : [0, 0, 255, 0, 128])
         send(bytes)
     }
     private func send(_ bytes: [UInt8]) {
@@ -95,10 +104,10 @@ private final class StalledPeer: @unchecked Sendable {
                 func word(_ offset: Int) -> Int { Int(clientBytes[offset]) << 8 | Int(clientBytes[offset + 1]) }
                 let length: Int
                 switch clientBytes[0] {
-                case 0: length = 20 // SetPixelFormat
-                case 2: length = 4 + word(2) * 4 // SetEncodings
-                case 3: length = 10 // FramebufferUpdateRequest
-                case 251: length = 8 + Int(clientBytes[6]) * 16 // SetDesktopSize
+                case 0: length = 20  // SetPixelFormat
+                case 2: length = 4 + word(2) * 4  // SetEncodings
+                case 3: length = 10  // FramebufferUpdateRequest
+                case 251: length = 8 + Int(clientBytes[6]) * 16  // SetDesktopSize
                 default: return receivedResizes
                 }
                 guard clientBytes.count >= length else { return receivedResizes }
@@ -112,8 +121,13 @@ private final class StalledPeer: @unchecked Sendable {
         lock.withLock {
             guard !closing else { return }
             closing = true
-            shutdown(listener, SHUT_RDWR); close(listener)
-            if accepted >= 0 { shutdown(accepted, SHUT_RDWR); close(accepted); accepted = -1 }
+            shutdown(listener, SHUT_RDWR)
+            close(listener)
+            if accepted >= 0 {
+                shutdown(accepted, SHUT_RDWR)
+                close(accepted)
+                accepted = -1
+            }
         }
     }
 }
@@ -122,9 +136,15 @@ private struct DiscardFrames: FrameSink { func consume(_ frame: BorrowedFrame) {
 @Test @MainActor func vncCancellationInterruptsIncompleteGreeting() async throws {
     let peer = try StalledPeer(partialFrame: false)
     defer { peer.stop() }
-    let session = VNCSession(configuration: .init(host: "127.0.0.1", port: peer.port, username: "", desktopSize: .init(width: 16, height: 16)), frameSink: DiscardFrames())
+    let session = VNCSession(
+        configuration: .init(host: "127.0.0.1", port: peer.port, username: "", desktopSize: .init(width: 16, height: 16)), frameSink: DiscardFrames())
     session.connect()
-    let fallback = Task { do { try await Task.sleep(for: .seconds(2)); peer.stop() } catch {} }
+    let fallback = Task {
+        do {
+            try await Task.sleep(for: .seconds(2))
+            peer.stop()
+        } catch {}
+    }
     defer { fallback.cancel() }
     try await Task.sleep(for: .milliseconds(100))
     let start = ContinuousClock.now
@@ -140,8 +160,15 @@ private struct DiscardFrames: FrameSink { func consume(_ frame: BorrowedFrame) {
 @Test @MainActor func vncCredentialsCancellationThroughResponderEndsAsCancelled() async throws {
     let peer = try StalledPeer(partialFrame: false, passwordChallenge: true)
     defer { peer.stop() }
-    let session = VNCSession(configuration: .init(host: "127.0.0.1", port: peer.port, username: "", desktopSize: .init(width: 16, height: 16)), frameSink: DiscardFrames())
-    let fallback = Task { do { try await Task.sleep(for: .seconds(3)); peer.stop(); session.disconnect() } catch {} }
+    let session = VNCSession(
+        configuration: .init(host: "127.0.0.1", port: peer.port, username: "", desktopSize: .init(width: 16, height: 16)), frameSink: DiscardFrames())
+    let fallback = Task {
+        do {
+            try await Task.sleep(for: .seconds(3))
+            peer.stop()
+            session.disconnect()
+        } catch {}
+    }
     defer { fallback.cancel() }
     var fields: [CredentialsChallenge.Fields] = []
     var terminals: [DisconnectReason?] = []
@@ -163,9 +190,16 @@ private struct DiscardFrames: FrameSink { func consume(_ frame: BorrowedFrame) {
 @Test @MainActor func vncPartialFrameCancellationDoesNotStrandAnAdmittedAgentSend() async throws {
     let peer = try StalledPeer(partialFrame: true)
     defer { peer.stop() }
-    let session = VNCSession(configuration: .init(host: "127.0.0.1", port: peer.port, username: "", desktopSize: .init(width: 16, height: 16)), frameSink: DiscardFrames())
+    let session = VNCSession(
+        configuration: .init(host: "127.0.0.1", port: peer.port, username: "", desktopSize: .init(width: 16, height: 16)), frameSink: DiscardFrames())
     session.connect()
-    let fallback = Task { do { try await Task.sleep(for: .seconds(3)); peer.stop(); session.disconnect() } catch {} }
+    let fallback = Task {
+        do {
+            try await Task.sleep(for: .seconds(3))
+            peer.stop()
+            session.disconnect()
+        } catch {}
+    }
     defer { fallback.cancel() }
     var request: (any AgentInputRequest)?
     var send: Task<Void, any Error>?
@@ -186,18 +220,23 @@ private struct DiscardFrames: FrameSink { func consume(_ frame: BorrowedFrame) {
     let admitted = try #require(send)
     // Input can now be acknowledged during the read. If cancellation wins,
     // the admitted receipt must instead terminate with the session.
-    do { try await admitted.value }
-    catch let failure as AgentInputFailure { #expect(failure == .sessionEnded) }
+    do { try await admitted.value } catch let failure as AgentInputFailure { #expect(failure == .sessionEnded) }
     #expect(started.duration(to: .now) < .seconds(1))
     #expect(await request?.finish() == false)
 }
 
-
 @Test @MainActor func vncForwardedResizePreservesCapabilityUntilActualGeometry() async throws {
     let peer = try StalledPeer(partialFrame: true, stallRectangle: false)
     defer { peer.stop() }
-    let session = VNCSession(configuration: .init(host: "127.0.0.1", port: peer.port, username: "", desktopSize: .init(width: 16, height: 16)), frameSink: DiscardFrames())
-    let fallback = Task { do { try await Task.sleep(for: .seconds(3)); peer.stop(); session.disconnect() } catch {} }
+    let session = VNCSession(
+        configuration: .init(host: "127.0.0.1", port: peer.port, username: "", desktopSize: .init(width: 16, height: 16)), frameSink: DiscardFrames())
+    let fallback = Task {
+        do {
+            try await Task.sleep(for: .seconds(3))
+            peer.stop()
+            session.disconnect()
+        } catch {}
+    }
     defer { fallback.cancel() }
     var sizes: [DesktopSize] = []
     var capabilitySeen = false
@@ -225,7 +264,10 @@ private struct DiscardFrames: FrameSink { func consume(_ frame: BorrowedFrame) {
         case .desktopSizeChanged(let size, let requested):
             sizes.append(size)
             #expect(!requested)
-            if size.width == 24 { completed = true; session.disconnect() }
+            if size.width == 24 {
+                completed = true
+                session.disconnect()
+            }
         default: break
         }
     }
@@ -237,8 +279,15 @@ private struct DiscardFrames: FrameSink { func consume(_ frame: BorrowedFrame) {
 @Test @MainActor func vncAdministrativeResizeDenialSurvivesLayoutNotifications() async throws {
     let peer = try StalledPeer(partialFrame: true, stallRectangle: false)
     defer { peer.stop() }
-    let session = VNCSession(configuration: .init(host: "127.0.0.1", port: peer.port, username: "", desktopSize: .init(width: 16, height: 16)), frameSink: DiscardFrames())
-    let fallback = Task { do { try await Task.sleep(for: .seconds(3)); peer.stop(); session.disconnect() } catch {} }
+    let session = VNCSession(
+        configuration: .init(host: "127.0.0.1", port: peer.port, username: "", desktopSize: .init(width: 16, height: 16)), frameSink: DiscardFrames())
+    let fallback = Task {
+        do {
+            try await Task.sleep(for: .seconds(3))
+            peer.stop()
+            session.disconnect()
+        } catch {}
+    }
     defer { fallback.cancel() }
     var capabilities: [Bool] = []
     var sizes: [DesktopSize] = []
@@ -267,7 +316,6 @@ private struct DiscardFrames: FrameSink { func consume(_ frame: BorrowedFrame) {
     #expect(sizes.last == .init(width: 16, height: 16))
 }
 
-
 private func waitForResizes(_ count: Int, from peer: StalledPeer) async throws -> [DesktopSize] {
     let deadline = ContinuousClock.now.advanced(by: .seconds(1))
     while peer.resizeRequests().count < count, ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(5)) }
@@ -277,8 +325,15 @@ private func waitForResizes(_ count: Int, from peer: StalledPeer) async throws -
 @Test @MainActor func vncLatestResizeConvergesOnceAfterAnOlderForwardedRequestAppliesLate() async throws {
     let peer = try StalledPeer(partialFrame: true, stallRectangle: false)
     defer { peer.stop() }
-    let session = VNCSession(configuration: .init(host: "127.0.0.1", port: peer.port, username: "", desktopSize: .init(width: 16, height: 16)), frameSink: DiscardFrames())
-    let fallback = Task { do { try await Task.sleep(for: .seconds(5)); peer.stop(); session.disconnect() } catch {} }
+    let session = VNCSession(
+        configuration: .init(host: "127.0.0.1", port: peer.port, username: "", desktopSize: .init(width: 16, height: 16)), frameSink: DiscardFrames())
+    let fallback = Task {
+        do {
+            try await Task.sleep(for: .seconds(5))
+            peer.stop()
+            session.disconnect()
+        } catch {}
+    }
     defer { fallback.cancel() }
     var sizes: [DesktopSize] = []
     var exercised = false
@@ -299,8 +354,8 @@ private func waitForResizes(_ count: Int, from peer: StalledPeer) async throws -
             peer.sendLayout(width: 16, origin: 1, result: 4)
             peer.sendLayout(width: 16, origin: 0, result: 0)
             try await Task.sleep(for: .milliseconds(40))
-            #expect(peer.resizeRequests().count == 2) // An unchanged layout is not a retry trigger.
-            peer.sendLayout(width: 32, origin: 0, result: 0) // A applies after B.
+            #expect(peer.resizeRequests().count == 2)  // An unchanged layout is not a retry trigger.
+            peer.sendLayout(width: 32, origin: 0, result: 0)  // A applies after B.
             #expect(try await waitForResizes(3, from: peer) == [.init(width: 32, height: 16), .init(width: 16, height: 16), .init(width: 16, height: 16)])
             peer.sendLayout(width: 16, origin: 1, result: 4)
             peer.sendLayout(width: 16, origin: 0, result: 0)
@@ -326,8 +381,15 @@ private func waitForResizes(_ count: Int, from peer: StalledPeer) async throws -
     for stop in ["denial", "multihead", "deadline"] {
         let peer = try StalledPeer(partialFrame: true, stallRectangle: false)
         defer { peer.stop() }
-        let session = VNCSession(configuration: .init(host: "127.0.0.1", port: peer.port, username: "", desktopSize: .init(width: 16, height: 16)), frameSink: DiscardFrames())
-        let fallback = Task { do { try await Task.sleep(for: .seconds(5)); peer.stop(); session.disconnect() } catch {} }
+        let session = VNCSession(
+            configuration: .init(host: "127.0.0.1", port: peer.port, username: "", desktopSize: .init(width: 16, height: 16)), frameSink: DiscardFrames())
+        let fallback = Task {
+            do {
+                try await Task.sleep(for: .seconds(5))
+                peer.stop()
+                session.disconnect()
+            } catch {}
+        }
         defer { fallback.cancel() }
         var exercised = false
         session.connect()
@@ -364,8 +426,14 @@ private func waitForResizes(_ count: Int, from peer: StalledPeer) async throws -
 @Test @MainActor func vncEmptyCursorShapeHidesThePreviousImage() async throws {
     let peer = try StalledPeer(partialFrame: true, stallRectangle: false)
     defer { peer.stop() }
-    let session = VNCSession(configuration: .init(host: "127.0.0.1", port: peer.port, username: "", desktopSize: .init(width: 16, height: 16)), frameSink: DiscardFrames())
-    let fallback = Task { do { try await Task.sleep(for: .seconds(1)); session.disconnect() } catch {} }
+    let session = VNCSession(
+        configuration: .init(host: "127.0.0.1", port: peer.port, username: "", desktopSize: .init(width: 16, height: 16)), frameSink: DiscardFrames())
+    let fallback = Task {
+        do {
+            try await Task.sleep(for: .seconds(1))
+            session.disconnect()
+        } catch {}
+    }
     defer { fallback.cancel() }
     var cursors: [RemoteCursor] = []
     session.connect()
@@ -379,18 +447,28 @@ private func waitForResizes(_ count: Int, from peer: StalledPeer) async throws -
         default: break
         }
     }
-    #expect(cursors == [.image(pixels: Data([0,0,255,255]), width: 1, height: 1, hotspot: .init(x: 0, y: 0)), .hidden])
+    #expect(cursors == [.image(pixels: Data([0, 0, 255, 255]), width: 1, height: 1, hotspot: .init(x: 0, y: 0)), .hidden])
 }
-
 
 @Test @MainActor func vncIncompleteFrameStillExpiresAtItsElapsedReadDeadline() async throws {
     let peer = try StalledPeer(partialFrame: true)
     defer { peer.stop() }
     let pins = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     defer { try? FileManager.default.removeItem(at: pins) }
-    let session = VNCSession(configuration: .init(host: "127.0.0.1", port: peer.port, username: "", desktopSize: .init(width: 16, height: 16)), frameSink: DiscardFrames(), certificateStoreURL: pins)
-    let fallback = Task { do { try await Task.sleep(for: .seconds(13)); peer.stop(); session.disconnect() } catch {} }
-    defer { fallback.cancel(); session.disconnect() }
+    let session = VNCSession(
+        configuration: .init(host: "127.0.0.1", port: peer.port, username: "", desktopSize: .init(width: 16, height: 16)), frameSink: DiscardFrames(),
+        certificateStoreURL: pins)
+    let fallback = Task {
+        do {
+            try await Task.sleep(for: .seconds(13))
+            peer.stop()
+            session.disconnect()
+        } catch {}
+    }
+    defer {
+        fallback.cancel()
+        session.disconnect()
+    }
     let started = ContinuousClock.now
     session.connect()
     var connected = false

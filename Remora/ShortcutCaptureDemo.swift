@@ -10,8 +10,9 @@ final class ShortcutCaptureDemo: NSWindowController, NSWindowDelegate {
 
     init(renderer: FrameRenderer) {
         desktop = RemoteDesktopView(renderer: renderer)
-        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 700, height: 400),
-                              styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 700, height: 400),
+            styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
         window.title = "Shortcut capture demo: Ctrl-Option-Cmd-Escape releases capture"
         window.isReleasedWhenClosed = false
         super.init(window: window)
@@ -29,7 +30,8 @@ final class ShortcutCaptureDemo: NSWindowController, NSWindowDelegate {
             let verify = CommandLine.arguments.contains("--verify-shortcut-capture")
             try? await Task.sleep(for: .seconds(verify ? 1 : 3))
             if verify, window.isKeyWindow, NSApp.isActive, window.firstResponder === desktop,
-               SystemShortcutCapture.isTrusted {
+                SystemShortcutCapture.isTrusted
+            {
                 let commandDown = CGEvent(keyboardEventSource: nil, virtualKey: 0x37, keyDown: true)!
                 commandDown.type = .flagsChanged
                 // KeyboardState reconciles the physical left/right NX_DEVICE bits.
@@ -44,8 +46,9 @@ final class ShortcutCaptureDemo: NSWindowController, NSWindowDelegate {
                 commandUp.flags = []
                 for event in [commandDown, tabDown, tabUp, commandUp] { event.post(tap: .cghidEventTap) }
                 try? await Task.sleep(for: .milliseconds(500))
-                NSLog("ShortcutCaptureDemo after Cmd-Tab keyWindow=%@ active=%@",
-                      window.isKeyWindow.description, NSApp.isActive.description)
+                NSLog(
+                    "ShortcutCaptureDemo after Cmd-Tab keyWindow=%@ active=%@",
+                    window.isKeyWindow.description, NSApp.isActive.description)
             } else if verify {
                 NSLog("ShortcutCaptureDemo verification skipped: focus or Accessibility unavailable")
             }

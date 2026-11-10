@@ -5,7 +5,10 @@ public struct KeyPressDisplay: Sendable {
     public struct Press: Sendable, Equatable {
         public let text: String
         public let isText: Bool
-        public init(text: String, isText: Bool) { self.text = text; self.isText = isText }
+        public init(text: String, isText: Bool) {
+            self.text = text
+            self.isText = isText
+        }
     }
 
     private var modifiers: Set<PhysicalKey> = []
@@ -21,7 +24,8 @@ public struct KeyPressDisplay: Sendable {
         let names = Set(modifiers.map { Self.name($0) })
         let shortcut = !names.subtracting(["Shift"]).isEmpty
         if !shortcut, let text = characters ?? Self.literal(key, shift: names.contains("Shift")),
-           !text.isEmpty, text.unicodeScalars.allSatisfy({ !CharacterSet.controlCharacters.contains($0) && !(0xF700...0xF8FF).contains($0.value) }) {
+            !text.isEmpty, text.unicodeScalars.allSatisfy({ !CharacterSet.controlCharacters.contains($0) && !(0xF700...0xF8FF).contains($0.value) })
+        {
             return Press(text: text, isText: true)
         }
         let prefix = ["Ctrl", "Alt", "Shift", "Win"].filter { names.contains($0) }
@@ -46,9 +50,12 @@ public struct KeyPressDisplay: Sendable {
         case "MetaLeft", "MetaRight": "Win"
         case "Enter": "Return"
         case "Escape": "Esc"
-        default: key.name.hasPrefix("Key") ? String(key.name.dropFirst(3))
-            : key.name.hasPrefix("Digit") ? String(key.name.dropFirst(5))
-            : key.name.hasPrefix("Arrow") ? String(key.name.dropFirst(5)) : key.name
+        default:
+            key.name.hasPrefix("Key")
+                ? String(key.name.dropFirst(3))
+                : key.name.hasPrefix("Digit")
+                    ? String(key.name.dropFirst(5))
+                    : key.name.hasPrefix("Arrow") ? String(key.name.dropFirst(5)) : key.name
         }
     }
 
@@ -63,7 +70,7 @@ public struct KeyPressDisplay: Sendable {
             "Digit8": ("8", "*"), "Digit9": ("9", "("), "Space": (" ", " "), "Minus": ("-", "_"),
             "Equal": ("=", "+"), "BracketLeft": ("[", "{"), "BracketRight": ("]", "}"), "Backslash": ("\\", "|"),
             "Semicolon": (";", ":"), "Quote": ("'", "\""), "Backquote": ("`", "~"), "Comma": (",", "<"),
-            "Period": (".", ">"), "Slash": ("/", "?")
+            "Period": (".", ">"), "Slash": ("/", "?"),
         ]
         return literals[key.name].map { shift ? $0.1 : $0.0 }
     }

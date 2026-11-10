@@ -109,9 +109,10 @@ final class RendererDemo: NSWindowController, NSWindowDelegate {
         window?.title = String(format: "Renderer demo | %.1f presents/s | ingest %.1f µs", presents, samples.averageMicroseconds)
         let geometry = DesktopGeometry(remoteSize: desktop.remoteSize, drawableSize: desktop.convertToBacking(desktop.bounds).size)
         status.stringValue = String(format: "small %.1f µs · full %.1f µs · %@", small, full, geometry.isPixelExact ? "1:1 nearest" : "aspect fit linear")
-        NSLog("RendererDemo paused=%@ presents/s=%.2f submitted=%llu gpu_ms=%.3f small_us=%.3f full_us=%.3f small_n=%llu full_n=%llu total_submitted=%llu failure=%@",
-              samples.paused.description, presents, submitted, gpuMilliseconds, small, full, samples.smallCount, samples.fullCount,
-              render.submittedFrames, render.lastFailure?.localizedDescription ?? "none")
+        NSLog(
+            "RendererDemo paused=%@ presents/s=%.2f submitted=%llu gpu_ms=%.3f small_us=%.3f full_us=%.3f small_n=%llu full_n=%llu total_submitted=%llu failure=%@",
+            samples.paused.description, presents, submitted, gpuMilliseconds, small, full, samples.smallCount, samples.fullCount,
+            render.submittedFrames, render.lastFailure?.localizedDescription ?? "none")
         previousStatistics = render
         previousTime = now
     }
@@ -136,7 +137,12 @@ final class RendererDemo: NSWindowController, NSWindowDelegate {
 
         init(renderer: FrameRenderer) { self.renderer = renderer }
         func stop() { state.withLock { $0.stopped = true } }
-        func togglePause() -> Bool { state.withLock { $0.paused.toggle(); return $0.paused } }
+        func togglePause() -> Bool {
+            state.withLock {
+                $0.paused.toggle()
+                return $0.paused
+            }
+        }
 
         func run() {
             let width = 2560
@@ -157,36 +163,41 @@ final class RendererDemo: NSWindowController, NSWindowDelegate {
                         paintBackground(pixels, rectangle: DirtyRect(x: 0, y: 0, width: width, height: height), stride: stride)
                         // Single-pixel vertical stripes reveal blur at native resolution.
                         for x in 64..<576 {
-                            fill(pixels, rectangle: DirtyRect(x: x, y: 64, width: 1, height: 64), stride: stride,
-                                 color: x.isMultiple(of: 2) ? 0x00FFFFFF : 0)
+                            fill(
+                                pixels, rectangle: DirtyRect(x: x, y: 64, width: 1, height: 64), stride: stride,
+                                color: x.isMultiple(of: 2) ? 0x00FF_FFFF : 0)
                         }
                     } else {
                         paintBackground(pixels, rectangle: previous, stride: stride)
                     }
-                    fill(pixels, rectangle: rectangle, stride: stride, color: 0x00F5A623)
+                    fill(pixels, rectangle: rectangle, stride: stride, color: 0x00F5_A623)
                     let dirty = full ? [DirtyRect(x: 0, y: 0, width: width, height: height)] : [previous, rectangle]
                     let start = CACurrentMediaTime()
                     renderer.ingest(pixels: pixels, width: width, height: height, bytesPerRow: stride, dirty: dirty)
                     let duration = CACurrentMediaTime() - start
                     state.withLock {
-                        if full { $0.fullCount += 1; $0.fullSeconds += duration }
-                        else { $0.smallCount += 1; $0.smallSeconds += duration }
+                        if full {
+                            $0.fullCount += 1
+                            $0.fullSeconds += duration
+                        } else {
+                            $0.smallCount += 1
+                            $0.smallSeconds += duration
+                        }
                     }
                     previous = rectangle
                     frame += 1
                 }
                 deadline += 1.0 / 60
                 let remaining = deadline - CACurrentMediaTime()
-                if remaining > 0 { Thread.sleep(forTimeInterval: remaining) }
-                else { deadline = CACurrentMediaTime() }
+                if remaining > 0 { Thread.sleep(forTimeInterval: remaining) } else { deadline = CACurrentMediaTime() }
             }
         }
 
         private func paintBackground(_ pixels: UnsafeMutableRawPointer, rectangle: DirtyRect, stride: Int) {
             for y in rectangle.y..<(rectangle.y + rectangle.height) {
-                var color: UInt32 = (y / 90).isMultiple(of: 2) ? 0x001B2838 : 0x00233346
-                if y < 16 { color = 0x00E24A4A }
-                if y >= 1424 { color = 0x004A80E2 }
+                var color: UInt32 = (y / 90).isMultiple(of: 2) ? 0x001B_2838 : 0x0023_3346
+                if y < 16 { color = 0x00E2_4A4A }
+                if y >= 1424 { color = 0x004A_80E2 }
                 memset_pattern4(pixels + y * stride + rectangle.x * 4, &color, rectangle.width * 4)
             }
         }

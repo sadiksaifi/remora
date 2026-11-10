@@ -12,7 +12,8 @@ public struct CommandLineTool: Sendable {
     }
 
     public enum Failure: Error, LocalizedError {
-        case conflict(String), notInstalled
+        case conflict(String)
+        case notInstalled
 
         public var errorDescription: String? {
             switch self {
@@ -31,8 +32,10 @@ public struct CommandLineTool: Sendable {
 
     /// `target` is the file the link points to, such as the bundled executable, `Remora.app/Contents/Helpers/remora`.
     /// With `adoptsOtherCopies`, a link to a Remora helper in another copy of Remora also counts as Remora's.
-    public init(target: URL, link: URL = FileManager.default.homeDirectoryForCurrentUser.appending(path: ".local/bin/remora"),
-                adoptsOtherCopies: Bool = true) {
+    public init(
+        target: URL, link: URL = FileManager.default.homeDirectoryForCurrentUser.appending(path: ".local/bin/remora"),
+        adoptsOtherCopies: Bool = true
+    ) {
         self.target = target
         self.link = link
         self.adoptsOtherCopies = adoptsOtherCopies
@@ -77,7 +80,8 @@ public struct CommandLineTool: Sendable {
     /// A GUI app's PATH lacks what shell config adds, so this asks the user's login shell in a clean environment.
     public func isOnShellPath() async -> Bool? {
         let shell = getpwuid(getuid()).flatMap { String(validatingCString: $0.pointee.pw_shell) } ?? "/bin/zsh"
-        let process = Process(), output = Pipe()
+        let process = Process()
+        let output = Pipe()
         process.executableURL = URL(fileURLWithPath: shell)
         // Record separators mark the answer, because shell config can print escapes on the same line.
         process.arguments = ["-l", "-i", "-c", #"printf '\036%s\036' "$(command -v remora)""#]

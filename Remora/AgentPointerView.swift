@@ -65,7 +65,10 @@ final class AgentPointerView: NSView {
         let shown = snapshot.keyOpacity >= 1
         guard shown != keyPressShown else { return }
         keyPressShown = shown
-        NSAnimationContext.runAnimationGroup { $0.duration = 0.25; keyPress.animator().alphaValue = shown ? 1 : 0 }
+        NSAnimationContext.runAnimationGroup {
+            $0.duration = 0.25
+            keyPress.animator().alphaValue = shown ? 1 : 0
+        }
     }
 }
 
@@ -98,8 +101,9 @@ private final class AgentCursorView: NSView {
         glyphLayer.path = path
         // A layer filter renders the layer's bounds, so they enclose the outline and its stroke.
         glyphLayer.bounds = path.boundingBoxOfPath.insetBy(dx: -CursorStyle.strokeWidth, dy: -CursorStyle.strokeWidth)
-        glyphLayer.anchorPoint = CGPoint(x: -glyphLayer.bounds.minX / glyphLayer.bounds.width,
-                                         y: -glyphLayer.bounds.minY / glyphLayer.bounds.height)
+        glyphLayer.anchorPoint = CGPoint(
+            x: -glyphLayer.bounds.minX / glyphLayer.bounds.width,
+            y: -glyphLayer.bounds.minY / glyphLayer.bounds.height)
         glyphLayer.strokeColor = CursorStyle.stroke
         glyphLayer.lineWidth = CursorStyle.strokeWidth
         glyphLayer.lineJoin = .round
@@ -121,8 +125,10 @@ private final class AgentCursorView: NSView {
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
         guard let window else { return }
-        for name in [NSWindow.didChangeOcclusionStateNotification, NSWindow.didMiniaturizeNotification,
-                     NSWindow.didDeminiaturizeNotification] {
+        for name in [
+            NSWindow.didChangeOcclusionStateNotification, NSWindow.didMiniaturizeNotification,
+            NSWindow.didDeminiaturizeNotification,
+        ] {
             NotificationCenter.default.addObserver(self, selector: #selector(windowStateChanged), name: name, object: window)
         }
         updateContentsScale()
@@ -157,7 +163,8 @@ private final class AgentCursorView: NSView {
     /// Hidden tabs leave the window, and covered or minimized windows show nothing.
     private var isPresentable: Bool {
         guard let window, window.occlusionState.contains(.visible), !window.isMiniaturized,
-              desktop.size.width > 0, desktop.rect.width > 0 else { return false }
+            desktop.size.width > 0, desktop.rect.width > 0
+        else { return false }
         return true
     }
 
@@ -169,9 +176,15 @@ private final class AgentCursorView: NSView {
     /// Applies the pose at `time` and returns true when nothing will change until the state notifies again.
     @discardableResult
     private func render(at time: TimeInterval) -> Bool {
-        guard let state, isPresentable else { cursorLayer.isHidden = true; return true }
+        guard let state, isPresentable else {
+            cursorLayer.isHidden = true
+            return true
+        }
         let snapshot = state.snapshot(at: time)
-        guard snapshot.showAgentPointer else { cursorLayer.isHidden = true; return true }
+        guard snapshot.showAgentPointer else {
+            cursorLayer.isHidden = true
+            return true
+        }
         guard let frame = snapshot.agentCursor, frame.pose.opacity > 0.001 else {
             cursorLayer.isHidden = true
             return snapshot.agentCursor?.isSettled ?? true

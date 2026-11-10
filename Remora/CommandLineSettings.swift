@@ -38,7 +38,8 @@ extension CommandLineController {
 extension SettingKey {
     init(_ name: String) throws {
         guard let key = Self(rawValue: name) else {
-            throw ControlFailure(.invalidArgument, "Unknown setting '\(name)'.",
+            throw ControlFailure(
+                .invalidArgument, "Unknown setting '\(name)'.",
                 hint: "Use \(Self.allCases.map(\.rawValue).joined(separator: ", ")).")
         }
         self = key

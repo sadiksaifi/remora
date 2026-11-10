@@ -12,7 +12,9 @@ public struct SessionControl: Sendable {
         public var keys: Int
         public var scrolls: Int
         public init(clicks: Int = 0, keys: Int = 0, scrolls: Int = 0) {
-            self.clicks = clicks; self.keys = keys; self.scrolls = scrolls
+            self.clicks = clicks
+            self.keys = keys
+            self.scrolls = scrolls
         }
     }
     public struct Summary: Sendable, Equatable {
@@ -50,8 +52,16 @@ public struct SessionControl: Sendable {
     @discardableResult
     public mutating func beginHandover(_ kind: Handover, frame: Int) -> Bool {
         guard kind == .stop ? canStop : canTakeOver else { return false }
-        handover = switch kind { case .takeOver: .paused; case .stop: .stopped; case .release: .idle }
-        if state == .active { counts = Counts(); pauseFrame = frame }
+        handover =
+            switch kind {
+            case .takeOver: .paused
+            case .stop: .stopped
+            case .release: .idle
+            }
+        if state == .active {
+            counts = Counts()
+            pauseFrame = frame
+        }
         return true
     }
 

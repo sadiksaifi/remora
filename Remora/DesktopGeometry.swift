@@ -25,8 +25,9 @@ struct DesktopGeometry {
 
     func remotePoint(for point: CGPoint) -> CGPoint? {
         guard contentRect.width > 0, contentRect.height > 0,
-              point.x >= contentRect.minX, point.x < contentRect.maxX,
-              point.y >= contentRect.minY, point.y < contentRect.maxY else { return nil }
+            point.x >= contentRect.minX, point.x < contentRect.maxX,
+            point.y >= contentRect.minY, point.y < contentRect.maxY
+        else { return nil }
         return CGPoint(
             x: (point.x - contentRect.minX) * remoteSize.width / contentRect.width,
             y: (point.y - contentRect.minY) * remoteSize.height / contentRect.height

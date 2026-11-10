@@ -128,8 +128,10 @@ final class RemoteDesktopView: NSView {
         frameUpdates = updates
         frameObserver = renderer.desktop.addFrameObserver { _ in updates.add(data: 1) }
         window.makeFirstResponder(self)
-        for name in [NSWindow.didChangeOcclusionStateNotification, NSWindow.didDeminiaturizeNotification,
-                     NSWindow.didChangeScreenNotification] {
+        for name in [
+            NSWindow.didChangeOcclusionStateNotification, NSWindow.didDeminiaturizeNotification,
+            NSWindow.didChangeScreenNotification,
+        ] {
             NotificationCenter.default.addObserver(self, selector: #selector(windowChanged(_:)), name: name, object: window)
         }
         requestRedraw()
@@ -191,8 +193,9 @@ final class RemoteDesktopView: NSView {
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
         if let inputTrackingArea { removeTrackingArea(inputTrackingArea) }
-        let area = NSTrackingArea(rect: .zero, options: [.mouseMoved, .activeInKeyWindow, .inVisibleRect],
-                                  owner: self, userInfo: nil)
+        let area = NSTrackingArea(
+            rect: .zero, options: [.mouseMoved, .activeInKeyWindow, .inVisibleRect],
+            owner: self, userInfo: nil)
         addTrackingArea(area)
         inputTrackingArea = area
     }
@@ -243,7 +246,8 @@ final class RemoteDesktopView: NSView {
 
     private func refresh() {
         guard frameUpdates != nil, let window, window.occlusionState.contains(.visible),
-              !window.isMiniaturized, !isHiddenOrHasHiddenAncestor else { return }
+            !window.isMiniaturized, !isHiddenOrHasHiddenAncestor
+        else { return }
         let revision = redrawRevision
         let refreshRate = window.screen?.maximumFramesPerSecond ?? 60
         let interval = 1.0 / Double(refreshRate > 0 ? refreshRate : 60)
@@ -281,20 +285,24 @@ extension RemoteDesktopView {
 
     override func accessibilityCustomActions() -> [NSAccessibilityCustomAction]? {
         let captured = isKeyboardCaptured
-        return [NSAccessibilityCustomAction(name: captured ? "Release Keyboard Capture" : "Capture Keyboard") { [weak self] in
-            self?.onAccessibilityCapture?(!captured)
-            return true
-        }]
+        return [
+            NSAccessibilityCustomAction(name: captured ? "Release Keyboard Capture" : "Capture Keyboard") { [weak self] in
+                self?.onAccessibilityCapture?(!captured)
+                return true
+            }
+        ]
     }
 
     override func accessibilityChildren() -> [Any]? { (super.accessibilityChildren() ?? []) + [screenElement] }
 
     override func accessibilityHelp() -> String? {
-        var help = "The remote computer's apps are not accessibility elements. Press or focus this desktop to capture the keyboard; Control-Option-Command-Escape releases it. Command acts as the Windows or Super key, Control as Control, and Option as Alt."
+        var help =
+            "The remote computer's apps are not accessibility elements. Press or focus this desktop to capture the keyboard; Control-Option-Command-Escape releases it. Command acts as the Windows or Super key, Control as Control, and Option as Alt."
         let content = screenRect
         guard content.width > 0 else { return help + " The remote screen has not drawn yet." }
         let scale = content.width / remoteSize.width
-        help += " The remote screen is \(Int(remoteSize.width)) by \(Int(remoteSize.height)) pixels, drawn at x \(Self.number(content.minX)), y \(Self.number(content.minY)), \(Self.number(content.width)) by \(Self.number(content.height)) points in this view, at \(Self.number(scale)) points per pixel, from the top left. Remote x = (view x - \(Self.number(content.minX))) / \(Self.number(scale)), and remote y = (view y - \(Self.number(content.minY))) / \(Self.number(scale))."
+        help +=
+            " The remote screen is \(Int(remoteSize.width)) by \(Int(remoteSize.height)) pixels, drawn at x \(Self.number(content.minX)), y \(Self.number(content.minY)), \(Self.number(content.width)) by \(Self.number(content.height)) points in this view, at \(Self.number(scale)) points per pixel, from the top left. Remote x = (view x - \(Self.number(content.minX))) / \(Self.number(scale)), and remote y = (view y - \(Self.number(content.minY))) / \(Self.number(scale))."
         return help
     }
 

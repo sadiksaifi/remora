@@ -31,9 +31,10 @@ import Testing
 }
 
 @Test func legacyRDPAndVNCConnectionsRoundTrip() throws {
-    let legacy = Data("""
-    {"id":"00000000-0000-0000-0000-000000000001","name":"Old","host":"host","port":3389,"username":"user","kind":"rdp"}
-    """.utf8)
+    let legacy = Data(
+        """
+        {"id":"00000000-0000-0000-0000-000000000001","name":"Old","host":"host","port":3389,"username":"user","kind":"rdp"}
+        """.utf8)
     let old = try JSONDecoder().decode(Connection.self, from: legacy)
     #expect(old.kind == .rdp)
     #expect(old.resolution == .fitToWindow)
@@ -46,9 +47,10 @@ import Testing
 }
 
 @Test func savedAppleModeSurvivesDecodeAndEncode() throws {
-    let saved = Data("""
-    {"id":"00000000-0000-0000-0000-000000000002","name":"Mac","host":"mac","port":5900,"username":"","kind":"vnc","vncMode":"apple"}
-    """.utf8)
+    let saved = Data(
+        """
+        {"id":"00000000-0000-0000-0000-000000000002","name":"Mac","host":"mac","port":5900,"username":"","kind":"vnc","vncMode":"apple"}
+        """.utf8)
     let encoded = try JSONEncoder().encode(try JSONDecoder().decode(Connection.self, from: saved))
     let fields = try #require(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
     #expect(fields["vncMode"] as? String == "apple")

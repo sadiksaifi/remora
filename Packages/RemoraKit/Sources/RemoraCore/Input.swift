@@ -75,7 +75,10 @@ public struct ScrollAccumulator: Sendable {
         )
     }
 
-    public mutating func reset() { x = 0; y = 0 }
+    public mutating func reset() {
+        x = 0
+        y = 0
+    }
 
     private static func take(_ delta: Double, remainder: inout Double) -> Int32 {
         guard delta.isFinite else { return 0 }
@@ -108,7 +111,7 @@ public struct KeyboardState: Sendable {
 
     public mutating func flagsChanged(keyCode: UInt16, rawFlags: UInt) -> [KeyInput] {
         if keyCode == 0x39 {
-            let on = rawFlags & 0x10000 != 0 // NX_ALPHASHIFTMASK
+            let on = rawFlags & 0x10000 != 0  // NX_ALPHASHIFTMASK
             guard on != capsLockOn else { return [] }
             capsLockOn = on
             return [KeyInput(keyCode: keyCode, isDown: true), KeyInput(keyCode: keyCode, isDown: false)]
@@ -144,12 +147,13 @@ public struct KeyboardState: Sendable {
         var flags: UInt = 0
         for (aggregate, left, right): (UInt, UInt16, UInt16) in [
             (0x20000, 0x38, 0x3C), (0x40000, 0x3B, 0x3E),
-            (0x80000, 0x3A, 0x3D), (0x100000, 0x37, 0x36)
+            (0x80000, 0x3A, 0x3D), (0x100000, 0x37, 0x36),
         ] {
             let mask = Self.modifierMask(left)! | Self.modifierMask(right)!
             let device = rawFlags & mask
-            if device != 0 { flags |= device }
-            else if rawFlags & aggregate != 0 {
+            if device != 0 {
+                flags |= device
+            } else if rawFlags & aggregate != 0 {
                 let held = [left, right].reduce(staleModifiers & mask) {
                     $0 | (pressed.contains($1) ? Self.modifierMask($1)! : 0)
                 }
@@ -161,14 +165,14 @@ public struct KeyboardState: Sendable {
 
     private static func modifierMask(_ key: UInt16) -> UInt? {
         switch key {
-        case 0x38: 0x0002 // NX_DEVICELSHIFTKEYMASK
-        case 0x3C: 0x0004 // NX_DEVICERSHIFTKEYMASK
-        case 0x3B: 0x0001 // NX_DEVICELCTLKEYMASK
-        case 0x3E: 0x2000 // NX_DEVICERCTLKEYMASK
-        case 0x3A: 0x0020 // NX_DEVICELALTKEYMASK
-        case 0x3D: 0x0040 // NX_DEVICERALTKEYMASK
-        case 0x37: 0x0008 // NX_DEVICELCMDKEYMASK
-        case 0x36: 0x0010 // NX_DEVICERCMDKEYMASK
+        case 0x38: 0x0002  // NX_DEVICELSHIFTKEYMASK
+        case 0x3C: 0x0004  // NX_DEVICERSHIFTKEYMASK
+        case 0x3B: 0x0001  // NX_DEVICELCTLKEYMASK
+        case 0x3E: 0x2000  // NX_DEVICERCTLKEYMASK
+        case 0x3A: 0x0020  // NX_DEVICELALTKEYMASK
+        case 0x3D: 0x0040  // NX_DEVICERALTKEYMASK
+        case 0x37: 0x0008  // NX_DEVICELCMDKEYMASK
+        case 0x36: 0x0010  // NX_DEVICERCMDKEYMASK
         default: nil
         }
     }
@@ -194,15 +198,15 @@ public struct KeyboardRouting: Sendable {
     public init() {}
 
     public mutating func route(keyCode: UInt16, rawFlags: UInt, event: Event) -> Disposition {
-        let modifiers = rawFlags & 0x1E0000 // Shift, Control, Option, Command.
+        let modifiers = rawFlags & 0x1E0000  // Shift, Control, Option, Command.
         if event == .keyDown {
             if keyCode == 0x35, modifiers == 0x1C0000 { return .releaseCapture }
             let local: Bool
             switch modifiers {
-            case 0x100000: local = keyCode == 0x0C // Cmd-Q.
-            case 0x140000: local = keyCode == 0x03 // Ctrl-Cmd-F.
+            case 0x100000: local = keyCode == 0x0C  // Cmd-Q.
+            case 0x140000: local = keyCode == 0x03  // Ctrl-Cmd-F.
             case 0x1C0000: local = Self.localChordKeys.contains(keyCode)
-            case 0x1E0000: local = keyCode == 0x01 // Copy Screenshot.
+            case 0x1E0000: local = keyCode == 0x01  // Copy Screenshot.
             default: local = false
             }
             if local {

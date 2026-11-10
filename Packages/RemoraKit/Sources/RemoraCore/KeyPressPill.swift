@@ -24,7 +24,8 @@ public struct KeyPressPill: Equatable, Sendable {
 
     public init?(text: String?, isText: Bool, scale: CGFloat) {
         guard let text else { return nil }
-        let height: CGFloat = 44, inset: CGFloat = 5
+        let height: CGFloat = 44
+        let inset: CGFloat = 5
         let blank = text.allSatisfy(\.isWhitespace)
         let parts = text.components(separatedBy: " ×")
         let keys = isText && !blank ? [] : blank ? ["Space"] : parts[0].split(separator: "+").map(String.init)
@@ -34,8 +35,12 @@ public struct KeyPressPill: Equatable, Sendable {
         func add(_ text: String, _ kind: Kind, before: CGFloat, padding: CGFloat, minimum: CGFloat = 0) {
             let width = max(minimum * scale, Self.width(text, kind, scale: scale) + 2 * padding * scale)
             x += before * scale
-            items.append(Item(text: text, kind: kind, frame: CGRect(x: x, y: (kind == .key ? inset : 0) * scale,
-                width: width, height: (kind == .key ? height - 2 * inset : height) * scale)))
+            items.append(
+                Item(
+                    text: text, kind: kind,
+                    frame: CGRect(
+                        x: x, y: (kind == .key ? inset : 0) * scale,
+                        width: width, height: (kind == .key ? height - 2 * inset : height) * scale)))
             x += width
         }
         if keys.isEmpty {
@@ -63,13 +68,17 @@ public struct KeyPressPill: Equatable, Sendable {
     public static func font(_ kind: Kind, scale: CGFloat) -> CTFont {
         let size = fontSize(kind) * scale
         let system = CTFontCreateUIFontForLanguage(.system, size, nil)!
-        return CTFontCreateWithFontDescriptor(CTFontDescriptorCreateCopyWithAttributes(CTFontCopyFontDescriptor(system),
-            [kCTFontTraitsAttribute: [kCTFontWeightTrait: 0.3]] as CFDictionary), size, nil)
+        return CTFontCreateWithFontDescriptor(
+            CTFontDescriptorCreateCopyWithAttributes(
+                CTFontCopyFontDescriptor(system),
+                [kCTFontTraitsAttribute: [kCTFontWeightTrait: 0.3]] as CFDictionary), size, nil)
     }
 
     private static func width(_ text: String, _ kind: Kind, scale: CGFloat) -> CGFloat {
-        let line = CTLineCreateWithAttributedString(NSAttributedString(string: text,
-            attributes: [NSAttributedString.Key(kCTFontAttributeName as String): font(kind, scale: scale)]))
+        let line = CTLineCreateWithAttributedString(
+            NSAttributedString(
+                string: text,
+                attributes: [NSAttributedString.Key(kCTFontAttributeName as String): font(kind, scale: scale)]))
         return ceil(CGFloat(CTLineGetTypographicBounds(line, nil, nil, nil)))
     }
 
@@ -81,9 +90,12 @@ public struct KeyPressPill: Equatable, Sendable {
         guard let standard = KeyPressPill(text: state.keyText, isText: state.keyIsText, scale: unit * state.keySize) else { return nil }
         let fit = min(1, max(0.1, (desktop.width - 16 * unit) / standard.size.width))
         let pill = fit < 1 ? KeyPressPill(text: state.keyText, isText: state.keyIsText, scale: standard.scale * fit)! : standard
-        let frame = CGRect(x: ((desktop.width - pill.size.width) / 2).rounded(),
+        let frame = CGRect(
+            x: ((desktop.width - pill.size.width) / 2).rounded(),
             y: max(0, desktop.height - pill.size.height - 64 * unit).rounded(), width: pill.size.width, height: pill.size.height)
-        return (KeyPressPill(pill, pointsPerPixel: pointsPerPixel),
-            frame.applying(CGAffineTransform(scaleX: pointsPerPixel, y: pointsPerPixel)))
+        return (
+            KeyPressPill(pill, pointsPerPixel: pointsPerPixel),
+            frame.applying(CGAffineTransform(scaleX: pointsPerPixel, y: pointsPerPixel))
+        )
     }
 }

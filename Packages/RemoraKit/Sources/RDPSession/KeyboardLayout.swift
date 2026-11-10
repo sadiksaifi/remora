@@ -1,5 +1,5 @@
-import Carbon
 import CFreeRDPBridge
+import Carbon
 
 /// Snapshot once for this connection. Input source IDs are stable across UI languages.
 @MainActor
@@ -10,7 +10,8 @@ enum KeyboardLayout {
 
     static func current() -> UInt32 {
         guard let source = TISCopyCurrentKeyboardInputSource()?.takeRetainedValue(),
-              let property = TISGetInputSourceProperty(source, kTISPropertyInputSourceID) else {
+            let property = TISGetInputSourceProperty(source, kTISPropertyInputSourceID)
+        else {
             return 0x0409
         }
         let identifier = Unmanaged<CFString>.fromOpaque(property).takeUnretainedValue() as String
@@ -36,11 +37,17 @@ enum KeyboardLayout {
         case "com.apple.keylayout.Dvorak": name = "United States-Dvorak"
         case "com.apple.keylayout.USInternational-PC": name = "United States-International"
         default:
-            if identifier.hasPrefix("com.apple.inputmethod.Kotoeri") { name = "Japanese" }
-            else if identifier.hasPrefix("com.apple.inputmethod.Korean") { name = "Korean" }
-            else if identifier.hasPrefix("com.apple.inputmethod.SCIM") { return 0x0804 }
-            else if identifier.hasPrefix("com.apple.inputmethod.TCIM") { return 0x0404 }
-            else { return 0x0409 }
+            if identifier.hasPrefix("com.apple.inputmethod.Kotoeri") {
+                name = "Japanese"
+            } else if identifier.hasPrefix("com.apple.inputmethod.Korean") {
+                name = "Korean"
+            } else if identifier.hasPrefix("com.apple.inputmethod.SCIM") {
+                return 0x0804
+            } else if identifier.hasPrefix("com.apple.inputmethod.TCIM") {
+                return 0x0404
+            } else {
+                return 0x0409
+            }
         }
         return name.withCString { rm_rdp_keyboard_layout($0) }
     }
