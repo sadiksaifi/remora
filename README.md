@@ -1,6 +1,6 @@
 # Remora
 
-Remora is a remote desktop client for the Mac, with native RDP and VNC connections.
+Remora is a remote desktop client for the Mac. It connects to Windows, Linux and Mac machines over RDP and VNC, and it is built from AppKit, SwiftUI and Metal so it behaves like the rest of your Mac.
 
 ## What it does
 
@@ -23,7 +23,7 @@ xcodegen generate
 open Remora.xcodeproj
 ```
 
-Then run the Remora scheme. [Vendor/README.md](Vendor/README.md) explains the engine build, and [docs/architecture.md](docs/architecture.md) explains how the app fits together.
+Then run the Remora scheme. [Vendor/README.md](Vendor/README.md) explains the engine build.
 
 ## Command line
 
@@ -34,14 +34,15 @@ remora connection list
 remora connect "My PC"
 remora connection create --kind vnc --host desktop.local --name "VNC desktop"
 remora screenshot --output desk.png
-remora help agent
 ```
 
-`remora help agent` is the guide for agents. When an agent is in control, the tab shows it, and you can take over at any moment.
+When an agent is in control, the tab shows it, and you can take over at any moment. Agents should run `remora help agent` first. To install that guide as an agent skill, use Settings > Command Line, `remora skill install`, or `npx skills add sadiksaifi/remora`.
 
-AI agents should run `remora help agent` first. To install the guide as an agent skill, use Settings > Command Line or `remora skill install`. It also works with `npx skills add sadiksaifi/remora`.
+## VNC
 
-VNC uses port 5900 by default. The verified target is wayvnc 0.10.2 with VeNCrypt X509Plain certificate TLS. Classic VNC, None, and ARD use an unencrypted desktop transport. RSA-AES and anonymous TLS are unsupported. See the [VNC backend notes](docs/architecture.md#vnc-backend) for security and feature limits. Older Remora versions cannot read connection files containing VNC records; export or back up connections before downgrading.
+Classic VNC, None and Apple Remote Desktop authentication leave the desktop traffic unencrypted. Prefer a server that offers VeNCrypt with certificate TLS, such as wayvnc.
+
+Older Remora versions cannot read a connection file that contains VNC connections. Back up your connections before you downgrade.
 
 ## License
 
