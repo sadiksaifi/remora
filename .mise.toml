@@ -29,9 +29,10 @@ description = "Format the Swift sources in place."
 run = "set -o pipefail; git ls-files -z --cached --others --exclude-standard '*.swift' | xargs -0 xcrun swift-format format --in-place --parallel"
 
 [tasks.check]
-description = "Lint the Swift sources, build and test. Run it before pushing or opening a PR."
+description = "Lint the Swift sources, check that Remora.xcodeproj matches project.yml, build and test. Run it before pushing or opening a PR."
 run = [
     "set -o pipefail; git ls-files -z --cached --others --exclude-standard '*.swift' | xargs -0 xcrun swift-format lint --strict --parallel",
-    { task = "build" },
-    { task = "test" },
+    "xcodegen generate --quiet && { git diff --exit-code --stat -- Remora.xcodeproj || { echo 'Remora.xcodeproj did not match project.yml. It is regenerated now; commit it.' >&2; exit 1; }; }",
+    "mise run build",
+    "mise run test",
 ]
