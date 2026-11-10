@@ -11,7 +11,7 @@ A native macOS desktop client for RDP and VNC.
 
 ## Development
 
-- Run commands with `mise run`, and before running any command, check the source of truth in `mise.toml`.
+- Run tasks with `mise run`. `.mise.toml` defines them.
 
 ## Agent skill
 
