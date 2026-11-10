@@ -2,7 +2,7 @@
 
 Remora is a native macOS remote desktop client. RDP uses FreeRDP 3.x. VNC uses LibVNCClient behind the same session interface.
 
-This is personal software. Prefer an existing library or a FreeRDP built-in over writing our own. Write code only where nothing suitable exists.
+This is personal software. Prefer an existing library or a FreeRDP or LibVNCClient built-in over writing our own. Write code only where nothing suitable exists.
 
 ## Platform
 
@@ -74,11 +74,11 @@ Take Over moves `active` to `paused`. Stop Agent Control moves `active` or `paus
 
 Resume requires a new CLI screenshot before the next input, or the command fails with `observation-required`. A screenshot taken while paused does not clear that requirement. Desktop geometry changes expire screenshot mappings; input with an old `--image` receipt fails with `image-expired`. Each session admits one pointer, key, text or batch input command at a time; overlapping commands fail immediately with `input-busy`. Session end cancels input and moves active control to `idle`, preserving the human's pause or stop. Manual reconnect replaces the session attempt UUID, so old session targets and screenshot mappings expire.
 
-The RDP adapter tracks held input per source. Focus changes release human input only. Agent requests release their own held state on every exit, including cancellation and timeout. Showing or focusing an agent-controlled tab does not release agent keys, synchronize lock keys, capture the keyboard, or show the shortcut-permission banner.
+Both adapters track held input per source. Focus changes release human input only. Agent requests release their own held state on every exit, including cancellation and timeout. Showing or focusing an agent-controlled tab does not release agent keys, synchronize lock keys, capture the keyboard, or show the shortcut-permission banner.
 
 Mac clipboard synchronization follows human ownership, independently of who opened the tab. It is disabled during active agent control and handover. It can resume while paused or stopped only when the connected desktop is visible, focused and in the active key window. CLI `clipboard get` reads remote text without attaching control. `clipboard set` attaches control and obeys the same pause and observation checks as input. Neither command accesses the Mac clipboard.
 
-`SessionDisplay` enables desktop updates while the desktop is visible, recording runs, or CLI frame demand is nonzero. Active and paused control retain background frame demand. Stop drops that demand. Connect, reconnect, resize, screenshot, frame waits and recording start hold temporary demand while waiting for frames. When no consumer needs frames, Remora requests RDP Suppress Output. A server without suppression support keeps sending updates. Re-enabling updates requests a full refresh. These demands do not start the hidden view's display link. An idle app with no sessions has no polling timer or drawing work.
+`SessionDisplay` enables desktop updates while the desktop is visible, recording runs, or CLI frame demand is nonzero. Active and paused control retain background frame demand. Stop drops that demand. Connect, reconnect, resize, screenshot, frame waits and recording start hold temporary demand while waiting for frames. When no consumer needs frames, an RDP session requests Suppress Output. A server without suppression support keeps sending updates. Standard VNC sessions keep receiving updates; see VNC backend. Re-enabling updates requests a full refresh. These demands do not start the hidden view's display link. An idle app with no sessions has no polling timer or drawing work.
 
 A 38-point glass capsule at the top center of the desktop shows "<agent> is in control" with Take Over, or "You're in control. <agent> is paused." with Resume. Stop Agent Control shows "<agent> can no longer control this session." without a button for four seconds, then fades the capsule. `session stop` removes the capsule at once. The tab replaces its status dot with `pointer.arrow.motionlines`, blue while active and gray while paused or stopped. The marker has no action. A recording marker follows it when both apply.
 
@@ -100,14 +100,16 @@ Quit paths are Command-Q, Dock menu Quit while a window is open, Quit Remora in 
 
 ## Session interface
 
-One Swift protocol in RemoraCore. The app never sees FreeRDP types.
+One Swift protocol in RemoraCore. The app never sees FreeRDP or LibVNCClient types.
 
 - Commands in: connect, disconnect, key, pointer, wheel, request resize, display updates on or off, local clipboard text.
 - Events out: state (connecting, awaiting credentials, awaiting trust, connected, reconnecting, disconnected with a typed reason), desktop size, cursor, remote clipboard text.
 - Frames go to an injected frame sink, not through the event stream.
 - A resize request is not a size change. Only the desktop size event resizes the renderer.
 
-## Threading
+## RDP threading
+
+The VNC worker is described in VNC backend.
 
 - Each session owns one dedicated thread. It runs `freerdp_connect`, the event loop, and every FreeRDP call.
 - Input, resize, display update, clipboard, and disconnect commands go through a locked queue plus a wake event in the event loop's wait set.
@@ -123,9 +125,9 @@ One Swift protocol in RemoraCore. The app never sees FreeRDP types.
 
 ## Desktop sizing
 
-Connections default to Fit to Window, including saved connections without a resolution key. Fit to Window connects at the tab's content size in backing pixels and announces the display's backing scale. Display Control follows window resizing, screen changes, full-screen transitions, and the tab showing again.
+Connections default to Fit to Window, including saved connections without a resolution key. For RDP, Fit to Window connects at the tab's content size in backing pixels and announces the display's backing scale. Display Control follows window resizing, screen changes, full-screen transitions, and the tab showing again. For VNC, the server owns geometry; Fit to Window sends the same sizes as ExtendedDesktopSize requests when the server supports them.
 
-A fixed resolution stores a width and height in remote pixels in RemoraCore. Each side must be 200 to 8192 pixels, and the width must be even. Fixed sessions connect with those dimensions and scale 1 (DesktopScaleFactor and DeviceScaleFactor 100). The RDP adapter rejects resize requests and disables Display Control negotiation for their lifetime, including automatic reconnect and GNOME's redirected reconnect through FreeRDP's original settings backup.
+A fixed resolution applies to RDP and stores a width and height in remote pixels in RemoraCore. Each side must be 200 to 8192 pixels, and the width must be even. Fixed sessions connect with those dimensions and scale 1 (DesktopScaleFactor and DeviceScaleFactor 100). The RDP adapter rejects resize requests and disables Display Control negotiation for their lifetime, including automatic reconnect and GNOME's redirected reconnect through FreeRDP's original settings backup.
 
 The window never resizes for a session. Fixed sessions and unrequested server desktop sizes render with aspect fit and letterboxing in the tab's content area below the toolbar. Fit to Window follows that area's size. In full screen the toolbar hides until the pointer reaches the top, and Fit to Window requests the screen size. The renderer and pointer mapping share `DesktopGeometry`; letterbox bars do not send pointer input.
 
@@ -144,9 +146,9 @@ The pill is a glass capsule beside the agent control capsule. `KeyPressPill` in 
 On screen, `AgentPointerView` hosts `KeyPressCapsule`, a SwiftUI view with `.glassEffect(.regular, in: .capsule)`, keycaps filled with `.quaternary`, and the count in `.secondary`. It uses the shared desktop layout scaled to view points and fades it in and out over 0.25 seconds. A frame cannot hold Liquid Glass, so recordings draw a rendition of it with Core Image: the desktop inside the capsule is blurred, saturated, and tinted for the window's appearance, under a Core Graphics image with the shadow, a hairline rim brighter at the top, keycaps, and text. The dark tint was matched to screen captures over light and dark desktops. `AgentPointerView` reports the window's appearance through `SessionOverlayState.setDarkAppearance`. Both new switches and `keyPressSize` use the shared `SettingKey` definition for CLI discovery and generated help; `remora settings set keyPressSize` rejects values outside 0.75 to 2.
 
 - The session view is first responder and handles `keyDown`, `keyUp`, `flagsChanged`, and `performKeyEquivalent`.
-- Key events carry the macOS virtual key code. RDP maps it with WinPR's Apple keycode table to scancodes.
+- Key events carry the macOS virtual key code. Both adapters map it with WinPR's Apple keycode table to scancodes. VNC then sends keysyms, plus QEMU extended key events when the server negotiates them.
 - Physical mapping: Command is Windows/Super, Control is Control, Option is Alt.
-- The keyboard layout announced to the server follows the current Mac input source.
+- The keyboard layout RDP announces to the server follows the current Mac input source.
 - Human-held keys and buttons are released when the window loses key status, the app deactivates, or the tab hides. Modifiers still held when the key state resets stay out of the remote state until released.
 - Scroll accumulates into 1/120-notch wheel units.
 - System shortcuts (Cmd-Tab, Cmd-Space) are captured with a `CGEventTap` while a session tab shows, its desktop has the keyboard, and the window is key. This needs the Accessibility permission. Without it, or with capture turned off in Settings, those shortcuts stay local.
@@ -196,7 +198,7 @@ Editor controls use `editor<Field>` identifiers: `editorProtocol`, `editorHost`,
 
 In Settings, the switch `captureSystemShortcuts` carries its label directly. It sits next to `openAccessibilitySettings` and `accessibilityPermission`. The switches `showKeyPresses` and `showPointerInRecordings` in General and `showAgentPointer` in Command Line do the same. The key press size slider is `keyPressSize`.
 
-## Codecs
+## RDP codecs
 
 - Progressive RemoteFX, AVC420, and AVC444 are enabled explicitly. FreeRDP's library defaults leave them off.
 - H.264 decodes through FFmpeg with VideoToolbox acceleration and FFmpeg software fallback.
@@ -205,7 +207,8 @@ In Settings, the switch `captureSystemShortcuts` carries its label directly. It 
 
 - Saved connections: a JSON file in Application Support.
 - Passwords: Keychain via KeychainAccess, keyed by connection ID.
-- Certificates: FreeRDP's own certificate store, with `ConfigPath` inside Application Support. Remora shows the trust dialog.
+- RDP certificates: FreeRDP's own certificate store, with `ConfigPath` inside Application Support. Remora shows the trust dialog.
+- VNC certificates: trusted leaf fingerprints in Application Support; see VNC backend.
 
 ## License
 
@@ -253,7 +256,7 @@ The UI entry points, recording states, elapsed-time API, and saved URLs above ar
 
 A recording begins with the current complete desktop. It uses AVAssetWriter, a video-only QuickTime movie, and HEVC. The top-level `AVVideoEncoderSpecificationKey` sets `kVTVideoEncoderSpecification_RequireHardwareAcceleratedVideoEncoder` to true. Hardware unavailability fails instead of falling back to software. The bit rate is four bits per desktop pixel per second, bounded to 2 to 40 Mbps. That gives about 8.3 Mbps at 1920 by 1080 and 33.2 Mbps at 3840 by 2160, retaining screen detail without allocating a high-motion camera bit rate to an idle desktop. Keyframes are at most two seconds apart. Frame reordering is disabled to reduce encoder buffering. Output color metadata is Rec. 709.
 
-The movie adapter gets BGRA IOSurface-backed, Metal-compatible buffers exclusively from the adaptor's pool. A six-buffer allocation threshold bounds pool growth. While recording, a lightweight observer announces frame arrival after the renderer's original dirty copy. The one-element mailbox holds only the latest arrival time, not pixels. The recording worker flushes accumulated dirty uploads to the existing desktop texture, then GPU-copies that texture directly into a pool buffer. The RDP thread performs no extra recording pixel copy and never waits for an encoder operation. Matching dimensions with no visible overlay use a Metal blit. With overlays or a size change, Core Image composites the small overlay images over the texture and aspect-fits the result over opaque black within the initial recording dimensions. `SessionOverlayDrawing.agentCursor(_:)` rasterizes the halo, lift, and transformed glyph into one small Core Graphics sprite in desktop pixels. The compositor applies `CIGaussianBlur` only when that sprite has a positive blur radius during the first 0.3 seconds of appear. Human cursor images and rings retain the existing sprite path. The screen renderer reads the shared cursor pose into Core Animation layers in `AgentPointerView`. For the key press pill it draws the glass chrome from `KeyPressPill`, and the recorder blurs only the capsule's region of the frame under it. The drawing cache retains the current chrome image, glyph path, and human ring, with no desktop-sized CPU overlay allocation. A same-format texture view forces alpha to one for Core Image sampling, because the protocol's alpha byte is undefined. The writer and track dimensions remain fixed. Core Image's intermediate cache is disabled.
+The movie adapter gets BGRA IOSurface-backed, Metal-compatible buffers exclusively from the adaptor's pool. A six-buffer allocation threshold bounds pool growth. While recording, a lightweight observer announces frame arrival after the renderer's original dirty copy. The one-element mailbox holds only the latest arrival time, not pixels. The recording worker flushes accumulated dirty uploads to the existing desktop texture, then GPU-copies that texture directly into a pool buffer. The session thread performs no extra recording pixel copy and never waits for an encoder operation. Matching dimensions with no visible overlay use a Metal blit. With overlays or a size change, Core Image composites the small overlay images over the texture and aspect-fits the result over opaque black within the initial recording dimensions. `SessionOverlayDrawing.agentCursor(_:)` rasterizes the halo, lift, and transformed glyph into one small Core Graphics sprite in desktop pixels. The compositor applies `CIGaussianBlur` only when that sprite has a positive blur radius during the first 0.3 seconds of appear. Human cursor images and rings retain the existing sprite path. The screen renderer reads the shared cursor pose into Core Animation layers in `AgentPointerView`. For the key press pill it draws the glass chrome from `KeyPressPill`, and the recorder blurs only the capsule's region of the frame under it. The drawing cache retains the current chrome image, glyph path, and human ring, with no desktop-sized CPU overlay allocation. A same-format texture view forces alpha to one for Core Image sampling, because the protocol's alpha byte is undefined. The writer and track dimensions remain fixed. Core Image's intermediate cache is disabled.
 
 Presentation, screenshots, and recording reserve command queue order under the renderer's existing lock with `enqueue()`. Encoding the rest of a command, compiling Core Image kernels, waiting for GPU completion, allocating encoder buffers, and appending to AVAssetWriter all happen outside that lock. Every enqueued command is committed even if its consumer throws. Each taken staging slot is returned exactly once by command completion, or by dropping a still-pending upload. There is no second capture semaphore. Core Video texture wrappers stay alive until their GPU copy completes, and ARC owns the pool buffers and framework objects.
 

@@ -220,7 +220,7 @@ private struct InputPlan {
         }
         let mapped = try geometry?.remotePoint(x: Int(x), y: Int(y)) ?? (x: Int(x), y: Int(y))
         guard let rx = UInt16(exactly: mapped.x), let ry = UInt16(exactly: mapped.y) else {
-            throw ControlFailure(.invalidArgument, "Coordinates exceed the RDP pointer range.")
+            throw ControlFailure(.invalidArgument, "Coordinates exceed the remote pointer range.")
         }
         return RemotePoint(x: rx, y: ry)
     }

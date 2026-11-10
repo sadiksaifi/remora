@@ -70,7 +70,7 @@ public struct ScrollAccumulator: Sendable {
         let multiplier = precise ? 3.0 : 120.0
         return WheelInput(
             vertical: Self.take(deltaY * multiplier, remainder: &y),
-            // Cocoa's positive X points left; RDP/SDL's positive X points right.
+            // Cocoa's positive X points left; RDP's and VNC's positive X points right.
             horizontal: Self.take(-deltaX * multiplier, remainder: &x)
         )
     }

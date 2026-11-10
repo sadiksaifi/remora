@@ -1,4 +1,6 @@
-# FreeRDP engine
+# Engines
+
+## RDP engine
 
 From the checkout root, run `./Vendor/build-engine.sh` on an arm64 Mac with full Xcode selected and CMake on `PATH`. The script downloads and verifies its own sources. It builds OpenSSL 3.6.5, FFmpeg 9.0.2, and FreeRDP 3.32.2 as Release static libraries for macOS 26.0 and later, then produces `Vendor/build/FreeRDP.xcframework` with one `macos-arm64` slice. OpenSSL, FFmpeg avcodec/avutil/swscale, WinPR, FreeRDP core, client common, and client channels are included in the merged archive. The installed WinPR and FreeRDP public headers, including generated headers, are in the slice's `Headers` directory.
 
