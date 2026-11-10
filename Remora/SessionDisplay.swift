@@ -3,8 +3,8 @@ import RemoraCore
 
 /// Requests a Fit to Window desktop size that follows the session's content area,
 /// separately from the remote desktop size. Full-screen transitions defer requests until they end.
-/// Pauses the server's desktop updates while the content area can't be seen: a hidden tab,
-/// a minimized window, or a fully covered window.
+/// Asks the server to pause desktop updates while the content area can't be seen: a hidden tab,
+/// a minimized window, or a fully covered window. A standard VNC server keeps sending them.
 @MainActor
 final class SessionDisplay {
     private weak var session: (any RemoteSession)?

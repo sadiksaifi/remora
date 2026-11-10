@@ -17,7 +17,8 @@ struct ConnectCommand: AsyncParsableCommand {
         Use fit (follow the window) or WIDTHxHEIGHT for this attempt only.
         The saved connection is unchanged.
         Each side must be 200 to 8192 pixels, with an even width.
-        Defaults to the saved resolution, or 1920x1080 for fit-to-window connections.
+        RDP starts at the saved resolution, or 1920x1080 for fit-to-window connections.
+        VNC starts at the server's size; use session resize to request other dimensions.
         """) var resolution: String?
     @MainActor func run() async throws {
         var args: [String: ControlValue] = ["connection": .string(connection), "background": .bool(background), "noWait": .bool(noWait)]
