@@ -3,7 +3,7 @@ import Foundation
 import RemoraControl
 
 struct ImageOptions: ParsableArguments {
-    @Option(help: "Map pointer coordinates from this screenshot receipt.") var image: String?
+    @Option(help: "Read X and Y as pixels in the screenshot that returned this image value, including one shrunk with --max-size.") var image: String?
     func adding(to arguments: [String: ControlValue]) -> [String: ControlValue] {
         var arguments = arguments
         if let image { arguments["image"] = .string(image) }
@@ -78,7 +78,12 @@ struct ScrollCommand: AsyncParsableCommand {
 }
 
 struct TypeCommand: AsyncParsableCommand {
-    static let configuration = CommandConfiguration(commandName: "type", abstract: "Send Unicode text without using the clipboard or Mac keyboard.")
+    static let configuration = CommandConfiguration(
+        commandName: "type", abstract: "Send Unicode text without using the clipboard or Mac keyboard.",
+        discussion: """
+            Line breaks press Enter. Servers drop characters their keyboard layout lacks, and some drop emoji. \
+            For that text and for long text, run clipboard set, then key Ctrl+V, or Cmd+V on a Mac.
+            """)
     @OptionGroup var options: CommonOptions
     @OptionGroup var target: SessionOptions
     @Option(help: "Text to send instead of reading stdin.") var text: String?

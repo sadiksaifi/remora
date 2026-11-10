@@ -888,7 +888,7 @@ extension SessionViewController {
         do { try control.checkInput() } catch SessionControl.Refusal.userActive {
             throw ControlFailure(
                 .userActive, "The user has taken control of this session.",
-                hint: "Wait for user.resumed, then take a new screenshot.")
+                hint: "Run remora wait --for resumed, again after each timeout, then take a new screenshot.")
         } catch SessionControl.Refusal.agentStopped {
             throw Self.agentStopped
         } catch SessionControl.Refusal.observationRequired {
@@ -900,7 +900,7 @@ extension SessionViewController {
 
     static let agentStopped = ControlFailure(
         .agentStopped, "The user stopped agent control of this session.",
-        hint: "End the task. Only the user can resume agent control, from Remora.")
+        hint: "End the task and leave the session open. Only the user can resume agent control, from Remora.")
 
     /// A nil `agent` comes from a request that did not name its program.
     func attachAgentControl(agent: String?) throws {
@@ -964,7 +964,7 @@ extension SessionViewController {
             case .takeOver:
                 ControlFailure(
                     .userActive, "The user has taken control of this session.",
-                    hint: "Wait for user.resumed, then take a new screenshot.")
+                    hint: "Run remora wait --for resumed, again after each timeout, then take a new screenshot.")
             case .stop: Self.agentStopped
             case .release: ControlFailure(.cancelled, "Agent control was released.")
             }

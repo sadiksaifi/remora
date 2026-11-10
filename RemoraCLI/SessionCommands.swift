@@ -8,7 +8,7 @@ struct SessionOptions: ParsableArguments {
 }
 
 struct ConnectCommand: AsyncParsableCommand {
-    static let configuration = CommandConfiguration(commandName: "connect", abstract: "Connect and wait for the first frame.")
+    static let configuration = CommandConfiguration(commandName: "connect", abstract: "Connect, or reuse the open session, and wait for the first frame.")
     @OptionGroup var options: CommonOptions
     @Argument(help: "Saved connection name or UUID.") var connection: String
     @Flag(help: "Leave the selected tab unchanged and do not show the window.") var background = false
@@ -56,6 +56,7 @@ struct SessionCommand: AsyncParsableCommand {
         @MainActor func run() async throws { try await options.execute(.init(command: "session.disconnect", session: target.target)) }
     }
     struct Close: AsyncParsableCommand {
+        static let configuration = CommandConfiguration(abstract: "Disconnect the session and close its tab.")
         @OptionGroup var options: CommonOptions
         @OptionGroup var target: SessionOptions
         @MainActor func run() async throws { try await options.execute(.init(command: "session.close", session: target.target)) }
@@ -112,7 +113,7 @@ struct WaitCommand: AsyncParsableCommand {
     @OptionGroup var options: CommonOptions
     @OptionGroup var target: SessionOptions
     @Option(name: .customLong("for"), help: "The state to wait for.") var state: State
-    @Option(help: "Wait for a frame strictly newer than this revision. Requires --for frame.") var after: Int?
+    @Option(help: "Wait for a frame strictly newer than this revision, such as a screenshot's frame value. Requires --for frame.") var after: Int?
     mutating func validate() throws {
         if let after, after < 0 || state != .frame { throw ValidationError("--after requires --for frame and a nonnegative revision.") }
     }

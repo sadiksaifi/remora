@@ -6,7 +6,7 @@ struct ScreenshotCommand: AsyncParsableCommand {
     static let configuration = CommandConfiguration(commandName: "screenshot", abstract: "Capture a current remote desktop PNG, including hidden sessions.")
     @OptionGroup var options: CommonOptions
     @OptionGroup var target: SessionOptions
-    @Option(help: "Save to this path, or write raw PNG bytes with -. Defaults to the configured save folder.") var output: String?
+    @Option(help: "Save to this unused path, or write raw PNG bytes with -. Defaults to the configured save folder.") var output: String?
     @Option(help: "Crop X,Y,W,H in remote pixels from the top-left.") var region: String?
     @Option(help: "Fit within WxH without upscaling.") var maxSize: String?
 
