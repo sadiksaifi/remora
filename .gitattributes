@@ -1,2 +1,3 @@
 # Generated from project.yml by XcodeGen. GitHub folds these files in PR diffs.
-Remora.xcodeproj/** linguist-generated=true
+Remora.xcodeproj/project.pbxproj linguist-generated=true
+Remora.xcodeproj/xcshareddata/xcschemes/*.xcscheme linguist-generated=true

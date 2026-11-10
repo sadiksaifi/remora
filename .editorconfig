@@ -12,7 +12,13 @@ trim_trailing_whitespace = true
 indent_size = 2
 
 # Upstream and generated files keep their own whitespace.
-[{*.patch,*.pbxproj,Vendor/licenses/**}]
+[{*.patch,*.pbxproj}]
+indent_style = unset
+indent_size = unset
+insert_final_newline = unset
+trim_trailing_whitespace = unset
+
+[Vendor/licenses/**]
 indent_style = unset
 indent_size = unset
 insert_final_newline = unset
