@@ -61,6 +61,8 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
         window.title = "Connections"
         window.minSize = NSSize(width: 480, height: 320)
         window.isReleasedWhenClosed = false
+        // Sessions are tabs inside this one window. Native tabs are separate windows, so window
+        // managers such as AeroSpace, yabai and Rectangle would see one window per session.
         window.tabbingMode = .disallowed
         window.collectionBehavior.insert(.fullScreenPrimary)
         window.contentViewController = pageViewController

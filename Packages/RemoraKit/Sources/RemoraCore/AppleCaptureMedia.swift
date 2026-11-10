@@ -159,6 +159,7 @@ final class AppleCaptureMovie: CaptureMovie, @unchecked Sendable {
         let settings: [String: Any] = [
             AVVideoCodecKey: AVVideoCodecType.hevc,
             AVVideoWidthKey: size.width, AVVideoHeightKey: size.height,
+            // Fail without a hardware encoder rather than fall back to software encoding.
             AVVideoEncoderSpecificationKey: [kVTVideoEncoderSpecification_RequireHardwareAcceleratedVideoEncoder as String: true],
             AVVideoCompressionPropertiesKey: [
                 AVVideoAverageBitRateKey: min(40_000_000, max(2_000_000, size.width * size.height * 4)),

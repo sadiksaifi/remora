@@ -109,6 +109,8 @@ public actor ControlServer {
         self.handler = handler
     }
 
+    /// The socket has no token, peer check or approval prompt by design. File modes limit it to
+    /// this user, and installing the CLI symlink is the only opt-in.
     public func start() async throws {
         guard listener == nil else { return }
         let directory = URL(fileURLWithPath: endpoint.path).deletingLastPathComponent()

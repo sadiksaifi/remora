@@ -76,6 +76,6 @@ Recording-only numeric performance events are documented in [VNC tracing](vnc-tr
 
 LibVNCClient source files are GPL-2.0-or-later. Remora distributes the combined app under GPL-3.0-or-later. `licenses/LibVNCClient-GPL-2.0.txt` includes the upstream license. libjpeg-turbo notices and the IJG terms are in `licenses/`; the app copies that directory into its resources. The IJG code is based in part on the work of the Independent JPEG Group. The Unicode keysym table in `CVNCBridge/keysym.c` is public-domain code from [libxkbcommon 1.11.0](https://github.com/xkbcommon/libxkbcommon/blob/xkbcommon-1.11.0/src/keysym-utf.c), attributed in the source to Markus G. Kuhn and Richard Verhoeven.
 
-The first supported live path is wayvnc with certificate TLS and X509Plain. See [VNC backend notes](../docs/architecture.md#vnc-backend) for exact security policy, verified modes, and remaining interoperability limits.
+The first supported live path is wayvnc 0.10.2 with VeNCrypt X509Plain certificate TLS. `patches/libvncclient-tls-policy.patch` holds the security policy.
 
 The opt-in experimental Apple 003.889 profile is built into the same Release engine. Its bounded parser, MPL-2.0 decoder provenance, key-event handling and unverified fidelity limits are documented in [Apple MVS](apple-mvs/README.md). `patches/libvncclient-apple.patch` is applied after the TLS policy patch; both patches and the decoder source participate in the build fingerprint. The default standard VNC path remains unchanged.
