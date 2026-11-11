@@ -116,7 +116,7 @@ final class CommandLineController {
                 let response: ControlResponse =
                     failures.isEmpty
                     ? .success(.object(["quitting": .bool(true)]))
-                    : .failure(ControlFailure(.captureFailed, failures.map(\.localizedDescription).joined(separator: "\n")))
+                    : .failure(ControlFailure(.captureFailed, failures.map(\.localizedDescription).joined(separator: "\n"), hint: "Remora is quitting anyway."))
                 return ControlReply(response) { [weak self] in
                     await self?.finishQuit()
                 }

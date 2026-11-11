@@ -35,6 +35,12 @@ func readPassword() async throws -> String {
     try PasswordInput.decode(try await readStandardInput())
 }
 
+/// Reads piped text or JSON. A terminal fails at once, because a command that waits for typed input looks hung to an agent.
+func readPipedInput() async throws -> Data {
+    guard isatty(STDIN_FILENO) == 0 else { throw ControlFailure(.invalidArgument, "Pipe the input on stdin.") }
+    return try await readStandardInput()
+}
+
 func readStandardInput() async throws -> Data {
     let input = FileHandle.standardInput
     let chunks = AsyncThrowingStream<Data, any Error>(bufferingPolicy: .bufferingOldest(16)) { continuation in

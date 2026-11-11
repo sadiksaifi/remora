@@ -143,7 +143,7 @@ extension CommandLineController {
     }
 
     func handleSession(_ request: ControlRequest) async throws -> ControlValue {
-        let timeout = request.timeout ?? (["connect", "session.reconnect"].contains(request.command) ? 30 : 10)
+        let timeout = request.timeout ?? (request.command == "connect" ? 30 : 10)
         let deadline = ProcessInfo.processInfo.systemUptime + timeout
         switch request.command {
         case "prompt.list":
@@ -197,27 +197,36 @@ extension CommandLineController {
             {
                 throw ControlFailure(.sessionExists, "An active session uses a different resolution.")
             }
-            let reused = sessions.session(for: connection.id) != nil
+            let existing = sessions.session(for: connection.id)
+            // Starting an ended session again is input in all but name, so the user's Take Over or Stop binds it too.
+            if let existing, !existing.state.isLive { try existing.checkUserHold() }
             let started = sessions.open(connection, select: !background, agent: request.agent ?? "remora CLI", resolution: resolution)
-            if started {
-                do { try connectionStore.markConnected(id: connection.id) } catch {
-                    throw ControlFailure(
-                        .storeFailed, "Session started, but its last-connected date could not be saved.")
-                }
-            }
             let session = sessions.session(for: connection.id)!
-            if !background { show(nil) }
-            try promptRequired(session)
             func result() -> ControlValue {
                 guard case .object(var fields) = sessionInfo(session) else { return .null }
-                fields["reused"] = .bool(reused)
+                fields["reused"] = .bool(existing != nil)
                 return .object(fields)
             }
-            if noWait { return result() }
-            session.addFrameDemand()
-            defer { session.removeFrameDemand() }
-            try await waitForSettledFrame(session, id: session.attemptID, deadline: deadline)
-            return result()
+            do {
+                if started {
+                    do { try connectionStore.markConnected(id: connection.id) } catch {
+                        throw ControlFailure(.storeFailed, "Session started, but its last-connected date could not be saved.")
+                    }
+                }
+                if !background { show(nil) }
+                try promptRequired(session)
+                if noWait { return result() }
+                session.addFrameDemand()
+                defer { session.removeFrameDemand() }
+                try await waitForSettledFrame(session, id: session.attemptID, deadline: deadline)
+                return result()
+            } catch let failure as ControlFailure {
+                // The session exists by now, so a failed connect still says which one and whether its tab was already there.
+                var details: [String: ControlValue] = if case .object(let fields) = failure.details { fields } else { [:] }
+                details["session"] = .string(session.attemptID.uuidString)
+                details["reused"] = .bool(existing != nil)
+                throw ControlFailure(failure.code, failure.message, hint: failure.hint, details: .object(details))
+            }
         default: break
         }
         if request.command == "session.release" {

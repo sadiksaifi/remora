@@ -983,7 +983,7 @@ extension SessionViewController {
     }
 
     /// Throws `user-active` or `agent-stopped` while the user holds control or is taking it.
-    /// CLI commands that would resume control or discard the tab's hold check this first.
+    /// CLI commands that would send input, start the session again or discard the tab's hold check this first.
     func checkUserHold() throws {
         if control.canResume || control.isTransferring { try checkAgentInput() }
     }

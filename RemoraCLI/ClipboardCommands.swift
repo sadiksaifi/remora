@@ -27,7 +27,7 @@ struct ClipboardCommand: AsyncParsableCommand {
             if let text {
                 value = text
             } else {
-                guard let decoded = String(data: try await readStandardInput(), encoding: .utf8) else {
+                guard let decoded = String(data: try await readPipedInput(), encoding: .utf8) else {
                     throw ControlFailure(.invalidArgument, "Clipboard stdin must be UTF-8.")
                 }
                 value = decoded

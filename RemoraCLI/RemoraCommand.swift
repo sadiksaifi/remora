@@ -20,19 +20,29 @@ enum RemoraEntry {
         // Placeholders such as C, S and P stand in as 1, which every argument accepts.
         if arguments.count == 2, arguments[0] == "__check-help" {
             var failed = false
-            let texts = [try! String(contentsOfFile: arguments[1], encoding: .utf8)] + ControlFailure.Code.allCases.map(\.hint)
-            for line in texts.flatMap({ $0.matches(of: /`remora ([^`]*)`/) }) {
-                let words = line.1.matches(of: /"[^"]*"|\S+/).map { word in
-                    word.0.count == 1 && word.0.first!.isUppercase ? "1" : word.0.trimmingCharacters(in: ["\""])
-                }
-                do { _ = try RemoraCommand.parseAsRoot(words) } catch  where RemoraCommand.exitCode(for: error) == .success {} catch {
-                    print("\(arguments[1]): error: `remora \(line.1)` does not parse: \(RemoraCommand.message(for: error))")
-                    failed = true
+            func fail(_ message: String) {
+                print("\(arguments[1]): error: \(message)")
+                failed = true
+            }
+            let sources =
+                [("the skill", try! String(contentsOfFile: arguments[1], encoding: .utf8))]
+                + ControlFailure.Code.allCases.map { ("the \($0.rawValue) hint", $0.hint) }
+            for (source, text) in sources {
+                for line in text.matches(of: /`remora ([^`]*)`/) {
+                    // A help flag makes any line parse, so the command in front of it is checked without it.
+                    let words = line.1.matches(of: /"[^"]*"|\S+/).map { word in
+                        word.0.count == 1 && word.0.first!.isUppercase ? "1" : word.0.trimmingCharacters(in: ["\""])
+                    }.filter { !["--help", "-h"].contains($0) }
+                    do { _ = try RemoraCommand.parseAsRoot(words) } catch  where RemoraCommand.exitCode(for: error) == .success {} catch {
+                        fail("`remora \(line.1)` in \(source) does not parse: \(RemoraCommand.message(for: error))")
+                    }
                 }
             }
+            // --json and --timeout reach a subcommand only while its options group has the root's type.
+            let connect = try? RemoraCommand.parseAsRoot(["connect", "1", "--json", "--timeout", "7s"]) as? ConnectCommand
+            if connect?.options.json != true || connect?.options.timeout != "7s" { fail("`remora connect` does not receive --json and --timeout.") }
             for command in RemoraCommand.tree where command.type.configuration.abstract.isEmpty {
-                print("\(arguments[1]): error: `remora \(command.path)` has no description.")
-                failed = true
+                fail("`remora \(command.path)` has no description.")
             }
             Darwin.exit(failed ? 1 : 0)
         }
@@ -94,29 +104,27 @@ struct RemoraCommand: AsyncParsableCommand {
     }()
 }
 
-/// A command's deadline when --timeout is absent. The type states it once, for both the help and the request.
-protocol Deadline { static var help: String { get } }
-protocol BoundedDeadline: Deadline { static var fallback: String { get } }
-extension BoundedDeadline { static var help: String { fallback } }
-enum After10s: BoundedDeadline { static let fallback = "10s" }
-enum After30s: BoundedDeadline { static let fallback = "30s" }
-enum After60s: BoundedDeadline { static let fallback = "60s" }
-enum Unbounded: Deadline { static let help = "no deadline" }
+struct CommonOptions: ParsableArguments {
+    /// Deadlines for the requests that outlast the 10-second default. The help and the request both read this table.
+    /// One concrete type serves every command, because ArgumentParser hands a parent's options to a subcommand only when the types match.
+    static let deadlines = ["connect": "30s", "drag": "60s", "input": "60s", "type": "60s"]
 
-typealias CommonOptions = Options<After10s>
-
-struct Options<Default: Deadline>: ParsableArguments {
     @Flag(help: "Print one JSON result or error envelope.") var json = false
-    @Option(name: .long, help: "Command deadline, such as 500ms, 10s or 2m. Bare numbers are seconds. Defaults to \(Default.help).") var timeout: String?
+    @Option(
+        name: .long,
+        help: """
+            Command deadline, such as 500ms, 10s or 2m. Bare numbers are seconds. \
+            Defaults to 10s, or \(deadlines.sorted { $0.key < $1.key }.map { "\($0.value) for \($0.key)" }.joined(separator: ", ")). \
+            events has no default.
+            """
+    ) var timeout: String?
 
     mutating func validate() throws { if let timeout { _ = try CommandTimeout(timeout) } }
-}
 
-extension Options where Default: BoundedDeadline {
-    var seconds: Double { get throws { try CommandTimeout(timeout ?? Default.fallback).seconds } }
+    func seconds(for command: String) throws -> Double { try CommandTimeout(timeout ?? Self.deadlines[command] ?? "10s").seconds }
 
     @MainActor func execute(_ request: ControlRequest, launch: Bool = true) async throws {
-        let seconds = try self.seconds
+        let seconds = try seconds(for: request.command)
         let bounded = ControlRequest(
             command: request.command, session: request.session, timeout: seconds,
             arguments: request.arguments, agent: AgentName.current)

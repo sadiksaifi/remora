@@ -46,7 +46,7 @@ struct ClickCommand: AsyncParsableCommand {
 
 struct DragCommand: AsyncParsableCommand {
     static let configuration = CommandConfiguration(commandName: "drag", abstract: "Drag between remote points.")
-    @OptionGroup var options: Options<After60s>
+    @OptionGroup var options: CommonOptions
     @OptionGroup var target: SessionOptions
     @OptionGroup var basis: ImageOptions
     @Option(help: "Start point as X,Y pixels from the top-left.") var from: String
@@ -88,7 +88,7 @@ struct TypeCommand: AsyncParsableCommand {
             Line breaks press Enter. Servers drop characters their keyboard layout lacks, and some drop emoji. \
             For that text and for long text, run clipboard set, then key Ctrl+V, or Cmd+V when the remote machine is a Mac.
             """)
-    @OptionGroup var options: Options<After60s>
+    @OptionGroup var options: CommonOptions
     @OptionGroup var target: SessionOptions
     @Option(help: "Text to send. Without it, the command reads untrimmed UTF-8 text from stdin to EOF.") var text: String?
     @MainActor func run() async throws {
@@ -96,7 +96,7 @@ struct TypeCommand: AsyncParsableCommand {
         if let text {
             value = text
         } else {
-            guard let decoded = String(data: try await readStandardInput(), encoding: .utf8) else {
+            guard let decoded = String(data: try await readPipedInput(), encoding: .utf8) else {
                 throw ControlFailure(.invalidArgument, "Text stdin must be UTF-8.")
             }
             value = decoded
@@ -140,12 +140,12 @@ struct InputCommand: AsyncParsableCommand {
 
             Buttons are left, right, middle, back and forward. key-up and button-up need a matching down earlier in the batch. Anything still held is released when the batch ends.
             """)
-    @OptionGroup var options: Options<After60s>
+    @OptionGroup var options: CommonOptions
     @OptionGroup var target: SessionOptions
     @OptionGroup var basis: ImageOptions
     @MainActor func run() async throws {
         let actions: ControlValue
-        do { actions = try JSONDecoder().decode(ControlValue.self, from: try await readStandardInput()) } catch let failure as ControlFailure {
+        do { actions = try JSONDecoder().decode(ControlValue.self, from: try await readPipedInput()) } catch let failure as ControlFailure {
             throw failure
         } catch { throw ControlFailure(.invalidArgument, "Stdin must contain a JSON action array.") }
         try await options.execute(.init(command: "input", session: target.target, arguments: basis.adding(to: ["actions": actions])))

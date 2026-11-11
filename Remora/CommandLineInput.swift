@@ -6,6 +6,8 @@ extension CommandLineController {
     func handleInput(_ request: ControlRequest) async throws -> ControlValue {
         let session = try resolveSession(request.session)
         let id = session.attemptID
+        // The user's Take Over or Stop outlives a disconnect, and comes before any advice to connect again.
+        if request.command != "capabilities" { try session.checkUserHold() }
         try promptRequired(session)
         guard session.isConnected, let backend = session.inputBackend, let size = session.desktopSize else {
             throw ControlFailure(.notConnected, "The session is not connected.")
@@ -148,8 +150,10 @@ extension CommandLineController {
             }
             throw ControlFailure(
                 failure.code, failure.message,
-                hint: submitted > 0 && [.cancelled, .backendFailed, .sessionEnded, .notConnected].contains(failure.code)
-                    ? "Some input reached the remote desktop. Take a screenshot before repeating it." : failure.hint,
+                hint: submitted > 0
+                    ? "Some input reached the remote desktop before this failure. "
+                        + (failure.hint.isEmpty ? "Take a screenshot before repeating it." : failure.hint)
+                    : failure.hint,
                 details: .object(["submittedActions": .number(Double(completed)), "submittedEvents": .number(Double(submitted))]))
         }
     }

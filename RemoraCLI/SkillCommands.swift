@@ -72,6 +72,7 @@ struct SkillCommand: ParsableCommand {
             guard inUse.isEmpty else {
                 throw ControlFailure(
                     .destinationExists, "Another skill is in use at \(inUse.joined(separator: ", ")). Remora left it unchanged.",
+                    hint: "Move or rename the other skill, or pass --dir with another skills folder.",
                     details: .array(results))
             }
             if options.json { Output.write(.success(.array(results))) }

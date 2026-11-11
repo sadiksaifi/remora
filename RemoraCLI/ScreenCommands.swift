@@ -29,7 +29,7 @@ struct ScreenshotCommand: AsyncParsableCommand {
             try await options.execute(request)
             return
         }
-        let seconds = try options.seconds
+        let seconds = try options.seconds(for: request.command)
         let client = ControlClient(endpoint: try ControlEndpoint())
         try await ApplicationClient().prepare(client)
         let bounded = ControlRequest(command: request.command, session: request.session, timeout: seconds, arguments: arguments)
@@ -71,8 +71,8 @@ struct RecordingCommand: AsyncParsableCommand {
 
 struct EventsCommand: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
-        commandName: "events", abstract: "Stream a snapshot, then live session, prompt and recording metadata as NDJSON, until interrupted or --timeout.")
-    @OptionGroup var options: Options<Unbounded>
+        commandName: "events", abstract: "Stream a snapshot, then live session, prompt and recording metadata as NDJSON, until interrupted.")
+    @OptionGroup var options: CommonOptions
     @OptionGroup var target: SessionOptions
     @MainActor func run() async throws {
         let client = ControlClient(endpoint: try ControlEndpoint())
