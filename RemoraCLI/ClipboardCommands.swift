@@ -21,10 +21,8 @@ struct ClipboardCommand: AsyncParsableCommand {
             abstract: "Put text on the remote clipboard. To paste it, press key Ctrl+V, or Cmd+V when the remote machine is a Mac.")
         @OptionGroup var options: CommonOptions
         @OptionGroup var target: SessionOptions
-        @Option(help: "Remote clipboard text instead of reading stdin.") var text: String?
-        @Flag(name: .customLong("stdin"), help: "Read untrimmed UTF-8 text to EOF. This is the default.") var readStdin = false
+        @Option(help: "Remote clipboard text. Without it, the command reads untrimmed UTF-8 text from stdin to EOF.") var text: String?
         @MainActor func run() async throws {
-            guard text == nil || !readStdin else { throw ControlFailure(.invalidArgument, "Choose --text or --stdin.") }
             let value: String
             if let text {
                 value = text

@@ -10,8 +10,10 @@ struct SessionOptions: ParsableArguments {
 struct ConnectCommand: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "connect",
-        abstract: "Connect, or reuse the open session, and wait for the first frame.",
-        discussion: "The result's reused is true when the session was already open. Its session value is the --session to pass to other commands.")
+        abstract: "Open a session, or reuse the one already open, and wait for the first frame.",
+        discussion:
+            "A disconnected session's tab connects again in place. The result's reused is true when the tab already existed. Its session value is the --session to pass to other commands."
+    )
     @OptionGroup var options: Options<After30s>
     @Argument(help: "Saved connection name or UUID.") var connection: String
     @Flag(help: "Leave the selected tab unchanged and do not show the window.") var background = false
@@ -37,7 +39,7 @@ struct ConnectCommand: AsyncParsableCommand {
 struct SessionCommand: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "session", abstract: "Inspect and control session tabs.",
-        subcommands: [List.self, Get.self, Show.self, Disconnect.self, Reconnect.self, Close.self, Resize.self, Stop.self, Resume.self])
+        subcommands: [List.self, Get.self, Show.self, Disconnect.self, Close.self, Resize.self, Release.self])
     @OptionGroup var options: CommonOptions
     struct List: AsyncParsableCommand {
         static let configuration = CommandConfiguration(abstract: "List the open session tabs.")
@@ -57,7 +59,7 @@ struct SessionCommand: AsyncParsableCommand {
         @MainActor func run() async throws { try await options.execute(.init(command: "session.show", session: target.target)) }
     }
     struct Disconnect: AsyncParsableCommand {
-        static let configuration = CommandConfiguration(abstract: "Disconnect the session and keep its tab for session reconnect.")
+        static let configuration = CommandConfiguration(abstract: "Disconnect the session and keep its tab. connect starts it again.")
         @OptionGroup var options: CommonOptions
         @OptionGroup var target: SessionOptions
         @MainActor func run() async throws { try await options.execute(.init(command: "session.disconnect", session: target.target)) }
@@ -68,17 +70,8 @@ struct SessionCommand: AsyncParsableCommand {
         @OptionGroup var target: SessionOptions
         @MainActor func run() async throws { try await options.execute(.init(command: "session.close", session: target.target)) }
     }
-    struct Reconnect: AsyncParsableCommand {
-        static let configuration = CommandConfiguration(abstract: "Connect a disconnected session again and wait for the first frame.")
-        @OptionGroup var options: Options<After30s>
-        @OptionGroup var target: SessionOptions
-        @Flag(help: "Return without waiting for the first frame.") var noWait = false
-        @MainActor func run() async throws {
-            try await options.execute(.init(command: "session.reconnect", session: target.target, arguments: ["noWait": .bool(noWait)]))
-        }
-    }
-    struct Stop: AsyncParsableCommand {
-        static let configuration = CommandConfiguration(abstract: "Release agent control. The next input command attaches again.")
+    struct Release: AsyncParsableCommand {
+        static let configuration = CommandConfiguration(abstract: "Hand control back to the user. The next input command takes it again.")
         @OptionGroup var options: CommonOptions
         @OptionGroup var target: SessionOptions
         @Flag(help: "Release agent control in every tab.") var all = false
@@ -88,17 +81,8 @@ struct SessionCommand: AsyncParsableCommand {
         @MainActor func run() async throws {
             try await options.execute(
                 .init(
-                    command: "session.stop", session: all ? nil : target.target,
+                    command: "session.release", session: all ? nil : target.target,
                     arguments: ["all": .bool(all)]))
-        }
-    }
-    struct Resume: AsyncParsableCommand {
-        static let configuration = CommandConfiguration(
-            abstract: "Check that the agent may send input. It fails while the user holds control, and only the user can resume, from Remora.")
-        @OptionGroup var options: CommonOptions
-        @OptionGroup var target: SessionOptions
-        @MainActor func run() async throws {
-            try await options.execute(.init(command: "session.resume", session: target.target))
         }
     }
     struct Resize: AsyncParsableCommand {

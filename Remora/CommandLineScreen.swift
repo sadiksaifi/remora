@@ -89,7 +89,7 @@ extension CommandLineController {
                 if screenshotReceipts.count > 32 { screenshotReceipts.removeFirst(screenshotReceipts.count - 32) }
                 var fields: [String: ControlValue] = [
                     "image": .string(receipt.id.uuidString), "session": .string(id.uuidString),
-                    "path": path.map(ControlValue.string) ?? .null, "frame": .number(Double(receipt.frame)), "stale": .bool(false),
+                    "path": path.map(ControlValue.string) ?? .null, "frame": .number(Double(receipt.frame)),
                     "desktop": dimensions(geometry.desktop), "size": dimensions(geometry.encoded),
                     "region": .array([geometry.region.x, geometry.region.y, geometry.region.width, geometry.region.height].map { .number(Double($0)) }),
                 ]

@@ -157,7 +157,7 @@ public struct ControlFailure: Error, Codable, Sendable, Equatable, LocalizedErro
             case .unsupported: "The remote server cannot do this. Reach the goal another way."
             case .sessionRequired: "Choose one from `remora session list` and pass it as --session."
             case .sessionEnded: "Find the current session with `remora session list`."
-            case .notConnected: "Inspect `remora session get`. Run `remora session reconnect` if its state is disconnected."
+            case .notConnected: "Inspect `remora session get`. If its state is disconnected, start it again with `remora connect C`."
             case .promptRequired: "Show it with `remora prompt list`. Answer with `remora prompt respond P connect` or `remora prompt respond P cancel`."
             case .userActive: "Run `remora wait --for resumed`, again after each timeout, then take a new screenshot."
             case .agentStopped: "End the task and leave the session open. Only the user can resume agent control, from Remora."

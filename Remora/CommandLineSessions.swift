@@ -197,6 +197,7 @@ extension CommandLineController {
             {
                 throw ControlFailure(.sessionExists, "An active session uses a different resolution.")
             }
+            let reused = sessions.session(for: connection.id) != nil
             let started = sessions.open(connection, select: !background, agent: request.agent ?? "remora CLI", resolution: resolution)
             if started {
                 do { try connectionStore.markConnected(id: connection.id) } catch {
@@ -209,7 +210,7 @@ extension CommandLineController {
             try promptRequired(session)
             func result() -> ControlValue {
                 guard case .object(var fields) = sessionInfo(session) else { return .null }
-                fields["reused"] = .bool(!started)
+                fields["reused"] = .bool(reused)
                 return .object(fields)
             }
             if noWait { return result() }
@@ -219,7 +220,7 @@ extension CommandLineController {
             return result()
         default: break
         }
-        if request.command == "session.stop" {
+        if request.command == "session.release" {
             try request.validateArguments(["all"], sessionAllowed: true)
             let all = try request.flag("all")
             guard !all || request.session == nil else { throw ControlFailure(.invalidArgument, "Use --all without --session.") }
@@ -233,8 +234,7 @@ extension CommandLineController {
         }
         let allowed: Set<String>
         switch request.command {
-        case "session.get", "session.show", "session.disconnect", "session.close", "session.resume": allowed = []
-        case "session.reconnect": allowed = ["noWait"]
+        case "session.get", "session.show", "session.disconnect", "session.close": allowed = []
         case "session.resize": allowed = ["resolution"]
         case "wait": allowed = ["for"]
         default: throw ControlFailure(.unknownCommand, "Unknown session command.")
@@ -244,7 +244,6 @@ extension CommandLineController {
         let id = session.attemptID
         switch request.command {
         case "session.get": return sessionInfo(session)
-        case "session.resume": try session.checkUserHold()
         case "session.show":
             sessions.select(session.connection.id)
             show(nil)
@@ -257,19 +256,6 @@ extension CommandLineController {
                 throw ControlFailure(.sessionEnded, "The session attempt was closed or replaced.")
             }
             if request.command == "session.close" { sessions.close(session.connection.id) }
-        case "session.reconnect":
-            let noWait = try request.flag("noWait")
-            guard !session.state.isLive else { throw ControlFailure(.sessionExists, "Disconnect this session before reconnecting.") }
-            guard let connection = connectionStore.connections.first(where: { $0.id == session.connection.id }) else {
-                throw ControlFailure(.connectionDeleted, "The saved connection was deleted.")
-            }
-            session.update(connection)
-            session.reconnect()
-            if !noWait {
-                session.addFrameDemand()
-                defer { session.removeFrameDemand() }
-                try await waitForSettledFrame(session, id: session.attemptID, deadline: deadline)
-            }
         case "session.resize":
             let resolution = try parseResolution(request.string("resolution", required: true)!)
             try session.resize(resolution)

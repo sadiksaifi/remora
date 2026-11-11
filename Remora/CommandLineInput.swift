@@ -122,7 +122,7 @@ extension CommandLineController {
             try check()
             return .object([
                 "session": .string(id.uuidString), "submittedActions": .number(Double(completed)),
-                "submittedEvents": .number(Double(submitted)), "acknowledgment": .string("protocol-submission"),
+                "submittedEvents": .number(Double(submitted)),
             ])
         } catch {
             if !finished {
@@ -343,8 +343,8 @@ private struct InputPlan {
             }
             release(additions)
         case "scroll":
-            try request.validateArguments(["at", "dx", "dy"])
-            let at = try point(request, "at")
+            try request.validateArguments(["x", "y", "dx", "dy"])
+            let at = try point(request)
             let dx = try number(request, "dx", default: 0)
             let dy = try number(request, "dy", default: 0)
             if dx != 0, !capabilities.contains(.horizontalWheel) { throw ControlFailure(.unsupported, "The server did not negotiate a horizontal wheel.") }

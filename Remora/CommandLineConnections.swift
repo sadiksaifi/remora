@@ -52,8 +52,7 @@ extension CommandLineController {
         case "connection.create": allowed = fields
         case "connection.update": allowed = fields.union(["connection", "clearPassword"])
         case "connection.duplicate": allowed = ["connection", "name"]
-        case "connection.get", "connection.delete", "connection.password.clear": allowed = ["connection"]
-        case "connection.password.set": allowed = ["connection", "password"]
+        case "connection.get", "connection.delete": allowed = ["connection"]
         default: throw ControlFailure(.unknownCommand, "Unknown connection command.")
         }
         try request.validateArguments(allowed)
@@ -127,11 +126,8 @@ extension CommandLineController {
             try store { try connectionStore.delete(ids: [original.id]) }
             try savePassword("", id: original.id, metadataSaved: true)
             return .object(["deleted": .bool(true), "connection": .string(original.id.uuidString)])
-        case "connection.password.set": try savePassword(request.string("password", required: true)!, id: original.id)
-        case "connection.password.clear": try savePassword("", id: original.id)
         default: throw ControlFailure(.unknownCommand, "Unknown connection command.")
         }
-        return try connectionInfo(original)
     }
 }
 
