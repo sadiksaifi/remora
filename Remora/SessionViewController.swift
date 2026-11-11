@@ -95,7 +95,11 @@ final class SessionViewController: NSViewController {
     var awaitsRedraw: Bool { session?.awaitsRedraw == true }
     /// The frame shows the desktop as the server has it now.
     var hasFreshFrame: Bool { frameRevision > 0 && !awaitsRedraw && frameSize == desktopSize }
-    var showsBlankFrame: Bool { (try? renderer?.desktop.snapshot())?.isBlank ?? false }
+    /// Reads the frame back off the main actor, which the copy and the GPU wait would stall.
+    func showsBlankFrame() async -> Bool {
+        guard let desktop = renderer?.desktop else { return false }
+        return await Task.detached { (try? desktop.snapshot())?.isBlank ?? false }.value
+    }
     var lastFrameArrival: TimeInterval? { renderer?.desktop.lastFrameArrival }
     var captureFrameBaseline: Int { frameBaseline }
     func removeFrameDemand() { display.removeCommandLineDemand() }

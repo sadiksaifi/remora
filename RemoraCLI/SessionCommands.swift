@@ -12,7 +12,7 @@ struct ConnectCommand: AsyncParsableCommand {
         commandName: "connect",
         abstract: "Open a session, or reuse the one already open, and wait for the first frame.",
         discussion:
-            "A disconnected session's tab connects again in place. The result's session value is the --session to pass to other commands. Its reused value is true when the tab already existed. A failure after the session starts carries both in error.details."
+            "A disconnected session's tab connects again in place. A new session whose first frame is black, as while Windows attaches it, gets up to three more seconds to show the desktop. The result's session value is the --session to pass to other commands. Its reused value is true when the tab already existed. A failure after the session starts carries both in error.details."
     )
     @OptionGroup var options: CommonOptions
     @Argument(help: "Saved connection name or UUID.") var connection: String

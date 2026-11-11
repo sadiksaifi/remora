@@ -202,6 +202,7 @@ def apple_frames(outcome, exact, send, key, report, connection):
             client_message()
             if len(report['subscriptions'])>=3 and report['requests_after_initial']>=1: break
         else: raise ValueError('demand completion missing')
+        update(full)  # The redraw the resume asked for.
     elif outcome.startswith('apple-retry-') or outcome == 'apple-hidden-baseline':
         # A baseline must stop retries, including across more than one retry interval.
         if select.select([connection],[],[],1.2)[0]:

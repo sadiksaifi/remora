@@ -47,7 +47,8 @@ extension CommandLineController {
             session.agentInputCancellation = nil
             session.inputOverlays.setAgentCursorBusy(false)
         }
-        let deadline = ContinuousClock.now.advanced(by: .seconds(min(60, request.timeout ?? 10)))
+        let budget = min(60, request.timeout ?? 10)
+        let deadline = ContinuousClock.now.advanced(by: .seconds(budget))
         var completed = 0
         var submitted = 0
         func check() throws {
@@ -94,8 +95,8 @@ extension CommandLineController {
         }
         do {
             // Windows drops input that arrives before its paused display updates resume. The redraw confirms the resume.
-            // Past three seconds the input goes anyway: it may be what wakes a display that sends no frames.
-            try await wait(3) { session.awaitsRedraw }
+            // After three seconds, or half the command's time, the input goes anyway: it may be what wakes a display that sends no frames.
+            try await wait(min(3, budget / 2)) { session.awaitsRedraw }
             for step in plan.steps {
                 try check()
                 switch step {

@@ -107,8 +107,11 @@ public final class VNCSession: AgentInputSession, @unchecked Sendable {
             state.displayUpdatesEnabled = enabled
             if resumed, state.connected, !state.stopping {
                 state.refresh = true
-                state.redrawOwed = true
-                state.redrawSent = false
+                // Only Apple mode pauses the server. A standard server kept sending updates, so its last frame is current.
+                if configuration.vncMode == .apple {
+                    state.redrawOwed = true
+                    state.redrawSent = false
+                }
             }
         }
     }

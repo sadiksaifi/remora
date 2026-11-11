@@ -242,8 +242,7 @@ DWORD rm_display_process(RMDisplay *d) {
         if (now >= due) {
             updates_changed = true;
             d->updates_sent = updates;
-            if (updates) d->redraw_sent = d->redraw_owed;
-            else d->paused_at = now;
+            if (!updates) d->paused_at = now;
         } else {
             updates_timeout = (DWORD)(due - now);
         }
@@ -279,8 +278,15 @@ DWORD rm_display_process(RMDisplay *d) {
         if (!d->queued && d->retries >= 5) timeout = INFINITE;
     }
     pthread_mutex_unlock(&d->lock);
-    if (updates_changed)
+    if (updates_changed) {
         send_display_updates(d, updates);
+        if (updates) {
+            /* Set only after the write: a frame another thread finishes before it is not the redraw. */
+            pthread_mutex_lock(&d->lock);
+            d->redraw_sent = d->redraw_owed;
+            pthread_mutex_unlock(&d->lock);
+        }
+    }
     if (changed && d->callbacks.dynamic_resize)
         d->callbacks.dynamic_resize(d->user, available);
     return timeout < updates_timeout ? timeout : updates_timeout;
