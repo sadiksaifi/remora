@@ -6,9 +6,9 @@ extension CommandLineController {
     func handleInput(_ request: ControlRequest) async throws -> ControlValue {
         let session = try resolveSession(request.session)
         let id = session.attemptID
-        guard session.pendingPrompt == nil else { throw ControlFailure(.promptRequired, "The session requires a prompt response.") }
+        try promptRequired(session)
         guard session.isConnected, let backend = session.inputBackend, let size = session.desktopSize else {
-            throw ControlFailure(.notConnected, "The session is not connected.")
+            throw SessionViewController.notConnected
         }
         let capabilities = backend.inputCapabilities
         if request.command == "capabilities" {
@@ -35,7 +35,7 @@ extension CommandLineController {
         let geometryRevision = session.inputGeometryRevision
         let plan = try InputPlan(request, size: size, geometry: receipt?.geometry, capabilities: capabilities)
         try session.attachAgentControl(agent: request.agent)
-        guard let input = backend.beginAgentInput() else { throw ControlFailure(.notConnected, "The session is not connected.") }
+        guard let input = backend.beginAgentInput() else { throw SessionViewController.notConnected }
         session.activeAgentInput = input
         session.agentInputCancellation = nil
         session.inputOverlays.setAgentCursorBusy(true)
@@ -54,7 +54,9 @@ extension CommandLineController {
             guard session.attemptID == id, sessions.session(for: session.connection.id) === session else {
                 throw ControlFailure(.sessionEnded, "The session attempt was closed or replaced.")
             }
-            guard session.isConnected else { throw ControlFailure(.notConnected, "The session disconnected during input.") }
+            guard session.isConnected else {
+                throw ControlFailure(.notConnected, "The session disconnected during input.", hint: SessionViewController.notConnected.hint)
+            }
             guard session.inputGeometryRevision == geometryRevision else {
                 throw ControlFailure(.imageExpired, "The desktop geometry changed during input. Take a new screenshot.")
             }
@@ -278,7 +280,9 @@ private struct InputPlan {
     }
 
     private func chord(_ text: String, modifiersOnly: Bool = false) throws -> [PhysicalKey] {
-        do { return try PhysicalKey.chord(text, modifiersOnly: modifiersOnly) } catch { throw ControlFailure(.invalidArgument, error.localizedDescription) }
+        do { return try PhysicalKey.chord(text, modifiersOnly: modifiersOnly) } catch {
+            throw ControlFailure(.invalidArgument, error.localizedDescription, hint: "Run remora capabilities --session S for the key names.")
+        }
     }
 
     private mutating func modifiers(_ request: ControlRequest) throws -> [PhysicalKey] {

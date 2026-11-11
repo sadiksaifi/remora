@@ -79,7 +79,11 @@ struct RemoraCommand: AsyncParsableCommand {
 
 struct CommonOptions: ParsableArguments {
     @Flag(help: "Print one JSON result or error envelope.") var json = false
-    @Option(name: .long, help: "Command deadline, such as 500ms, 10s or 2m. Bare numbers are seconds.") var timeout: String?
+    @Option(
+        name: .long,
+        help:
+            "Command deadline, such as 500ms, 10s or 2m. Bare numbers are seconds. Defaults to 10s, 30s for connect and session reconnect, and 60s for type, drag and input."
+    ) var timeout: String?
 
     mutating func validate() throws { if let timeout { _ = try CommandTimeout(timeout) } }
 
@@ -97,7 +101,7 @@ struct CommonOptions: ParsableArguments {
 }
 
 struct Capabilities: AsyncParsableCommand {
-    static let configuration = CommandConfiguration(abstract: "List commands, or inspect negotiated input support with --session.")
+    static let configuration = CommandConfiguration(abstract: "List commands. With --session, list the key names and input features that session supports.")
     @OptionGroup var options: CommonOptions
 
     @OptionGroup var target: SessionOptions

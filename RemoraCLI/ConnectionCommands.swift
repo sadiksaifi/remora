@@ -69,6 +69,7 @@ struct ConnectionCommand: AsyncParsableCommand {
     @OptionGroup var options: CommonOptions
 
     struct List: AsyncParsableCommand {
+        static let configuration = CommandConfiguration(abstract: "List saved connections.")
         @OptionGroup var options: CommonOptions
         @Option(help: "Filter by connection name, host or username.") var search: String?
         @MainActor func run() async throws {
@@ -76,17 +77,20 @@ struct ConnectionCommand: AsyncParsableCommand {
         }
     }
     struct Get: AsyncParsableCommand {
+        static let configuration = CommandConfiguration(abstract: "Show one saved connection, whether it has a saved password, and its open session.")
         @OptionGroup var options: CommonOptions
         @Argument(help: "Saved connection name or UUID.") var connection: String
         @MainActor func run() async throws { try await options.execute(.init(command: "connection.get", arguments: ["connection": .string(connection)])) }
     }
     struct Create: AsyncParsableCommand {
+        static let configuration = CommandConfiguration(abstract: "Save a new connection. It does not connect.")
         @OptionGroup var options: CommonOptions
         @OptionGroup var fields: ConnectionFields
         mutating func validate() throws { guard fields.host != nil else { throw ValidationError("--host is required.") } }
         @MainActor func run() async throws { try await options.execute(.init(command: "connection.create", arguments: try await fields.arguments())) }
     }
     struct Update: AsyncParsableCommand {
+        static let configuration = CommandConfiguration(abstract: "Change a saved connection. Fields you leave out keep their values.")
         @OptionGroup var options: CommonOptions
         @OptionGroup var fields: ConnectionFields
         @Argument(help: "Saved connection name or UUID.") var connection: String
@@ -102,6 +106,7 @@ struct ConnectionCommand: AsyncParsableCommand {
         }
     }
     struct Duplicate: AsyncParsableCommand {
+        static let configuration = CommandConfiguration(abstract: "Copy a saved connection, including its saved password.")
         @OptionGroup var options: CommonOptions
         @Argument(help: "Saved connection name or UUID.") var connection: String
         @Option(help: "Saved connection name.") var name: String?
@@ -112,14 +117,16 @@ struct ConnectionCommand: AsyncParsableCommand {
         }
     }
     struct Delete: AsyncParsableCommand {
+        static let configuration = CommandConfiguration(abstract: "Delete a saved connection and its saved password.")
         @OptionGroup var options: CommonOptions
         @Argument(help: "Saved connection name or UUID.") var connection: String
         @MainActor func run() async throws { try await options.execute(.init(command: "connection.delete", arguments: ["connection": .string(connection)])) }
     }
     struct Password: AsyncParsableCommand {
-        static let configuration = CommandConfiguration(subcommands: [Set.self, Clear.self])
+        static let configuration = CommandConfiguration(abstract: "Set or remove a connection's saved password.", subcommands: [Set.self, Clear.self])
         @OptionGroup var options: CommonOptions
         struct Set: AsyncParsableCommand {
+            static let configuration = CommandConfiguration(abstract: "Save a connection's password, read from stdin.")
             @OptionGroup var options: CommonOptions
             @Argument(help: "Saved connection name or UUID.") var connection: String
             @Flag(help: "Read the password from UTF-8 stdin, removing one trailing line ending.") var passwordStdin = false
@@ -130,6 +137,7 @@ struct ConnectionCommand: AsyncParsableCommand {
             }
         }
         struct Clear: AsyncParsableCommand {
+            static let configuration = CommandConfiguration(abstract: "Remove a connection's saved password.")
             @OptionGroup var options: CommonOptions
             @Argument(help: "Saved connection name or UUID.") var connection: String
             @MainActor func run() async throws {

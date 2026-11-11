@@ -27,7 +27,8 @@ struct MoveCommand: AsyncParsableCommand {
 }
 
 struct ClickCommand: AsyncParsableCommand {
-    static let configuration = CommandConfiguration(commandName: "click", abstract: "Click a remote point. Counts acknowledge protocol submission.")
+    static let configuration = CommandConfiguration(
+        commandName: "click", abstract: "Click a remote point. Success means Remora sent the click, not that the remote app reacted.")
     @OptionGroup var options: CommonOptions
     @OptionGroup var target: SessionOptions
     @OptionGroup var basis: ImageOptions
@@ -107,7 +108,7 @@ struct KeyCommand: AsyncParsableCommand {
     static let configuration = CommandConfiguration(commandName: "key", abstract: "Press a physical key chord, such as Ctrl+Alt+Delete or Win+R.")
     @OptionGroup var options: CommonOptions
     @OptionGroup var target: SessionOptions
-    @Argument(help: "Physical key chord, such as Ctrl+Alt+Delete or Win+R.") var chord: String
+    @Argument(help: "Physical key chord, such as Ctrl+Alt+Delete or Win+R. capabilities --session lists every key name.") var chord: String
     @Option(name: .customLong("repeat"), help: "Number of times to press the chord, 1 to 100.") var repetitions = 1
     @MainActor func run() async throws {
         try await options.execute(

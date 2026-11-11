@@ -3,7 +3,12 @@ import Foundation
 import RemoraControl
 
 struct ScreenshotCommand: AsyncParsableCommand {
-    static let configuration = CommandConfiguration(commandName: "screenshot", abstract: "Capture a current remote desktop PNG, including hidden sessions.")
+    static let configuration = CommandConfiguration(
+        commandName: "screenshot", abstract: "Capture a current remote desktop PNG, including hidden sessions.",
+        discussion: """
+            The result's path is the saved PNG. Pass its image value as --image to pointer commands, \
+            and its frame value to wait --after.
+            """)
     @OptionGroup var options: CommonOptions
     @OptionGroup var target: SessionOptions
     @Option(help: "Save to this unused path, or write raw PNG bytes with -. Defaults to the configured save folder.") var output: String?
@@ -39,6 +44,7 @@ struct RecordingCommand: AsyncParsableCommand {
         commandName: "recording", abstract: "Record remote desktop video to a MOV file.", subcommands: [Start.self, Get.self, Stop.self])
     @OptionGroup var options: CommonOptions
     struct Start: AsyncParsableCommand {
+        static let configuration = CommandConfiguration(abstract: "Start recording the session to a MOV file.")
         @OptionGroup var options: CommonOptions
         @OptionGroup var target: SessionOptions
         @Option(help: "Save to this unused path. Defaults to the configured save folder.") var output: String?
@@ -50,11 +56,13 @@ struct RecordingCommand: AsyncParsableCommand {
         }
     }
     struct Get: AsyncParsableCommand {
+        static let configuration = CommandConfiguration(abstract: "Show the recording's state, file path and elapsed seconds.")
         @OptionGroup var options: CommonOptions
         @OptionGroup var target: SessionOptions
         @MainActor func run() async throws { try await options.execute(.init(command: "recording.get", session: target.target)) }
     }
     struct Stop: AsyncParsableCommand {
+        static let configuration = CommandConfiguration(abstract: "Stop the recording and finish its file. The result's path is the saved MOV.")
         @OptionGroup var options: CommonOptions
         @OptionGroup var target: SessionOptions
         @MainActor func run() async throws { try await options.execute(.init(command: "recording.stop", session: target.target)) }
@@ -63,7 +71,7 @@ struct RecordingCommand: AsyncParsableCommand {
 
 struct EventsCommand: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
-        commandName: "events", abstract: "Stream a snapshot, then live session, prompt and recording metadata as NDJSON.")
+        commandName: "events", abstract: "Stream a snapshot, then live session, prompt and recording metadata as NDJSON, until interrupted or --timeout.")
     @OptionGroup var options: CommonOptions
     @OptionGroup var target: SessionOptions
     @MainActor func run() async throws {

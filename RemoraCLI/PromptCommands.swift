@@ -7,15 +7,19 @@ struct PromptCommand: AsyncParsableCommand {
         subcommands: [List.self, Get.self, Respond.self])
     @OptionGroup var options: CommonOptions
     struct List: AsyncParsableCommand {
+        static let configuration = CommandConfiguration(abstract: "List the pending credentials and certificate prompts.")
         @OptionGroup var options: CommonOptions
         @MainActor func run() async throws { try await options.execute(.init(command: "prompt.list")) }
     }
     struct Get: AsyncParsableCommand {
+        static let configuration = CommandConfiguration(abstract: "Show one pending prompt: the fields it asks for, or the certificate and its fingerprint.")
         @OptionGroup var options: CommonOptions
         @Argument(help: "Prompt UUID from prompt list.") var prompt: String
         @MainActor func run() async throws { try await options.execute(.init(command: "prompt.get", arguments: ["prompt": .string(prompt)])) }
     }
     struct Respond: AsyncParsableCommand {
+        static let configuration = CommandConfiguration(
+            abstract: "Answer a prompt. connect submits the credentials or trusts the certificate; cancel rejects it.")
         enum Action: String, ExpressibleByArgument { case connect, cancel }
         @OptionGroup var options: CommonOptions
         @Argument(help: "Prompt UUID from prompt list.") var prompt: String

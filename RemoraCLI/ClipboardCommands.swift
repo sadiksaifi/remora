@@ -9,6 +9,7 @@ struct ClipboardCommand: AsyncParsableCommand {
     @OptionGroup var options: CommonOptions
 
     struct Get: AsyncParsableCommand {
+        static let configuration = CommandConfiguration(abstract: "Read the text on the remote clipboard.")
         @OptionGroup var options: CommonOptions
         @OptionGroup var target: SessionOptions
         @MainActor func run() async throws {
@@ -16,6 +17,8 @@ struct ClipboardCommand: AsyncParsableCommand {
         }
     }
     struct Set: AsyncParsableCommand {
+        static let configuration = CommandConfiguration(
+            abstract: "Put text on the remote clipboard. To paste it, press key Ctrl+V, or Cmd+V when the remote machine is a Mac.")
         @OptionGroup var options: CommonOptions
         @OptionGroup var target: SessionOptions
         @Option(help: "Remote clipboard text instead of reading stdin.") var text: String?
