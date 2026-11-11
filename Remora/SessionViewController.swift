@@ -31,7 +31,6 @@ final class SessionViewController: NSViewController {
             inputGeometryRevision += 1
             control.invalidateObservation()
             frameBaseline = renderer?.desktop.revision ?? 0
-            refreshAfterFrame = 0
             retiredFrameRevision = 0
             onControlEvent?("session.replaced", .object(["previousSession": .string(oldValue.uuidString), "session": .string(attemptID.uuidString)]))
         }
@@ -91,13 +90,12 @@ final class SessionViewController: NSViewController {
             commandLine ? resolution ?? (connection.resolution == .fitToWindow ? .fixed(width: 1920, height: 1080) : connection.resolution) : nil
     }
 
-    func addFrameDemand() {
-        let before = frameRevision
-        let resumed = display.addCommandLineDemand()
-        if resumed { refreshAfterFrame = before }
-    }
-    private var refreshAfterFrame = 0
-    var hasFreshFrame: Bool { frameRevision > refreshAfterFrame && frameSize == desktopSize }
+    func addFrameDemand() { display.addCommandLineDemand() }
+    /// The server was paused and its redraw has not arrived yet.
+    var awaitsRedraw: Bool { session?.awaitsRedraw == true }
+    /// The frame shows the desktop as the server has it now.
+    var hasFreshFrame: Bool { frameRevision > 0 && !awaitsRedraw && frameSize == desktopSize }
+    var showsBlankFrame: Bool { (try? renderer?.desktop.snapshot())?.isBlank ?? false }
     var lastFrameArrival: TimeInterval? { renderer?.desktop.lastFrameArrival }
     var captureFrameBaseline: Int { frameBaseline }
     func removeFrameDemand() { display.removeCommandLineDemand() }
@@ -419,7 +417,6 @@ final class SessionViewController: NSViewController {
         attemptConnection = connection
         frameBaseline = 0
         retiredFrameRevision = 0
-        refreshAfterFrame = 0
         desktopSize = nil
         state = .connecting
         let connectingView = showStatus(.connecting)

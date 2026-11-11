@@ -93,6 +93,9 @@ extension CommandLineController {
                 })
         }
         do {
+            // Windows drops input that arrives before its paused display updates resume. The redraw confirms the resume.
+            // Past three seconds the input goes anyway: it may be what wakes a display that sends no frames.
+            try await wait(3) { session.awaitsRedraw }
             for step in plan.steps {
                 try check()
                 switch step {

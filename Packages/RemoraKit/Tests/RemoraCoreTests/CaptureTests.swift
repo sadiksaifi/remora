@@ -24,6 +24,21 @@ private func desktop(width: Int, height: Int, bgra: [UInt8], sink: MetalDesktop)
     _ = pixels.withUnsafeMutableBytes { $0.initializeMemory(as: UInt8.self, repeating: 0) }
 }
 
+@Test func frameIsBlankOnlyWhenBlackAllOver() {
+    func frame(_ edit: (inout [UInt8]) -> Void) -> CaptureFrame {
+        var pixels = [UInt8](repeating: 0, count: 256 * 128 * 4)
+        edit(&pixels)
+        return pixels.withUnsafeBytes {
+            CaptureFrame(copying: BorrowedFrame(pixels: $0.baseAddress!, width: 256, height: 128, stride: 256 * 4, dirtyRectangles: []))
+        }
+    }
+    #expect(frame { _ in }.isBlank)
+    // Codec noise in black, as in a Windows server's first frames.
+    #expect(frame { $0[2] = 1 }.isBlank)
+    // One lit taskbar row at the bottom.
+    #expect(!frame { pixels in for index in (126 * 256 * 4)..<(127 * 256 * 4) { pixels[index] = 200 } }.isBlank)
+}
+
 @Test @MainActor func idleHiddenDesktopReadbackWritesCompleteOpaquePNG() async throws {
     let frames = try MetalDesktop(device: #require(MTLCreateSystemDefaultDevice()))
     desktop(width: 8, height: 6, bgra: [21, 87, 231, 0], sink: frames)

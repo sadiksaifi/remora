@@ -4,7 +4,8 @@ import RemoraCore
 /// Requests a Fit to Window desktop size that follows the session's content area,
 /// separately from the remote desktop size. Full-screen transitions defer requests until they end.
 /// Asks the server to pause desktop updates while the content area can't be seen: a hidden tab,
-/// a minimized window, or a fully covered window. A standard VNC server keeps sending them.
+/// a minimized window, or a fully covered window. A standard VNC server keeps sending them,
+/// and so does an RDP server that cannot redraw on request.
 @MainActor
 final class SessionDisplay {
     private weak var session: (any RemoteSession)?
@@ -17,12 +18,9 @@ final class SessionDisplay {
     var followsWindow = true
     var onScaleChange: ((Double) -> Void)?
 
-    @discardableResult
-    func addCommandLineDemand() -> Bool {
-        let resumed = !visible && !recording && commandLineDemand == 0
+    func addCommandLineDemand() {
         commandLineDemand += 1
         session?.setDisplayUpdatesEnabled(visible || recording || commandLineDemand > 0)
-        return resumed
     }
 
     func removeCommandLineDemand() {

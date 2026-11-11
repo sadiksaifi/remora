@@ -71,6 +71,7 @@ private final class LoggingSession: RemoteSession, Sendable {
     var maximumResizeArea: UInt64? { nil }
     func requestResize(_ size: DesktopSize, scale: Double) {}
     func setDisplayUpdatesEnabled(_ enabled: Bool) {}
+    var awaitsRedraw: Bool { false }
     func connect() {}
     func disconnect() {}
     func sendKey(_ key: KeyInput) {

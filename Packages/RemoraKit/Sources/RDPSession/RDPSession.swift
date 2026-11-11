@@ -94,6 +94,13 @@ public final class RDPSession: AgentInputSession, @unchecked Sendable {
         }
     }
 
+    public var awaitsRedraw: Bool {
+        state.lock.withLock {
+            guard !state.cancelled, let handle = state.handle else { return false }
+            return rm_rdp_awaits_redraw(handle)
+        }
+    }
+
     public func sendKey(_ key: KeyInput) {
         enqueue {
             rm_rdp_key($0, key.keyCode, key.isDown)
