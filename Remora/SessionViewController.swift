@@ -31,11 +31,13 @@ final class SessionViewController: NSViewController {
             inputGeometryRevision += 1
             control.invalidateObservation()
             frameBaseline = renderer?.desktop.revision ?? 0
-            refreshAfterFrame = 0
             retiredFrameRevision = 0
+            desktopSeen = false
             onControlEvent?("session.replaced", .object(["previousSession": .string(oldValue.uuidString), "session": .string(attemptID.uuidString)]))
         }
     }
+    /// A `connect` has waited out the black frames a server draws while it attaches this attempt.
+    var desktopSeen = false
     /// "you", or the label of the command-line program that opened the tab.
     private(set) var startedBy = "you"
     /// The command-line program that last took control, for the capsule, tab and menus.
@@ -91,13 +93,16 @@ final class SessionViewController: NSViewController {
             commandLine ? resolution ?? (connection.resolution == .fitToWindow ? .fixed(width: 1920, height: 1080) : connection.resolution) : nil
     }
 
-    func addFrameDemand() {
-        let before = frameRevision
-        let resumed = display.addCommandLineDemand()
-        if resumed { refreshAfterFrame = before }
+    func addFrameDemand() { display.addCommandLineDemand() }
+    /// The server was paused and its redraw has not arrived yet.
+    var awaitsRedraw: Bool { session?.awaitsRedraw == true }
+    /// The frame shows the desktop as the server has it now.
+    var hasFreshFrame: Bool { frameRevision > 0 && !awaitsRedraw && frameSize == desktopSize }
+    /// Reads the frame back off the main actor, which the copy and the GPU wait would stall.
+    func showsBlankFrame() async -> Bool {
+        guard let desktop = renderer?.desktop else { return false }
+        return await Task.detached { (try? desktop.snapshot())?.isBlank ?? false }.value
     }
-    private var refreshAfterFrame = 0
-    var hasFreshFrame: Bool { frameRevision > refreshAfterFrame && frameSize == desktopSize }
     var lastFrameArrival: TimeInterval? { renderer?.desktop.lastFrameArrival }
     var captureFrameBaseline: Int { frameBaseline }
     func removeFrameDemand() { display.removeCommandLineDemand() }
@@ -419,7 +424,6 @@ final class SessionViewController: NSViewController {
         attemptConnection = connection
         frameBaseline = 0
         retiredFrameRevision = 0
-        refreshAfterFrame = 0
         desktopSize = nil
         state = .connecting
         let connectingView = showStatus(.connecting)

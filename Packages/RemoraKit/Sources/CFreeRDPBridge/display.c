@@ -10,6 +10,11 @@
 /* Display Control callbacks run on the dynamic-channel worker. The lock protects
  * the channel, caps, a single-slot command queue, and the display update switch.
  * Only process sends layouts and Suppress Output; callbacks to Swift always run after unlocking. */
+/* Updates stay on this long after their last use, so back-to-back uses never pause the server. */
+#define PAUSE_DELAY_MS 2000
+/* A pause lasts at least this long, so every frame the server sent before pausing has arrived
+ * and the first frame after the resume is its redraw. */
+#define MINIMUM_PAUSE_MS 1000
 struct RMDisplay {
     rdpContext *context;
     RMRDPCallbacks callbacks;
@@ -28,7 +33,13 @@ struct RMDisplay {
     uint32_t observed_width, observed_height;
     bool observed_requested;
     /* What the client wants and what the server was last told. Servers start with updates on. */
-    bool updates_wanted, updates_sent, refresh_pending;
+    bool updates_wanted, updates_sent;
+    /* The server honors both Suppress Output and Refresh Rect. */
+    bool pausable;
+    /* When updates stopped being wanted, and when the server was told to pause. */
+    uint64_t unwanted_at, paused_at;
+    /* A resume of a paused server owes a redraw. redraw_sent: its request is on the wire. */
+    bool redraw_owed, redraw_sent;
 };
 
 static UINT display_caps(DispClientContext *channel, UINT32 monitors, UINT32 a, UINT32 b) {
@@ -159,23 +170,51 @@ void rm_rdp_set_display_updates(RMRDPSession *session, bool enabled) {
     pthread_mutex_lock(&d->lock);
     if (d->updates_wanted != enabled) {
         d->updates_wanted = enabled;
-        /* A brief suppression can be coalesced before process runs. Keep the refresh
-         * owed to the next observer even when the server never saw the off state. */
-        if (enabled) d->refresh_pending = true;
+        if (!enabled) {
+            d->unwanted_at = GetTickCount64();
+        } else if (!d->updates_sent) {
+            /* Only a server that was told to pause has stale frames to replace. */
+            d->redraw_owed = true;
+            d->redraw_sent = false;
+        }
         SetEvent(d->wake);
     }
     pthread_mutex_unlock(&d->lock);
 }
 
-void rm_display_reconnected(RMDisplay *d) {
+/* Pause only a server that also redraws on request. One that honors Suppress Output alone, such as
+ * GNOME Remote Desktop, sends nothing after a pause unless its screen changed meanwhile, so the client
+ * could not tell a current frame from a missing one. Such a server keeps sending updates. */
+void rm_display_connected(RMDisplay *d) {
+    const rdpSettings *settings = d->context->settings;
+    const bool suppress = freerdp_settings_get_bool(settings, FreeRDP_SuppressOutput);
+    const bool refresh = freerdp_settings_get_bool(settings, FreeRDP_RefreshRect);
+    os_log_info(d->log, "Display updates: server suppress=%d, refresh=%d", suppress, refresh);
     pthread_mutex_lock(&d->lock);
+    d->pausable = suppress && refresh;
     d->updates_sent = true;
+    /* A new connection draws the whole desktop. */
+    d->redraw_sent = d->redraw_owed;
     SetEvent(d->wake);
     pthread_mutex_unlock(&d->lock);
 }
 
-/* FreeRDP sends nothing when the server lacks suppressOutputSupport, and the server keeps
- * sending updates. A failed write surfaces through the event loop like any other. */
+void rm_display_frame(RMDisplay *d) {
+    pthread_mutex_lock(&d->lock);
+    if (d->redraw_sent)
+        d->redraw_owed = d->redraw_sent = false;
+    pthread_mutex_unlock(&d->lock);
+}
+
+bool rm_rdp_awaits_redraw(RMRDPSession *session) {
+    RMDisplay *d = rm_rdp_display(session);
+    pthread_mutex_lock(&d->lock);
+    const bool owed = d->redraw_owed;
+    pthread_mutex_unlock(&d->lock);
+    return owed;
+}
+
+/* A failed write surfaces through the event loop like any other. */
 static void send_display_updates(RMDisplay *d, bool allow) {
     rdpContext *context = d->context;
     const UINT32 width = freerdp_settings_get_uint32(context->settings, FreeRDP_DesktopWidth);
@@ -185,27 +224,32 @@ static void send_display_updates(RMDisplay *d, bool allow) {
         .left = 0, .top = 0,
         .right = (UINT16)(width > 0 ? width - 1 : 0), .bottom = (UINT16)(height > 0 ? height - 1 : 0)
     };
-    /* Force a real off-to-on transition even if the previous suppression was coalesced. */
-    BOOL sent = context->update->SuppressOutput(context, 0, NULL);
-    if (sent && allow)
-        sent = context->update->SuppressOutput(context, 1, &desktop);
-    if (sent && allow)
-        sent = context->update->RefreshRect(context, 1, &desktop);
-    os_log_info(d->log, "Display updates: %{public}s, server support=%d, status=%d", allow ? "on" : "off",
-                freerdp_settings_get_bool(context->settings, FreeRDP_SuppressOutput), sent);
+    const BOOL sent = allow
+        ? context->update->SuppressOutput(context, 1, &desktop) && context->update->RefreshRect(context, 1, &desktop)
+        : context->update->SuppressOutput(context, 0, NULL);
+    os_log_info(d->log, "Display updates: %{public}s, status=%d", allow ? "on" : "off", sent);
 }
 
 DWORD rm_display_process(RMDisplay *d) {
     pthread_mutex_lock(&d->lock);
     ResetEvent(d->wake);
-    const bool updates_changed = d->updates_wanted != d->updates_sent || (d->updates_wanted && d->refresh_pending);
-    d->refresh_pending = false;
-    const bool updates = d->updates_wanted;
-    d->updates_sent = updates;
+    const uint64_t now = GetTickCount64();
+    const bool updates = d->updates_wanted || !d->pausable;
+    bool updates_changed = false;
+    DWORD updates_timeout = INFINITE;
+    if (updates != d->updates_sent) {
+        const uint64_t due = updates ? d->paused_at + MINIMUM_PAUSE_MS : d->unwanted_at + PAUSE_DELAY_MS;
+        if (now >= due) {
+            updates_changed = true;
+            d->updates_sent = updates;
+            if (!updates) d->paused_at = now;
+        } else {
+            updates_timeout = (DWORD)(due - now);
+        }
+    }
     const bool changed = d->available != d->reported_available;
     const bool available = d->available;
     d->reported_available = available;
-    const uint64_t now = GetTickCount64();
     DWORD timeout = INFINITE;
     if (available && d->channel && (d->queued || (d->waiting && d->retries < 5))) {
         /* SDL3: >=500 ms between sends; retry at 1000 ms, at most five times.
@@ -234,11 +278,18 @@ DWORD rm_display_process(RMDisplay *d) {
         if (!d->queued && d->retries >= 5) timeout = INFINITE;
     }
     pthread_mutex_unlock(&d->lock);
-    if (updates_changed)
+    if (updates_changed) {
         send_display_updates(d, updates);
+        if (updates) {
+            /* Set only after the write: a frame another thread finishes before it is not the redraw. */
+            pthread_mutex_lock(&d->lock);
+            d->redraw_sent = d->redraw_owed;
+            pthread_mutex_unlock(&d->lock);
+        }
+    }
     if (changed && d->callbacks.dynamic_resize)
         d->callbacks.dynamic_resize(d->user, available);
-    return timeout;
+    return timeout < updates_timeout ? timeout : updates_timeout;
 }
 
 bool rm_display_resized(RMDisplay *d, uint32_t width, uint32_t height) {

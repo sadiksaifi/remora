@@ -105,9 +105,17 @@ public final class VNCSession: AgentInputSession, @unchecked Sendable {
             let resumed = enabled && !state.displayUpdatesEnabled
             if enabled != state.displayUpdatesEnabled { state.displayDemandChanged = true }
             state.displayUpdatesEnabled = enabled
-            if resumed, state.connected, !state.stopping { state.refresh = true }
+            if resumed, state.connected, !state.stopping {
+                state.refresh = true
+                // Only Apple mode pauses the server. A standard server kept sending updates, so its last frame is current.
+                if configuration.vncMode == .apple {
+                    state.redrawOwed = true
+                    state.redrawSent = false
+                }
+            }
         }
     }
+    public var awaitsRedraw: Bool { state.lock.withLock { state.redrawOwed } }
     public func sendKey(_ key: KeyInput) { enqueue(.humanKey(key)) }
     public func sendPointer(position: RemotePoint, buttons: PointerButtons) {
         enqueue(.human(.pointer(position, PointerButtons(rawValue: buttons.rawValue & 7))))
@@ -354,6 +362,7 @@ public final class VNCSession: AgentInputSession, @unchecked Sendable {
                         let pending = (state.clipboard, state.resize, state.refresh, state.displayDemandChanged ? state.displayUpdatesEnabled : nil)
                         state.clipboard = nil
                         state.resize = nil
+                        if state.refresh { state.redrawSent = true }
                         state.refresh = false
                         state.displayDemandChanged = false
                         return pending
@@ -466,10 +475,14 @@ public final class VNCSession: AgentInputSession, @unchecked Sendable {
         }
         cb.frame = { user, pixels, width, height, x, y, w, h in
             guard let pixels else { return }
-            owner(user).frameSink.consume(
+            let owner = owner(user)
+            owner.frameSink.consume(
                 .init(
                     pixels: pixels, width: Int(width), height: Int(height), stride: Int(width) * 4,
                     dirtyRectangles: [.init(x: Int(x), y: Int(y), width: Int(w), height: Int(h))]))
+            owner.state.lock.withLock {
+                if owner.state.redrawSent { (owner.state.redrawOwed, owner.state.redrawSent) = (false, false) }
+            }
         }
         cb.cursor = { user, pixels, width, height, x, y in
             guard width > 0, height > 0, let pixels, let x = UInt16(exactly: x), let y = UInt16(exactly: y) else {
@@ -585,6 +598,8 @@ extension VNCSession {
         var receipts: [Receipt] = []
         var clipboard: String?, resize: DesktopSize?, refresh = false
         var displayUpdatesEnabled = true, displayDemandChanged = false
+        /// A resume owes a redraw. redrawSent: the session thread has taken its request.
+        var redrawOwed = false, redrawSent = false
         var clipboardRevision: UInt64 = 0
         var nextAgent: UInt64 = 0, agent: UInt64?
         var agentCancelled = false, agentPending = false

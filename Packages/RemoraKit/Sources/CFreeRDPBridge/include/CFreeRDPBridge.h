@@ -90,9 +90,12 @@ void rm_rdp_free(RMRDPSession *session);
 /* Thread-safe enqueue only. The caller excludes free until the call returns. */
 uint64_t rm_rdp_max_resize_area(RMRDPSession *session);
 void rm_rdp_request_resize(RMRDPSession *session, uint32_t width, uint32_t height, double scale);
-/* Thread-safe enqueue. Sends Suppress Output (MS-RDPBCGR 2.2.11.3) when the server supports it;
- * enabling again also requests a refresh of the whole desktop. Survives automatic reconnection. */
+/* Thread-safe enqueue. Pauses the server with Suppress Output (MS-RDPBCGR 2.2.11.3) once updates have
+ * stayed off for two seconds, and only when the server also supports Refresh Rect. Enabling a paused
+ * server asks it to redraw the whole desktop. Survives automatic reconnection. */
 void rm_rdp_set_display_updates(RMRDPSession *session, bool enabled);
+/* True from enabling the updates of a paused server until its redraw has reached the frame callback. */
+bool rm_rdp_awaits_redraw(RMRDPSession *session);
 void rm_rdp_key(RMRDPSession *session, uint16_t key, bool down);
 void rm_rdp_pointer(RMRDPSession *session, uint16_t x, uint16_t y, uint8_t buttons);
 void rm_rdp_wheel(RMRDPSession *session, int32_t vertical, int32_t horizontal);

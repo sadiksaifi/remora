@@ -188,8 +188,11 @@ public protocol RemoteSession: AnyObject, Sendable {
     func requestResize(_ size: DesktopSize, scale: Double)
     /// Asks the server to stop or resume sending desktop updates, for example while the desktop is hidden.
     /// The connection, input, and clipboard continue, and the choice survives reconnection.
-    /// Resuming asks the server to redraw the desktop. A server without support keeps sending updates.
+    /// Resuming a paused server asks it to redraw the desktop. A server that cannot both pause and redraw keeps sending updates.
     func setDisplayUpdatesEnabled(_ enabled: Bool)
+    /// True from resuming a paused server until its redraw has reached the frame sink. Until then the last
+    /// frame may be out of date, and a Windows server drops input. False while the server keeps sending updates.
+    var awaitsRedraw: Bool { get }
     func connect()
     func disconnect()
     func sendKey(_ key: KeyInput)

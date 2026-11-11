@@ -251,8 +251,14 @@ private final class ApplePixels: FrameSink, @unchecked Sendable {
         while frames.samples.count < 3, ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(2)) }
         session.setDisplayUpdatesEnabled(false)
         try await Task.sleep(for: .milliseconds(50))
+        let before = frames.samples.count
         session.setDisplayUpdatesEnabled(true)
         session.setDisplayUpdatesEnabled(true)
+        #expect(session.awaitsRedraw)
+        let redrawn = ContinuousClock.now.advanced(by: .seconds(2))
+        while session.awaitsRedraw, ContinuousClock.now < redrawn { try await Task.sleep(for: .milliseconds(2)) }
+        #expect(!session.awaitsRedraw)
+        #expect(frames.samples.count > before)
     }
     #expect(wire["subscriptions"] as? [[Int]] == [[0, 1, 0, 0, 0, 16, 8], [0, 0, 0, 0, 0, 16, 8], [0, 1, 0, 0, 0, 16, 8]])
     #expect(wire["requests_after_initial"] as? Int == 1)

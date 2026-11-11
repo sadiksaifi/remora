@@ -296,6 +296,7 @@ static BOOL end_paint(rdpContext *context) {
         s->callbacks.frame(s->user, gdi->primary_buffer, gdi->width, gdi->height,
                            gdi->stride, rectangles, count);
         free(rectangles);
+        rm_display_frame(s->display);
     }
     window->invalid->null = TRUE;
     window->ninvalid = 0;
@@ -522,6 +523,7 @@ void rm_rdp_run(RMRDPSession *s) {
     bool loop_failed = false;
     if (connected) {
         atomic_store(&s->input_active, true);
+        rm_display_connected(s->display);
         if (s->callbacks.connected)
             s->callbacks.connected(s->user);
         while (!atomic_load(&s->aborted)) {
@@ -546,7 +548,7 @@ void rm_rdp_run(RMRDPSession *s) {
                 if (recovered) {
                     atomic_store(&s->input_active, true);
                     rm_rdp_release_all(s);
-                    rm_display_reconnected(s->display);
+                    rm_display_connected(s->display);
                     if (s->callbacks.connected)
                         s->callbacks.connected(s->user);
                     continue;

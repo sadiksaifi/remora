@@ -129,6 +129,7 @@ private final class EdgeFrames: FrameSink, @unchecked Sendable {
         _ = try await peer.wait("request", count: 2)
         session.setDisplayUpdatesEnabled(false)
         session.setDisplayUpdatesEnabled(true)
+        #expect(!session.awaitsRedraw)  // A standard server was never paused.
         // Neither peer sends incremental damage until explicitly instructed.
         _ = try await peer.wait("request", count: 4)
         #expect(frames.values == [1, 1])  // A fresh revision, despite unchanged pixels.
