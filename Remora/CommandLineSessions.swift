@@ -146,22 +146,32 @@ extension CommandLineController {
         }
     }
 
-    /// A Windows server draws black frames while it attaches a new session, so a black first frame
-    /// gets three seconds to give way to the desktop. A desktop that really is black costs that wait.
+    /// A Windows server draws black frames while it attaches a new session, so the first `connect` to wait
+    /// on an attempt gives a black frame three seconds to give way to the desktop. A desktop that really is
+    /// black costs that wait once.
     private func waitForDesktop(_ session: SessionViewController, id: UUID, deadline: TimeInterval) async throws {
         try await waitForSettledFrame(session, id: id, deadline: deadline)
+        guard !session.desktopSeen else { return }
         let patience = min(deadline, ProcessInfo.processInfo.systemUptime + 3)
+        var wasBlank = false
         while ProcessInfo.processInfo.systemUptime < patience {
             let checked = session.frameRevision
             guard await session.showsBlankFrame() else { break }
+            wasBlank = true
             do {
                 try await waitFor(session, id: id, timeout: max(0, patience - ProcessInfo.processInfo.systemUptime)) { session.frameRevision != checked }
             } catch let failure as ControlFailure where failure.code == .timeout {
                 break
             }
         }
-        // The check suspends, so the session may have ended or been replaced meanwhile.
-        try await waitForSettledFrame(session, id: id, deadline: deadline)
+        // The check suspends, so the session may have ended or been replaced meanwhile. Only a desktop that
+        // replaced black frames is still painting.
+        if wasBlank {
+            try await waitForSettledFrame(session, id: id, deadline: deadline)
+        } else {
+            try await waitFor(session, id: id, timeout: 0) { session.state == .connected }
+        }
+        session.desktopSeen = true
     }
 
     func handleSession(_ request: ControlRequest) async throws -> ControlValue {
@@ -238,15 +248,9 @@ extension CommandLineController {
                 if !background { show(nil) }
                 try promptRequired(session)
                 if noWait { return result() }
-                // An earlier connect may have started this attempt and returned before its first frame.
-                let hasDesktop = !started && session.isConnected && session.frameRevision > 0
                 session.addFrameDemand()
                 defer { session.removeFrameDemand() }
-                if hasDesktop {
-                    try await waitForSettledFrame(session, id: session.attemptID, deadline: deadline)
-                } else {
-                    try await waitForDesktop(session, id: session.attemptID, deadline: deadline)
-                }
+                try await waitForDesktop(session, id: session.attemptID, deadline: deadline)
                 return result()
             } catch let failure as ControlFailure {
                 // The session exists by now, so a failed connect still says which one and whether its tab was already there.

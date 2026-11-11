@@ -32,9 +32,12 @@ final class SessionViewController: NSViewController {
             control.invalidateObservation()
             frameBaseline = renderer?.desktop.revision ?? 0
             retiredFrameRevision = 0
+            desktopSeen = false
             onControlEvent?("session.replaced", .object(["previousSession": .string(oldValue.uuidString), "session": .string(attemptID.uuidString)]))
         }
     }
+    /// A `connect` has waited out the black frames a server draws while it attaches this attempt.
+    var desktopSeen = false
     /// "you", or the label of the command-line program that opened the tab.
     private(set) var startedBy = "you"
     /// The command-line program that last took control, for the capsule, tab and menus.
