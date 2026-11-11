@@ -138,6 +138,41 @@ public struct ControlFailure: Error, Codable, Sendable, Equatable, LocalizedErro
             case .cancelled: 130
             }
         }
+
+        /// The next step for this code, used by every failure that does not name a more specific one.
+        /// Commands sit in backticks so the build can check that they still parse.
+        public var hint: String {
+            switch self {
+            case .captureFailed, .backendFailed: "Inspect `remora session get` before retrying."
+            case .noFrame: "Wait with `remora wait --for frame`, then try again."
+            case .recordingBusy: "Inspect `remora recording get`, or end it with `remora recording stop`."
+            case .internal: "This is a Remora bug. Report the message."
+            case .ioFailed, .storeFailed: "Inspect the current state before retrying."
+            case .outcomeUnknown, .timeout: "The command may have taken effect. Inspect the current state, such as a new screenshot, before retrying."
+            case .invalidArgument: "Read the command's --help."
+            case .unknownCommand: "Run `remora --help`."
+            case .appUnavailable: "Open Remora and inspect its launch error."
+            case .notFound: "List the valid names with `remora connection list`, `remora session list` or `remora prompt list`."
+            case .ambiguousTarget: "Use the UUID instead of the name."
+            case .unsupported: "The remote server cannot do this. Reach the goal another way."
+            case .sessionRequired: "Choose one from `remora session list` and pass it as --session."
+            case .sessionEnded: "Find the current session with `remora session list`."
+            case .notConnected: "Inspect `remora session get`. Run `remora session reconnect` if its state is disconnected."
+            case .promptRequired: "Show it with `remora prompt list`. Answer with `remora prompt respond P connect` or `remora prompt respond P cancel`."
+            case .userActive: "Run `remora wait --for resumed`, again after each timeout, then take a new screenshot."
+            case .agentStopped: "End the task and leave the session open. Only the user can resume agent control, from Remora."
+            case .inputBusy: "Send the command again once the running input or control handover finishes."
+            case .observationRequired, .imageExpired: "Take a new screenshot with `remora screenshot`, then use its image value."
+            case .connectionDeleted: "Create a new connection explicitly."
+            case .sessionExists: "Use the open session, or end it first with `remora session disconnect`."
+            case .credentialFailed: "Inspect the connection before retrying the password operation."
+            case .promptResolved: "Inspect `remora prompt list`."
+            case .destinationExists: "Choose a path that does not exist yet."
+            case .frameTimeout: "The screen did not change. Inspect `remora session get`, or take a screenshot anyway."
+            case .streamOverflow: "Subscribe again and inspect the new snapshot."
+            case .cancelled: ""
+            }
+        }
     }
 
     public let code: Code
@@ -146,11 +181,12 @@ public struct ControlFailure: Error, Codable, Sendable, Equatable, LocalizedErro
     public let details: ControlValue?
     public var errorDescription: String? { message }
 
-    public init(_ code: Code, _ message: String, hint: String = "", details: ControlValue? = nil) {
+    /// A nil `hint` takes the code's own.
+    public init(_ code: Code, _ message: String, hint: String? = nil, details: ControlValue? = nil) {
         self.details = details
         self.code = code
         self.message = message
-        self.hint = hint
+        self.hint = hint ?? code.hint
     }
 }
 

@@ -46,7 +46,7 @@ struct ClickCommand: AsyncParsableCommand {
 
 struct DragCommand: AsyncParsableCommand {
     static let configuration = CommandConfiguration(commandName: "drag", abstract: "Drag between remote points.")
-    @OptionGroup var options: CommonOptions
+    @OptionGroup var options: Options<After60s>
     @OptionGroup var target: SessionOptions
     @OptionGroup var basis: ImageOptions
     @Option(help: "Start point as X,Y pixels from the top-left.") var from: String
@@ -60,7 +60,7 @@ struct DragCommand: AsyncParsableCommand {
             "durationMs": .number(try CommandTimeout(duration).seconds * 1000),
         ]
         if let modifiers { args["modifiers"] = .string(modifiers) }
-        try await options.execute(.init(command: "drag", session: target.target, arguments: basis.adding(to: args)), defaultTimeout: "60s")
+        try await options.execute(.init(command: "drag", session: target.target, arguments: basis.adding(to: args)))
     }
 }
 
@@ -85,7 +85,7 @@ struct TypeCommand: AsyncParsableCommand {
             Line breaks press Enter. Servers drop characters their keyboard layout lacks, and some drop emoji. \
             For that text and for long text, run clipboard set, then key Ctrl+V, or Cmd+V when the remote machine is a Mac.
             """)
-    @OptionGroup var options: CommonOptions
+    @OptionGroup var options: Options<After60s>
     @OptionGroup var target: SessionOptions
     @Option(help: "Text to send instead of reading stdin.") var text: String?
     @Flag(name: .customLong("stdin"), help: "Read untrimmed UTF-8 text to EOF. This is the default.") var readStdin = false
@@ -100,7 +100,7 @@ struct TypeCommand: AsyncParsableCommand {
             }
             value = decoded
         }
-        try await options.execute(.init(command: "type", session: target.target, arguments: ["text": .string(value)]), defaultTimeout: "60s")
+        try await options.execute(.init(command: "type", session: target.target, arguments: ["text": .string(value)]))
     }
 }
 
@@ -139,7 +139,7 @@ struct InputCommand: AsyncParsableCommand {
 
             Buttons are left, right, middle, back and forward. key-up and button-up need a matching down earlier in the batch. Anything still held is released when the batch ends.
             """)
-    @OptionGroup var options: CommonOptions
+    @OptionGroup var options: Options<After60s>
     @OptionGroup var target: SessionOptions
     @OptionGroup var basis: ImageOptions
     @Flag(name: .customLong("stdin"), help: "Read the JSON action array from stdin. Required.") var readStdin = false
@@ -149,7 +149,7 @@ struct InputCommand: AsyncParsableCommand {
         do { actions = try JSONDecoder().decode(ControlValue.self, from: try await readStandardInput()) } catch let failure as ControlFailure {
             throw failure
         } catch { throw ControlFailure(.invalidArgument, "Stdin must contain a JSON action array.") }
-        try await options.execute(.init(command: "input", session: target.target, arguments: basis.adding(to: ["actions": actions])), defaultTimeout: "60s")
+        try await options.execute(.init(command: "input", session: target.target, arguments: basis.adding(to: ["actions": actions])))
     }
 }
 

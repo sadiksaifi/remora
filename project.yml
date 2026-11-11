@@ -49,10 +49,10 @@ targets:
         product: RDPSession
       - package: RemoraKit
         product: VNCSession
-    # Parses every `remora ...` line in the skill with the embedded, signed CLI, without running it.
+    # Checks the skill, the failure hints and the command descriptions with the embedded, signed CLI, without running a command.
     postBuildScripts:
-      - name: Check skill commands
-        script: '"$TARGET_BUILD_DIR/$CONTENTS_FOLDER_PATH/Helpers/remora" __check-skill "$SRCROOT/skills/remora/SKILL.md"'
+      - name: Check agent help
+        script: '"$TARGET_BUILD_DIR/$CONTENTS_FOLDER_PATH/Helpers/remora" __check-help "$SRCROOT/skills/remora/SKILL.md"'
         inputFiles:
           - $(SRCROOT)/skills/remora/SKILL.md
         basedOnDependencyAnalysis: false

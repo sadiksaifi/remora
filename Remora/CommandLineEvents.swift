@@ -38,7 +38,7 @@ extension CommandLineController {
             guard subscriber.session == nil || subscriber.session == session.attemptID || subscriber.session == previous else { continue }
             if case .dropped = subscriber.continuation.yield(event) {
                 subscriber.continuation.finish(
-                    throwing: ControlFailure(.streamOverflow, "The event reader fell behind.", hint: "Subscribe again and inspect the new snapshot."))
+                    throwing: ControlFailure(.streamOverflow, "The event reader fell behind."))
                 eventSubscribers[id] = nil
             } else if subscriber.session != nil
                 && (type == "session.replaced" || value == .object(["session": .string(session.attemptID.uuidString), "state": .string("closed")]))

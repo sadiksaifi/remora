@@ -141,7 +141,7 @@ extension CommandLineController {
             where failure.code == .timeout
             && (request.command == "screenshot" || request.command == "recording.start" || request.arguments["for"] == .string("frame"))
         {
-            throw ControlFailure(.frameTimeout, "No fresh desktop frame arrived before the deadline.", hint: "Inspect session get and try another observation.")
+            throw ControlFailure(.frameTimeout, "No fresh desktop frame arrived before the deadline.")
         } catch let failure as CaptureFailure {
             let code: ControlFailure.Code
             switch failure {

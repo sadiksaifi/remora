@@ -7,19 +7,19 @@ extension CommandLineController {
         let candidates = sessions.tabs.compactMap { sessions.session(for: $0.id) }
         guard let target else {
             guard candidates.count == 1, let only = candidates.first else {
-                throw ControlFailure(.sessionRequired, "Choose a session.", hint: "Use session list and --session S.")
+                throw ControlFailure(.sessionRequired, "Choose a session.")
             }
             return only
         }
         if let id = UUID(uuidString: target) {
             guard let session = candidates.first(where: { $0.attemptID == id }) else {
-                throw ControlFailure(.sessionEnded, "The session attempt has ended or was replaced.", hint: "Inspect session list for its current ID.")
+                throw ControlFailure(.sessionEnded, "The session attempt has ended or was replaced.")
             }
             return session
         }
         let matches = candidates.filter { $0.connection.name.caseInsensitiveCompare(target) == .orderedSame }
         guard let session = matches.first else { throw ControlFailure(.notFound, "Session not found.") }
-        guard matches.count == 1 else { throw ControlFailure(.ambiguousTarget, "Several sessions have that name.", hint: "Use a session UUID.") }
+        guard matches.count == 1 else { throw ControlFailure(.ambiguousTarget, "Several sessions have that name.") }
         return session
     }
 
@@ -91,15 +91,14 @@ extension CommandLineController {
     private func promptSession(_ target: String) throws -> SessionViewController {
         guard let id = UUID(uuidString: target) else { throw ControlFailure(.invalidArgument, "A prompt ID must be a UUID.") }
         if let session = sessions.tabs.compactMap({ sessions.session(for: $0.id) }).first(where: { $0.pendingPrompt?.id == id }) { return session }
-        if sessions.resolvedPrompts.contains(id) { throw ControlFailure(.promptResolved, "This prompt was already resolved.", hint: "Inspect prompt list.") }
-        throw ControlFailure(.notFound, "Prompt not found.", hint: "Inspect prompt list.")
+        if sessions.resolvedPrompts.contains(id) { throw ControlFailure(.promptResolved, "This prompt was already resolved.") }
+        throw ControlFailure(.notFound, "Prompt not found.")
     }
 
     func promptRequired(_ session: SessionViewController) throws {
         if let prompt = session.pendingPrompt {
             throw ControlFailure(
                 .promptRequired, "Session \(session.attemptID) requires prompt \(prompt.id).",
-                hint: "Run remora prompt get \(prompt.id) and remora prompt respond \(prompt.id) connect|cancel.",
                 details: .object(["prompt": .string(prompt.id.uuidString), "session": .string(session.attemptID.uuidString)]))
         }
     }
@@ -112,12 +111,12 @@ extension CommandLineController {
         let deadline = ContinuousClock.now.advanced(by: .seconds(timeout))
         while true {
             guard session.attemptID == id, sessions.session(for: session.connection.id) === session else {
-                throw ControlFailure(.sessionEnded, "The session attempt was closed or replaced.", hint: "Inspect session list.")
+                throw ControlFailure(.sessionEnded, "The session attempt was closed or replaced.")
             }
             if try predicate() { return }
             try promptRequired(session)
             if !disconnected, case .disconnected(let reason) = session.state {
-                throw ControlFailure(.backendFailed, reason?.description ?? "The session disconnected.", hint: "Inspect session get before reconnecting.")
+                throw ControlFailure(.backendFailed, reason?.description ?? "The session disconnected.")
             }
             guard ContinuousClock.now < deadline else { throw ControlFailure(.timeout, "The session did not reach the requested state before the deadline.") }
             do { try await Task.sleep(until: min(deadline, ContinuousClock.now.advanced(by: .milliseconds(25))), clock: .continuous) } catch {
@@ -139,7 +138,7 @@ extension CommandLineController {
                 return now >= min(arrival + 0.25, firstFrameAt! + 2, deadline)
             }
         } catch let failure as ControlFailure where failure.code == .timeout {
-            throw ControlFailure(.frameTimeout, "No fresh desktop frame arrived before the deadline.", hint: "Inspect session get and try another observation.")
+            throw ControlFailure(.frameTimeout, "No fresh desktop frame arrived before the deadline.")
         }
     }
 
@@ -196,13 +195,13 @@ extension CommandLineController {
             if let existing = sessions.session(for: connection.id), existing.state.isLive, let resolution,
                 resolution != (existing.attemptResolution ?? existing.attemptConnection.resolution)
             {
-                throw ControlFailure(.sessionExists, "An active session uses a different resolution.", hint: "Inspect it or disconnect explicitly.")
+                throw ControlFailure(.sessionExists, "An active session uses a different resolution.")
             }
             let started = sessions.open(connection, select: !background, agent: request.agent ?? "remora CLI", resolution: resolution)
             if started {
                 do { try connectionStore.markConnected(id: connection.id) } catch {
                     throw ControlFailure(
-                        .storeFailed, "Session started, but its last-connected date could not be saved.", hint: "Inspect session list before retrying.")
+                        .storeFailed, "Session started, but its last-connected date could not be saved.")
                 }
             }
             let session = sessions.session(for: connection.id)!
@@ -255,14 +254,14 @@ extension CommandLineController {
             try await waitFor(session, id: id, timeout: timeout, disconnected: true) { !session.state.isLive }
             if case .failure(let failure) = await session.stopRecording() { throw ControlFailure(.captureFailed, failure.localizedDescription) }
             guard session.attemptID == id, sessions.session(for: session.connection.id) === session else {
-                throw ControlFailure(.sessionEnded, "The session attempt was closed or replaced.", hint: "Inspect session list.")
+                throw ControlFailure(.sessionEnded, "The session attempt was closed or replaced.")
             }
             if request.command == "session.close" { sessions.close(session.connection.id) }
         case "session.reconnect":
             let noWait = try request.flag("noWait")
             guard !session.state.isLive else { throw ControlFailure(.sessionExists, "Disconnect this session before reconnecting.") }
             guard let connection = connectionStore.connections.first(where: { $0.id == session.connection.id }) else {
-                throw ControlFailure(.connectionDeleted, "The saved connection was deleted.", hint: "Create a new connection explicitly.")
+                throw ControlFailure(.connectionDeleted, "The saved connection was deleted.")
             }
             session.update(connection)
             session.reconnect()

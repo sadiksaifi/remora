@@ -11,7 +11,7 @@ extension CommandLineController {
             matches = connectionStore.connections.filter { $0.name.caseInsensitiveCompare(target) == .orderedSame }
         }
         guard let connection = matches.first else { throw ControlFailure(.notFound, "Connection not found.") }
-        guard matches.count == 1 else { throw ControlFailure(.ambiguousTarget, "Several connections have that name.", hint: "Use a connection UUID.") }
+        guard matches.count == 1 else { throw ControlFailure(.ambiguousTarget, "Several connections have that name.") }
         return connection
     }
 
@@ -28,7 +28,7 @@ extension CommandLineController {
                 .credentialFailed,
                 metadataSaved
                     ? "Connection metadata was saved, but the password operation failed."
-                    : "The password operation failed.", hint: "Inspect the connection before retrying the password operation.",
+                    : "The password operation failed.",
                 details: .object(["recordSaved": .bool(metadataSaved)]))
         }
     }

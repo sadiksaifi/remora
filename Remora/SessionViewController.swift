@@ -56,7 +56,7 @@ final class SessionViewController: NSViewController {
     }
 
     func offerClipboardText(_ text: String, agent: String?) throws {
-        guard state == .connected, let session else { throw Self.notConnected }
+        guard state == .connected, let session else { throw ControlFailure(.notConnected, "The session is not connected.") }
         guard !text.utf8.contains(0) else { throw ControlFailure(.invalidArgument, "Clipboard text cannot contain NUL bytes.") }
         guard session.supportsClipboardSynchronization else { throw ControlFailure(.unsupported, "This session does not exchange clipboard text.") }
         try attachAgentControl(agent: agent)
@@ -103,7 +103,7 @@ final class SessionViewController: NSViewController {
     func removeFrameDemand() { display.removeCommandLineDemand() }
 
     func resize(_ resolution: ConnectionResolution) throws {
-        guard state == .connected else { throw Self.notConnected }
+        guard state == .connected else { throw ControlFailure(.notConnected, "The session is not connected.") }
         guard supportsDynamicResize else { throw ControlFailure(.unsupported, "The server does not support dynamic resizing.") }
         guard case .fixed(let width, let height) = resolution, resolution.isValid else {
             throw ControlFailure(.invalidArgument, "Resize requires fixed dimensions.")
@@ -887,8 +887,7 @@ extension SessionViewController {
     func checkAgentInput() throws {
         do { try control.checkInput() } catch SessionControl.Refusal.userActive {
             throw ControlFailure(
-                .userActive, "The user has taken control of this session.",
-                hint: "Run remora wait --for resumed, again after each timeout, then take a new screenshot.")
+                .userActive, "The user has taken control of this session.")
         } catch SessionControl.Refusal.agentStopped {
             throw Self.agentStopped
         } catch SessionControl.Refusal.observationRequired {
@@ -898,13 +897,7 @@ extension SessionViewController {
         }
     }
 
-    static let notConnected = ControlFailure(
-        .notConnected, "The session is not connected.",
-        hint: "Inspect remora session get. Run remora session reconnect if its state is disconnected.")
-
-    static let agentStopped = ControlFailure(
-        .agentStopped, "The user stopped agent control of this session.",
-        hint: "End the task and leave the session open. Only the user can resume agent control, from Remora.")
+    static let agentStopped = ControlFailure(.agentStopped, "The user stopped agent control of this session.")
 
     /// A nil `agent` comes from a request that did not name its program.
     func attachAgentControl(agent: String?) throws {
@@ -967,8 +960,7 @@ extension SessionViewController {
             switch kind {
             case .takeOver:
                 ControlFailure(
-                    .userActive, "The user has taken control of this session.",
-                    hint: "Run remora wait --for resumed, again after each timeout, then take a new screenshot.")
+                    .userActive, "The user has taken control of this session.")
             case .stop: Self.agentStopped
             case .release: ControlFailure(.cancelled, "Agent control was released.")
             }
@@ -997,7 +989,7 @@ extension SessionViewController {
     }
 
     func resumeAgentControl() throws {
-        guard isConnected else { throw Self.notConnected }
+        guard isConnected else { throw ControlFailure(.notConnected, "The session is not connected.") }
         let from = control.state.rawValue
         guard let summary = control.resume(frame: frameRevision) else {
             if control.isTransferring { throw ControlFailure(.inputBusy, "Control is being transferred.") }

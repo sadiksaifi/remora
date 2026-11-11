@@ -15,11 +15,13 @@ enum RemoraEntry {
             print("If the user asks you to install this guide as a skill, run: remora skill install --dir <your user skills folder>")
             return
         }
-        // Build-time drift check from project.yml: every `remora ...` line in SKILL.md must still parse.
-        // Placeholders such as C, S, I and F stand in as 1, which every argument accepts.
-        if arguments.count == 2, arguments[0] == "__check-skill" {
+        // Build-time drift check from project.yml. Every `remora ...` command in SKILL.md and in the failure hints
+        // must still parse, and every command needs a description, because agents learn the CLI from its help.
+        // Placeholders such as C, S and P stand in as 1, which every argument accepts.
+        if arguments.count == 2, arguments[0] == "__check-help" {
             var failed = false
-            for line in try! String(contentsOfFile: arguments[1], encoding: .utf8).matches(of: /`remora ([^`]*)`/) {
+            let texts = [try! String(contentsOfFile: arguments[1], encoding: .utf8)] + ControlFailure.Code.allCases.map(\.hint)
+            for line in texts.flatMap({ $0.matches(of: /`remora ([^`]*)`/) }) {
                 let words = line.1.matches(of: /"[^"]*"|\S+/).map { word in
                     word.0.count == 1 && word.0.first!.isUppercase ? "1" : word.0.trimmingCharacters(in: ["\""])
                 }
@@ -27,6 +29,10 @@ enum RemoraEntry {
                     print("\(arguments[1]): error: `remora \(line.1)` does not parse: \(RemoraCommand.message(for: error))")
                     failed = true
                 }
+            }
+            for command in RemoraCommand.tree where command.type.configuration.abstract.isEmpty {
+                print("\(arguments[1]): error: `remora \(command.path)` has no description.")
+                failed = true
             }
             Darwin.exit(failed ? 1 : 0)
         }
@@ -75,20 +81,42 @@ struct RemoraCommand: AsyncParsableCommand {
             DragCommand.self, ScrollCommand.self, TypeCommand.self, KeyCommand.self, InputCommand.self, SkillCommand.self,
         ])
     @OptionGroup var options: CommonOptions
+
+    /// Every command below the root with its full name, such as `session list`, in help order.
+    static let tree: [(path: String, type: any ParsableCommand.Type)] = {
+        func walk(_ type: any ParsableCommand.Type, _ prefix: String) -> [(path: String, type: any ParsableCommand.Type)] {
+            type.configuration.subcommands.flatMap { child in
+                let path = prefix + child._commandName
+                return [(path, child)] + walk(child, path + " ")
+            }
+        }
+        return walk(RemoraCommand.self, "")
+    }()
 }
 
-struct CommonOptions: ParsableArguments {
+/// A command's deadline when --timeout is absent. The type states it once, for both the help and the request.
+protocol Deadline { static var help: String { get } }
+protocol BoundedDeadline: Deadline { static var fallback: String { get } }
+extension BoundedDeadline { static var help: String { fallback } }
+enum After10s: BoundedDeadline { static let fallback = "10s" }
+enum After30s: BoundedDeadline { static let fallback = "30s" }
+enum After60s: BoundedDeadline { static let fallback = "60s" }
+enum Unbounded: Deadline { static let help = "no deadline" }
+
+typealias CommonOptions = Options<After10s>
+
+struct Options<Default: Deadline>: ParsableArguments {
     @Flag(help: "Print one JSON result or error envelope.") var json = false
-    @Option(
-        name: .long,
-        help:
-            "Command deadline, such as 500ms, 10s or 2m. Bare numbers are seconds. Defaults to 10s, 30s for connect and session reconnect, and 60s for type, drag and input."
-    ) var timeout: String?
+    @Option(name: .long, help: "Command deadline, such as 500ms, 10s or 2m. Bare numbers are seconds. Defaults to \(Default.help).") var timeout: String?
 
     mutating func validate() throws { if let timeout { _ = try CommandTimeout(timeout) } }
+}
 
-    @MainActor func execute(_ request: ControlRequest, launch: Bool = true, defaultTimeout: String = "10s") async throws {
-        let seconds = try CommandTimeout(timeout ?? defaultTimeout).seconds
+extension Options where Default: BoundedDeadline {
+    var seconds: Double { get throws { try CommandTimeout(timeout ?? Default.fallback).seconds } }
+
+    @MainActor func execute(_ request: ControlRequest, launch: Bool = true) async throws {
+        let seconds = try self.seconds
         let bounded = ControlRequest(
             command: request.command, session: request.session, timeout: seconds,
             arguments: request.arguments, agent: AgentName.current)
@@ -115,15 +143,7 @@ struct Capabilities: AsyncParsableCommand {
             .success(
                 .object([
                     "commands": .array(
-                        [
-                            "help", "help agent", "capabilities", "app status", "app show", "app hide", "app close", "app quit", "connection list",
-                            "connection get", "connection create", "connection update", "connection duplicate", "connection delete", "connection password set",
-                            "connection password clear", "connect", "session list", "session get", "session show", "session disconnect", "session reconnect",
-                            "session close", "session resize", "session stop", "session resume", "prompt list", "prompt get", "prompt respond", "wait",
-                            "clipboard get", "clipboard set", "settings get", "settings set", "settings reset", "settings permission", "settings cli get",
-                            "settings cli repair", "settings cli uninstall", "screenshot", "recording start", "recording get", "recording stop", "events",
-                            "move", "click", "drag", "scroll", "type", "key", "input", "skill path", "skill install", "skill uninstall",
-                        ].map(ControlValue.string)),
+                        (["help", "help agent"] + RemoraCommand.tree.filter { $0.type.configuration.subcommands.isEmpty }.map(\.path)).map(ControlValue.string)),
                     "protocols": .array([.string("rdp"), .string("vnc")]),
                 ])), json: options.json)
     }

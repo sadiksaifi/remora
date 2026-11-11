@@ -15,7 +15,7 @@ extension CommandLineController {
                 throw ControlFailure(.sessionEnded, "The session attempt was closed or replaced.")
             }
             try promptRequired(session)
-            guard session.isConnected else { throw SessionViewController.notConnected }
+            guard session.isConnected else { throw ControlFailure(.notConnected, "The session is not connected.") }
             if text != nil { try session.checkAgentInput() }
             if let text, session.remoteClipboard.status != .notReady {
                 try session.offerClipboardText(text, agent: request.agent)

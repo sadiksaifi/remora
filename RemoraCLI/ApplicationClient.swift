@@ -81,6 +81,6 @@ struct ApplicationClient {
             } catch { throw ControlFailure(.cancelled, "The command was interrupted.") }
             delay = min(delay * 2, 0.25)
         }
-        throw ControlFailure(.appUnavailable, "Remora did not start its control listener within 10 seconds.", hint: "Open Remora and inspect its launch error.")
+        throw ControlFailure(.appUnavailable, "Remora did not start its control listener within 10 seconds.")
     }
 }

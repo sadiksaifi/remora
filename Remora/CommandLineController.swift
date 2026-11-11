@@ -121,7 +121,7 @@ final class CommandLineController {
                     await self?.finishQuit()
                 }
             default:
-                throw ControlFailure(.unknownCommand, "Unknown command '\(request.command)'.", hint: "Run remora --help.")
+                throw ControlFailure(.unknownCommand, "Unknown command '\(request.command)'.")
             }
             return ControlReply(.success(.object([:])))
         } catch let failure as ControlFailure { return ControlReply(.failure(failure)) } catch {

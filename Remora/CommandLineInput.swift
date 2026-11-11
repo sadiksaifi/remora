@@ -8,7 +8,7 @@ extension CommandLineController {
         let id = session.attemptID
         try promptRequired(session)
         guard session.isConnected, let backend = session.inputBackend, let size = session.desktopSize else {
-            throw SessionViewController.notConnected
+            throw ControlFailure(.notConnected, "The session is not connected.")
         }
         let capabilities = backend.inputCapabilities
         if request.command == "capabilities" {
@@ -35,7 +35,7 @@ extension CommandLineController {
         let geometryRevision = session.inputGeometryRevision
         let plan = try InputPlan(request, size: size, geometry: receipt?.geometry, capabilities: capabilities)
         try session.attachAgentControl(agent: request.agent)
-        guard let input = backend.beginAgentInput() else { throw SessionViewController.notConnected }
+        guard let input = backend.beginAgentInput() else { throw ControlFailure(.notConnected, "The session is not connected.") }
         session.activeAgentInput = input
         session.agentInputCancellation = nil
         session.inputOverlays.setAgentCursorBusy(true)
@@ -55,7 +55,7 @@ extension CommandLineController {
                 throw ControlFailure(.sessionEnded, "The session attempt was closed or replaced.")
             }
             guard session.isConnected else {
-                throw ControlFailure(.notConnected, "The session disconnected during input.", hint: SessionViewController.notConnected.hint)
+                throw ControlFailure(.notConnected, "The session disconnected during input.")
             }
             guard session.inputGeometryRevision == geometryRevision else {
                 throw ControlFailure(.imageExpired, "The desktop geometry changed during input. Take a new screenshot.")
@@ -148,8 +148,8 @@ extension CommandLineController {
             }
             throw ControlFailure(
                 failure.code, failure.message,
-                hint: failure.hint.isEmpty && submitted > 0
-                    ? "Some input may have reached the remote desktop. Take a screenshot before repeating it." : failure.hint,
+                hint: submitted > 0 && [.cancelled, .backendFailed, .sessionEnded, .notConnected].contains(failure.code)
+                    ? "Some input reached the remote desktop. Take a screenshot before repeating it." : failure.hint,
                 details: .object(["submittedActions": .number(Double(completed)), "submittedEvents": .number(Double(submitted))]))
         }
     }
@@ -281,7 +281,7 @@ private struct InputPlan {
 
     private func chord(_ text: String, modifiersOnly: Bool = false) throws -> [PhysicalKey] {
         do { return try PhysicalKey.chord(text, modifiersOnly: modifiersOnly) } catch {
-            throw ControlFailure(.invalidArgument, error.localizedDescription, hint: "Run remora capabilities --session S for the key names.")
+            throw ControlFailure(.invalidArgument, error.localizedDescription, hint: "List the key names with `remora capabilities --session S`.")
         }
     }
 

@@ -12,7 +12,7 @@ struct ConnectCommand: AsyncParsableCommand {
         commandName: "connect",
         abstract: "Connect, or reuse the open session, and wait for the first frame.",
         discussion: "The result's reused is true when the session was already open. Its session value is the --session to pass to other commands.")
-    @OptionGroup var options: CommonOptions
+    @OptionGroup var options: Options<After30s>
     @Argument(help: "Saved connection name or UUID.") var connection: String
     @Flag(help: "Leave the selected tab unchanged and do not show the window.") var background = false
     @Flag(help: "Return without waiting for the first frame.") var noWait = false
@@ -30,7 +30,7 @@ struct ConnectCommand: AsyncParsableCommand {
             _ = try ControlResolution(resolution)
             args["resolution"] = .string(resolution)
         }
-        try await options.execute(.init(command: "connect", arguments: args), defaultTimeout: "30s")
+        try await options.execute(.init(command: "connect", arguments: args))
     }
 }
 
@@ -70,11 +70,11 @@ struct SessionCommand: AsyncParsableCommand {
     }
     struct Reconnect: AsyncParsableCommand {
         static let configuration = CommandConfiguration(abstract: "Connect a disconnected session again and wait for the first frame.")
-        @OptionGroup var options: CommonOptions
+        @OptionGroup var options: Options<After30s>
         @OptionGroup var target: SessionOptions
         @Flag(help: "Return without waiting for the first frame.") var noWait = false
         @MainActor func run() async throws {
-            try await options.execute(.init(command: "session.reconnect", session: target.target, arguments: ["noWait": .bool(noWait)]), defaultTimeout: "30s")
+            try await options.execute(.init(command: "session.reconnect", session: target.target, arguments: ["noWait": .bool(noWait)]))
         }
     }
     struct Stop: AsyncParsableCommand {
