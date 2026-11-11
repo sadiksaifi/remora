@@ -151,18 +151,17 @@ extension CommandLineController {
     private func waitForDesktop(_ session: SessionViewController, id: UUID, deadline: TimeInterval) async throws {
         try await waitForSettledFrame(session, id: id, deadline: deadline)
         let patience = min(deadline, ProcessInfo.processInfo.systemUptime + 3)
-        var waited = false
         while ProcessInfo.processInfo.systemUptime < patience {
             let checked = session.frameRevision
             guard await session.showsBlankFrame() else { break }
-            waited = true
             do {
                 try await waitFor(session, id: id, timeout: max(0, patience - ProcessInfo.processInfo.systemUptime)) { session.frameRevision != checked }
             } catch let failure as ControlFailure where failure.code == .timeout {
                 break
             }
         }
-        if waited { try await waitForSettledFrame(session, id: id, deadline: deadline) }
+        // The check suspends, so the session may have ended or been replaced meanwhile.
+        try await waitForSettledFrame(session, id: id, deadline: deadline)
     }
 
     func handleSession(_ request: ControlRequest) async throws -> ControlValue {
@@ -239,12 +238,14 @@ extension CommandLineController {
                 if !background { show(nil) }
                 try promptRequired(session)
                 if noWait { return result() }
+                // An earlier connect may have started this attempt and returned before its first frame.
+                let hasDesktop = !started && session.isConnected && session.frameRevision > 0
                 session.addFrameDemand()
                 defer { session.removeFrameDemand() }
-                if started {
-                    try await waitForDesktop(session, id: session.attemptID, deadline: deadline)
-                } else {
+                if hasDesktop {
                     try await waitForSettledFrame(session, id: session.attemptID, deadline: deadline)
+                } else {
+                    try await waitForDesktop(session, id: session.attemptID, deadline: deadline)
                 }
                 return result()
             } catch let failure as ControlFailure {
