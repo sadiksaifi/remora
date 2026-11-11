@@ -82,7 +82,7 @@ struct TypeCommand: AsyncParsableCommand {
         commandName: "type", abstract: "Send Unicode text without using the clipboard or Mac keyboard.",
         discussion: """
             Line breaks press Enter. Servers drop characters their keyboard layout lacks, and some drop emoji. \
-            For that text and for long text, run clipboard set, then key Ctrl+V, or Cmd+V on a Mac.
+            For that text and for long text, run clipboard set, then key Ctrl+V, or Cmd+V when the remote machine is a Mac.
             """)
     @OptionGroup var options: CommonOptions
     @OptionGroup var target: SessionOptions

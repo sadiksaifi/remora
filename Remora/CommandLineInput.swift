@@ -145,7 +145,9 @@ extension CommandLineController {
                 failure = ControlFailure(.backendFailed, "The remote input submission failed.")
             }
             throw ControlFailure(
-                failure.code, failure.message, hint: failure.hint,
+                failure.code, failure.message,
+                hint: failure.hint.isEmpty && submitted > 0
+                    ? "Some input may have reached the remote desktop. Take a screenshot before repeating it." : failure.hint,
                 details: .object(["submittedActions": .number(Double(completed)), "submittedEvents": .number(Double(submitted))]))
         }
     }

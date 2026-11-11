@@ -42,7 +42,7 @@ public struct ControlClient: Sendable {
                 submitted
                     ? (unknownOutcome ? "The app reply was lost. The command may have completed." : "The app reply was lost.")
                     : "The app control socket is unavailable.",
-                hint: "Inspect app status before retrying a command that changes state.")
+                hint: "Inspect the current state, such as a new screenshot, before retrying a command that changes state.")
         }
     }
     public func screenshot(_ request: ControlRequest, timeout: Double) async throws -> (ControlResponse, Data) {

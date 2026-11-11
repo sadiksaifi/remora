@@ -208,11 +208,16 @@ extension CommandLineController {
             let session = sessions.session(for: connection.id)!
             if !background { show(nil) }
             try promptRequired(session)
-            if noWait { return sessionInfo(session) }
+            func result() -> ControlValue {
+                guard case .object(var fields) = sessionInfo(session) else { return .null }
+                fields["reused"] = .bool(!started)
+                return .object(fields)
+            }
+            if noWait { return result() }
             session.addFrameDemand()
             defer { session.removeFrameDemand() }
             try await waitForSettledFrame(session, id: session.attemptID, deadline: deadline)
-            return sessionInfo(session)
+            return result()
         default: break
         }
         if request.command == "session.stop" {

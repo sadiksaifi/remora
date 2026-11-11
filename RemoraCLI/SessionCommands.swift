@@ -8,7 +8,9 @@ struct SessionOptions: ParsableArguments {
 }
 
 struct ConnectCommand: AsyncParsableCommand {
-    static let configuration = CommandConfiguration(commandName: "connect", abstract: "Connect, or reuse the open session, and wait for the first frame.")
+    static let configuration = CommandConfiguration(
+        commandName: "connect",
+        abstract: "Connect, or reuse the open session, and wait for the first frame. The result's reused is true for a session that was already open.")
     @OptionGroup var options: CommonOptions
     @Argument(help: "Saved connection name or UUID.") var connection: String
     @Flag(help: "Leave the selected tab unchanged and do not show the window.") var background = false
