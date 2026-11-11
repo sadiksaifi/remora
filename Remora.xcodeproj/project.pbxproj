@@ -186,7 +186,7 @@
 				D70E8659A83FB2E523CE92C6 /* Resources */,
 				3C1DE59AC7E6A766092B8ECD /* Frameworks */,
 				B2E885D83E3A0B847FDD9123 /* Embed Dependencies */,
-				269CD370C865B8F7E535DF6F /* Check skill commands */,
+				512B769278C98AA32BA65E82 /* Check agent help */,
 			);
 			buildRules = (
 			);
@@ -263,7 +263,7 @@
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXShellScriptBuildPhase section */
-		269CD370C865B8F7E535DF6F /* Check skill commands */ = {
+		512B769278C98AA32BA65E82 /* Check agent help */ = {
 			isa = PBXShellScriptBuildPhase;
 			alwaysOutOfDate = 1;
 			buildActionMask = 2147483647;
@@ -274,14 +274,14 @@
 			inputPaths = (
 				"$(SRCROOT)/skills/remora/SKILL.md",
 			);
-			name = "Check skill commands";
+			name = "Check agent help";
 			outputFileListPaths = (
 			);
 			outputPaths = (
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
-			shellScript = "\"$TARGET_BUILD_DIR/$CONTENTS_FOLDER_PATH/Helpers/remora\" __check-skill \"$SRCROOT/skills/remora/SKILL.md\"";
+			shellScript = "\"$TARGET_BUILD_DIR/$CONTENTS_FOLDER_PATH/Helpers/remora\" __check-help \"$SRCROOT/skills/remora/SKILL.md\"";
 		};
 /* End PBXShellScriptBuildPhase section */
 

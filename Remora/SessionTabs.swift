@@ -78,8 +78,13 @@ final class SessionTabs {
             if shouldSelect { select(id) }
             guard !existing.state.isLive else { return false }
             existing.update(connection)
-            existing.configureCommandLine(agent: agent, resolution: resolution)
-            existing.start()
+            // The command line starting someone else's ended tab again keeps who opened it and its resolution.
+            if agent != nil, resolution == nil {
+                existing.reconnect()
+            } else {
+                existing.configureCommandLine(agent: agent, resolution: resolution)
+                existing.start()
+            }
             return true
         }
         let session = SessionViewController(

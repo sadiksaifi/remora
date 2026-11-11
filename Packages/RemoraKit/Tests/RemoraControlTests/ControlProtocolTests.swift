@@ -28,6 +28,13 @@ import Testing
     }
 }
 
+@Test func failureWithoutItsOwnHintTakesTheCodesHint() {
+    #expect(ControlFailure(.notConnected, "The session is not connected.").hint == ControlFailure.Code.notConnected.hint)
+    #expect(ControlFailure(.notConnected, "The session is not connected.", hint: "Reconnect.").hint == "Reconnect.")
+    // Every code an agent can act on names a next step. An interrupted command has none.
+    #expect(ControlFailure.Code.allCases.filter(\.hint.isEmpty) == [.cancelled])
+}
+
 @Test func envelopesUseOneResultOrError() throws {
     let response = ControlResponse.failure(ControlFailure(.outcomeUnknown, "Reply lost.", hint: "Inspect app status."))
     let object = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(response)) as? [String: Any])

@@ -14,9 +14,8 @@ extension CommandLineController {
             guard session.attemptID == id, sessions.session(for: session.connection.id) === session else {
                 throw ControlFailure(.sessionEnded, "The session attempt was closed or replaced.")
             }
-            if let prompt = session.pendingPrompt {
-                throw ControlFailure(.promptRequired, "The session requires prompt \(prompt.id).", hint: "Inspect prompt list.")
-            }
+            if text != nil { try session.checkUserHold() }
+            try promptRequired(session)
             guard session.isConnected else { throw ControlFailure(.notConnected, "The session is not connected.") }
             if text != nil { try session.checkAgentInput() }
             if let text, session.remoteClipboard.status != .notReady {

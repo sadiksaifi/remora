@@ -41,8 +41,7 @@ public struct ControlClient: Sendable {
                 submitted ? (unknownOutcome ? .outcomeUnknown : .ioFailed) : .appUnavailable,
                 submitted
                     ? (unknownOutcome ? "The app reply was lost. The command may have completed." : "The app reply was lost.")
-                    : "The app control socket is unavailable.",
-                hint: "Inspect app status before retrying a command that changes state.")
+                    : "The app control socket is unavailable.")
         }
     }
     public func screenshot(_ request: ControlRequest, timeout: Double) async throws -> (ControlResponse, Data) {
@@ -62,7 +61,7 @@ public struct ControlClient: Sendable {
             }
             return (response, try await reader.bytes(Int(count), timeout: remaining(deadline)))
         } catch let failure as ControlFailure { throw failure } catch {
-            throw ControlFailure(.ioFailed, "The screenshot transfer failed.", hint: "Inspect session get before trying another screenshot.")
+            throw ControlFailure(.ioFailed, "The screenshot transfer failed.")
         }
     }
 
@@ -81,7 +80,7 @@ public struct ControlClient: Sendable {
                 try receive(JSONDecoder().decode(ControlEvent.self, from: line))
             }
         } catch let failure as ControlFailure { throw failure } catch {
-            throw ControlFailure(.ioFailed, "The event stream failed.", hint: "Subscribe again and inspect the new snapshot.")
+            throw ControlFailure(.ioFailed, "The event stream failed.")
         }
     }
 
@@ -300,7 +299,7 @@ private final class NetworkOperation<Value: Sendable>: @unchecked Sendable {
                 operation.continuation = continuation
                 if let timeout {
                     let timer = DispatchWorkItem { [weak operation] in
-                        operation?.abort(ControlFailure(.timeout, "The command timed out.", hint: "Inspect current state before retrying."))
+                        operation?.abort(ControlFailure(.timeout, "The command timed out."))
                     }
                     operation.timer = timer
                     socketQueue.asyncAfter(deadline: .now() + max(0, timeout), execute: timer)

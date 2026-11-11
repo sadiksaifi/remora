@@ -887,8 +887,7 @@ extension SessionViewController {
     func checkAgentInput() throws {
         do { try control.checkInput() } catch SessionControl.Refusal.userActive {
             throw ControlFailure(
-                .userActive, "The user has taken control of this session.",
-                hint: "Wait for user.resumed, then take a new screenshot.")
+                .userActive, "The user has taken control of this session.")
         } catch SessionControl.Refusal.agentStopped {
             throw Self.agentStopped
         } catch SessionControl.Refusal.observationRequired {
@@ -898,9 +897,7 @@ extension SessionViewController {
         }
     }
 
-    static let agentStopped = ControlFailure(
-        .agentStopped, "The user stopped agent control of this session.",
-        hint: "End the task. Only the user can resume agent control, from Remora.")
+    static let agentStopped = ControlFailure(.agentStopped, "The user stopped agent control of this session.")
 
     /// A nil `agent` comes from a request that did not name its program.
     func attachAgentControl(agent: String?) throws {
@@ -963,8 +960,7 @@ extension SessionViewController {
             switch kind {
             case .takeOver:
                 ControlFailure(
-                    .userActive, "The user has taken control of this session.",
-                    hint: "Wait for user.resumed, then take a new screenshot.")
+                    .userActive, "The user has taken control of this session.")
             case .stop: Self.agentStopped
             case .release: ControlFailure(.cancelled, "Agent control was released.")
             }
@@ -987,7 +983,7 @@ extension SessionViewController {
     }
 
     /// Throws `user-active` or `agent-stopped` while the user holds control or is taking it.
-    /// CLI commands that would resume control or discard the tab's hold check this first.
+    /// CLI commands that would send input, start the session again or discard the tab's hold check this first.
     func checkUserHold() throws {
         if control.canResume || control.isTransferring { try checkAgentInput() }
     }

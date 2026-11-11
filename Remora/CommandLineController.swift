@@ -116,12 +116,12 @@ final class CommandLineController {
                 let response: ControlResponse =
                     failures.isEmpty
                     ? .success(.object(["quitting": .bool(true)]))
-                    : .failure(ControlFailure(.captureFailed, failures.map(\.localizedDescription).joined(separator: "\n")))
+                    : .failure(ControlFailure(.captureFailed, failures.map(\.localizedDescription).joined(separator: "\n"), hint: "Remora is quitting anyway."))
                 return ControlReply(response) { [weak self] in
                     await self?.finishQuit()
                 }
             default:
-                throw ControlFailure(.unknownCommand, "Unknown command '\(request.command)'.", hint: "Run remora --help.")
+                throw ControlFailure(.unknownCommand, "Unknown command '\(request.command)'.")
             }
             return ControlReply(.success(.object([:])))
         } catch let failure as ControlFailure { return ControlReply(.failure(failure)) } catch {

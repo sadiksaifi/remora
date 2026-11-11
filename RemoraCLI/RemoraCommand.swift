@@ -15,18 +15,34 @@ enum RemoraEntry {
             print("If the user asks you to install this guide as a skill, run: remora skill install --dir <your user skills folder>")
             return
         }
-        // Build-time drift check from project.yml: every `remora ...` line in SKILL.md must still parse.
-        // Placeholders such as C, S, I and F stand in as 1, which every argument accepts.
-        if arguments.count == 2, arguments[0] == "__check-skill" {
+        // Build-time drift check from project.yml. Every `remora ...` command in SKILL.md and in the failure hints
+        // must still parse, and every command needs a description, because agents learn the CLI from its help.
+        // Placeholders such as C, S and P stand in as 1, which every argument accepts.
+        if arguments.count == 2, arguments[0] == "__check-help" {
             var failed = false
-            for line in try! String(contentsOfFile: arguments[1], encoding: .utf8).matches(of: /`remora ([^`]*)`/) {
-                let words = line.1.matches(of: /"[^"]*"|\S+/).map { word in
-                    word.0.count == 1 && word.0.first!.isUppercase ? "1" : word.0.trimmingCharacters(in: ["\""])
+            func fail(_ message: String) {
+                print("\(arguments[1]): error: \(message)")
+                failed = true
+            }
+            let sources =
+                [("the skill", try! String(contentsOfFile: arguments[1], encoding: .utf8))]
+                + ControlFailure.Code.allCases.map { ("the \($0.rawValue) hint", $0.hint) }
+            for (source, text) in sources {
+                for line in text.matches(of: /`remora ([^`]*)`/) {
+                    // A help flag makes any line parse, so the command in front of it is checked without it.
+                    let words = line.1.matches(of: /"[^"]*"|\S+/).map { word in
+                        word.0.count == 1 && word.0.first!.isUppercase ? "1" : word.0.trimmingCharacters(in: ["\""])
+                    }.filter { !["--help", "-h"].contains($0) }
+                    do { _ = try RemoraCommand.parseAsRoot(words) } catch  where RemoraCommand.exitCode(for: error) == .success {} catch {
+                        fail("`remora \(line.1)` in \(source) does not parse: \(RemoraCommand.message(for: error))")
+                    }
                 }
-                do { _ = try RemoraCommand.parseAsRoot(words) } catch  where RemoraCommand.exitCode(for: error) == .success {} catch {
-                    print("\(arguments[1]): error: `remora \(line.1)` does not parse: \(RemoraCommand.message(for: error))")
-                    failed = true
-                }
+            }
+            // --json and --timeout reach a subcommand only while its options group has the root's type.
+            let connect = try? RemoraCommand.parseAsRoot(["connect", "1", "--json", "--timeout", "7s"]) as? ConnectCommand
+            if connect?.options.json != true || connect?.options.timeout != "7s" { fail("`remora connect` does not receive --json and --timeout.") }
+            for command in RemoraCommand.tree where command.type.configuration.abstract.isEmpty {
+                fail("`remora \(command.path)` has no description.")
             }
             Darwin.exit(failed ? 1 : 0)
         }
@@ -75,16 +91,40 @@ struct RemoraCommand: AsyncParsableCommand {
             DragCommand.self, ScrollCommand.self, TypeCommand.self, KeyCommand.self, InputCommand.self, SkillCommand.self,
         ])
     @OptionGroup var options: CommonOptions
+
+    /// Every command below the root with its full name, such as `session list`, in help order.
+    static let tree: [(path: String, type: any ParsableCommand.Type)] = {
+        func walk(_ type: any ParsableCommand.Type, _ prefix: String) -> [(path: String, type: any ParsableCommand.Type)] {
+            type.configuration.subcommands.flatMap { child in
+                let path = prefix + child._commandName
+                return [(path, child)] + walk(child, path + " ")
+            }
+        }
+        return walk(RemoraCommand.self, "")
+    }()
 }
 
 struct CommonOptions: ParsableArguments {
+    /// Deadlines for the requests that outlast the 10-second default. The help and the request both read this table.
+    /// One concrete type serves every command, because ArgumentParser hands a parent's options to a subcommand only when the types match.
+    static let deadlines = ["connect": "30s", "drag": "60s", "input": "60s", "type": "60s"]
+
     @Flag(help: "Print one JSON result or error envelope.") var json = false
-    @Option(name: .long, help: "Command deadline, such as 500ms, 10s or 2m. Bare numbers are seconds.") var timeout: String?
+    @Option(
+        name: .long,
+        help: """
+            Command deadline, such as 500ms, 10s or 2m. Bare numbers are seconds. \
+            Defaults to 10s, or \(deadlines.sorted { $0.key < $1.key }.map { "\($0.value) for \($0.key)" }.joined(separator: ", ")). \
+            events has no default.
+            """
+    ) var timeout: String?
 
     mutating func validate() throws { if let timeout { _ = try CommandTimeout(timeout) } }
 
-    @MainActor func execute(_ request: ControlRequest, launch: Bool = true, defaultTimeout: String = "10s") async throws {
-        let seconds = try CommandTimeout(timeout ?? defaultTimeout).seconds
+    func seconds(for command: String) throws -> Double { try CommandTimeout(timeout ?? Self.deadlines[command] ?? "10s").seconds }
+
+    @MainActor func execute(_ request: ControlRequest, launch: Bool = true) async throws {
+        let seconds = try seconds(for: request.command)
         let bounded = ControlRequest(
             command: request.command, session: request.session, timeout: seconds,
             arguments: request.arguments, agent: AgentName.current)
@@ -97,7 +137,7 @@ struct CommonOptions: ParsableArguments {
 }
 
 struct Capabilities: AsyncParsableCommand {
-    static let configuration = CommandConfiguration(abstract: "List commands, or inspect negotiated input support with --session.")
+    static let configuration = CommandConfiguration(abstract: "List commands. With --session, list the key names and input features that session supports.")
     @OptionGroup var options: CommonOptions
 
     @OptionGroup var target: SessionOptions
@@ -111,15 +151,7 @@ struct Capabilities: AsyncParsableCommand {
             .success(
                 .object([
                     "commands": .array(
-                        [
-                            "help", "help agent", "capabilities", "app status", "app show", "app hide", "app close", "app quit", "connection list",
-                            "connection get", "connection create", "connection update", "connection duplicate", "connection delete", "connection password set",
-                            "connection password clear", "connect", "session list", "session get", "session show", "session disconnect", "session reconnect",
-                            "session close", "session resize", "session stop", "session resume", "prompt list", "prompt get", "prompt respond", "wait",
-                            "clipboard get", "clipboard set", "settings get", "settings set", "settings reset", "settings permission", "settings cli get",
-                            "settings cli repair", "settings cli uninstall", "screenshot", "recording start", "recording get", "recording stop", "events",
-                            "move", "click", "drag", "scroll", "type", "key", "input", "skill path", "skill install", "skill uninstall",
-                        ].map(ControlValue.string)),
+                        (["help", "help agent"] + RemoraCommand.tree.filter { $0.type.configuration.subcommands.isEmpty }.map(\.path)).map(ControlValue.string)),
                     "protocols": .array([.string("rdp"), .string("vnc")]),
                 ])), json: options.json)
     }

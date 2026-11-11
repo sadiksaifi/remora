@@ -8,7 +8,12 @@ struct SessionOptions: ParsableArguments {
 }
 
 struct ConnectCommand: AsyncParsableCommand {
-    static let configuration = CommandConfiguration(commandName: "connect", abstract: "Connect and wait for the first frame.")
+    static let configuration = CommandConfiguration(
+        commandName: "connect",
+        abstract: "Open a session, or reuse the one already open, and wait for the first frame.",
+        discussion:
+            "A disconnected session's tab connects again in place. The result's session value is the --session to pass to other commands. Its reused value is true when the tab already existed. A failure after the session starts carries both in error.details."
+    )
     @OptionGroup var options: CommonOptions
     @Argument(help: "Saved connection name or UUID.") var connection: String
     @Flag(help: "Leave the selected tab unchanged and do not show the window.") var background = false
@@ -27,49 +32,46 @@ struct ConnectCommand: AsyncParsableCommand {
             _ = try ControlResolution(resolution)
             args["resolution"] = .string(resolution)
         }
-        try await options.execute(.init(command: "connect", arguments: args), defaultTimeout: "30s")
+        try await options.execute(.init(command: "connect", arguments: args))
     }
 }
 
 struct SessionCommand: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "session", abstract: "Inspect and control session tabs.",
-        subcommands: [List.self, Get.self, Show.self, Disconnect.self, Reconnect.self, Close.self, Resize.self, Stop.self, Resume.self])
+        subcommands: [List.self, Get.self, Show.self, Disconnect.self, Close.self, Resize.self, Release.self])
     @OptionGroup var options: CommonOptions
     struct List: AsyncParsableCommand {
+        static let configuration = CommandConfiguration(abstract: "List the open session tabs.")
         @OptionGroup var options: CommonOptions
         @MainActor func run() async throws { try await options.execute(.init(command: "session.list")) }
     }
     struct Get: AsyncParsableCommand {
+        static let configuration = CommandConfiguration(abstract: "Show one session: its state, who holds control, its desktop size and its latest frame.")
         @OptionGroup var options: CommonOptions
         @OptionGroup var target: SessionOptions
         @MainActor func run() async throws { try await options.execute(.init(command: "session.get", session: target.target)) }
     }
     struct Show: AsyncParsableCommand {
+        static let configuration = CommandConfiguration(abstract: "Select the session's tab and bring Remora to the front.")
         @OptionGroup var options: CommonOptions
         @OptionGroup var target: SessionOptions
         @MainActor func run() async throws { try await options.execute(.init(command: "session.show", session: target.target)) }
     }
     struct Disconnect: AsyncParsableCommand {
+        static let configuration = CommandConfiguration(abstract: "Disconnect the session and keep its tab. connect starts it again.")
         @OptionGroup var options: CommonOptions
         @OptionGroup var target: SessionOptions
         @MainActor func run() async throws { try await options.execute(.init(command: "session.disconnect", session: target.target)) }
     }
     struct Close: AsyncParsableCommand {
+        static let configuration = CommandConfiguration(abstract: "Disconnect the session and close its tab. It fails while the user holds control.")
         @OptionGroup var options: CommonOptions
         @OptionGroup var target: SessionOptions
         @MainActor func run() async throws { try await options.execute(.init(command: "session.close", session: target.target)) }
     }
-    struct Reconnect: AsyncParsableCommand {
-        @OptionGroup var options: CommonOptions
-        @OptionGroup var target: SessionOptions
-        @Flag(help: "Return without waiting for the first frame.") var noWait = false
-        @MainActor func run() async throws {
-            try await options.execute(.init(command: "session.reconnect", session: target.target, arguments: ["noWait": .bool(noWait)]), defaultTimeout: "30s")
-        }
-    }
-    struct Stop: AsyncParsableCommand {
-        static let configuration = CommandConfiguration(abstract: "Release agent control. The next input command attaches again.")
+    struct Release: AsyncParsableCommand {
+        static let configuration = CommandConfiguration(abstract: "Hand control back to the user. The next input command takes it again.")
         @OptionGroup var options: CommonOptions
         @OptionGroup var target: SessionOptions
         @Flag(help: "Release agent control in every tab.") var all = false
@@ -79,20 +81,12 @@ struct SessionCommand: AsyncParsableCommand {
         @MainActor func run() async throws {
             try await options.execute(
                 .init(
-                    command: "session.stop", session: all ? nil : target.target,
+                    command: "session.release", session: all ? nil : target.target,
                     arguments: ["all": .bool(all)]))
         }
     }
-    struct Resume: AsyncParsableCommand {
-        static let configuration = CommandConfiguration(
-            abstract: "Fail while the user holds control. Only the user can resume, from Remora.")
-        @OptionGroup var options: CommonOptions
-        @OptionGroup var target: SessionOptions
-        @MainActor func run() async throws {
-            try await options.execute(.init(command: "session.resume", session: target.target))
-        }
-    }
     struct Resize: AsyncParsableCommand {
+        static let configuration = CommandConfiguration(abstract: "Ask the remote desktop to change size. Servers without dynamic resizing refuse.")
         @OptionGroup var options: CommonOptions
         @OptionGroup var target: SessionOptions
         @Argument(help: "WIDTHxHEIGHT, 200 to 8192 pixels per side with an even width.") var resolution: String
@@ -104,7 +98,18 @@ struct SessionCommand: AsyncParsableCommand {
 }
 
 struct WaitCommand: AsyncParsableCommand {
-    static let configuration = CommandConfiguration(commandName: "wait", abstract: "Wait for a session state, frame, or completed recording.")
+    static let configuration = CommandConfiguration(
+        commandName: "wait", abstract: "Wait for a session state, frame, or completed recording.",
+        discussion: """
+            STATE               RETURNS WHEN
+            connected           the session shows a desktop
+            disconnected        the session has ended
+            frame               a frame newer than --after, or the first frame
+            resumed             the user handed control back to the agent
+            recording-finished  a stopped recording's file is complete
+
+            A frame-timeout failure means the screen did not change before the deadline.
+            """)
     enum State: String, CaseIterable, ExpressibleByArgument {
         case connected, disconnected, frame, resumed
         case recordingFinished = "recording-finished"
@@ -112,7 +117,7 @@ struct WaitCommand: AsyncParsableCommand {
     @OptionGroup var options: CommonOptions
     @OptionGroup var target: SessionOptions
     @Option(name: .customLong("for"), help: "The state to wait for.") var state: State
-    @Option(help: "Wait for a frame strictly newer than this revision. Requires --for frame.") var after: Int?
+    @Option(help: "Wait for a frame strictly newer than this revision, such as a screenshot's frame value. Requires --for frame.") var after: Int?
     mutating func validate() throws {
         if let after, after < 0 || state != .frame { throw ValidationError("--after requires --for frame and a nonnegative revision.") }
     }

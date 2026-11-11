@@ -35,6 +35,12 @@ func readPassword() async throws -> String {
     try PasswordInput.decode(try await readStandardInput())
 }
 
+/// Reads piped text or JSON. A terminal fails at once, because a command that waits for typed input looks hung to an agent.
+func readPipedInput() async throws -> Data {
+    guard isatty(STDIN_FILENO) == 0 else { throw ControlFailure(.invalidArgument, "Pipe the input on stdin.") }
+    return try await readStandardInput()
+}
+
 func readStandardInput() async throws -> Data {
     let input = FileHandle.standardInput
     let chunks = AsyncThrowingStream<Data, any Error>(bufferingPolicy: .bufferingOldest(16)) { continuation in
@@ -65,10 +71,11 @@ func readStandardInput() async throws -> Data {
 struct ConnectionCommand: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "connection", abstract: "Manage saved connections.",
-        subcommands: [List.self, Get.self, Create.self, Update.self, Duplicate.self, Delete.self, Password.self])
+        subcommands: [List.self, Get.self, Create.self, Update.self, Duplicate.self, Delete.self])
     @OptionGroup var options: CommonOptions
 
     struct List: AsyncParsableCommand {
+        static let configuration = CommandConfiguration(abstract: "List saved connections.")
         @OptionGroup var options: CommonOptions
         @Option(help: "Filter by connection name, host or username.") var search: String?
         @MainActor func run() async throws {
@@ -76,17 +83,20 @@ struct ConnectionCommand: AsyncParsableCommand {
         }
     }
     struct Get: AsyncParsableCommand {
+        static let configuration = CommandConfiguration(abstract: "Show one saved connection, whether it has a saved password, and its open session.")
         @OptionGroup var options: CommonOptions
         @Argument(help: "Saved connection name or UUID.") var connection: String
         @MainActor func run() async throws { try await options.execute(.init(command: "connection.get", arguments: ["connection": .string(connection)])) }
     }
     struct Create: AsyncParsableCommand {
+        static let configuration = CommandConfiguration(abstract: "Save a new connection. It does not connect.")
         @OptionGroup var options: CommonOptions
         @OptionGroup var fields: ConnectionFields
         mutating func validate() throws { guard fields.host != nil else { throw ValidationError("--host is required.") } }
         @MainActor func run() async throws { try await options.execute(.init(command: "connection.create", arguments: try await fields.arguments())) }
     }
     struct Update: AsyncParsableCommand {
+        static let configuration = CommandConfiguration(abstract: "Change a saved connection or its saved password. Fields you leave out keep their values.")
         @OptionGroup var options: CommonOptions
         @OptionGroup var fields: ConnectionFields
         @Argument(help: "Saved connection name or UUID.") var connection: String
@@ -102,6 +112,7 @@ struct ConnectionCommand: AsyncParsableCommand {
         }
     }
     struct Duplicate: AsyncParsableCommand {
+        static let configuration = CommandConfiguration(abstract: "Copy a saved connection, including its saved password.")
         @OptionGroup var options: CommonOptions
         @Argument(help: "Saved connection name or UUID.") var connection: String
         @Option(help: "Saved connection name.") var name: String?
@@ -112,29 +123,9 @@ struct ConnectionCommand: AsyncParsableCommand {
         }
     }
     struct Delete: AsyncParsableCommand {
+        static let configuration = CommandConfiguration(abstract: "Delete a saved connection and its saved password.")
         @OptionGroup var options: CommonOptions
         @Argument(help: "Saved connection name or UUID.") var connection: String
         @MainActor func run() async throws { try await options.execute(.init(command: "connection.delete", arguments: ["connection": .string(connection)])) }
-    }
-    struct Password: AsyncParsableCommand {
-        static let configuration = CommandConfiguration(subcommands: [Set.self, Clear.self])
-        @OptionGroup var options: CommonOptions
-        struct Set: AsyncParsableCommand {
-            @OptionGroup var options: CommonOptions
-            @Argument(help: "Saved connection name or UUID.") var connection: String
-            @Flag(help: "Read the password from UTF-8 stdin, removing one trailing line ending.") var passwordStdin = false
-            mutating func validate() throws { guard passwordStdin else { throw ValidationError("--password-stdin is required.") } }
-            @MainActor func run() async throws {
-                try await options.execute(
-                    .init(command: "connection.password.set", arguments: ["connection": .string(connection), "password": .string(try await readPassword())]))
-            }
-        }
-        struct Clear: AsyncParsableCommand {
-            @OptionGroup var options: CommonOptions
-            @Argument(help: "Saved connection name or UUID.") var connection: String
-            @MainActor func run() async throws {
-                try await options.execute(.init(command: "connection.password.clear", arguments: ["connection": .string(connection)]))
-            }
-        }
     }
 }

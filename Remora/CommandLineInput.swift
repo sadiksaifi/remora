@@ -6,7 +6,9 @@ extension CommandLineController {
     func handleInput(_ request: ControlRequest) async throws -> ControlValue {
         let session = try resolveSession(request.session)
         let id = session.attemptID
-        guard session.pendingPrompt == nil else { throw ControlFailure(.promptRequired, "The session requires a prompt response.") }
+        // The user's Take Over or Stop outlives a disconnect, and comes before any advice to connect again.
+        if request.command != "capabilities" { try session.checkUserHold() }
+        try promptRequired(session)
         guard session.isConnected, let backend = session.inputBackend, let size = session.desktopSize else {
             throw ControlFailure(.notConnected, "The session is not connected.")
         }
@@ -54,7 +56,9 @@ extension CommandLineController {
             guard session.attemptID == id, sessions.session(for: session.connection.id) === session else {
                 throw ControlFailure(.sessionEnded, "The session attempt was closed or replaced.")
             }
-            guard session.isConnected else { throw ControlFailure(.notConnected, "The session disconnected during input.") }
+            guard session.isConnected else {
+                throw ControlFailure(.notConnected, "The session disconnected during input.")
+            }
             guard session.inputGeometryRevision == geometryRevision else {
                 throw ControlFailure(.imageExpired, "The desktop geometry changed during input. Take a new screenshot.")
             }
@@ -120,7 +124,7 @@ extension CommandLineController {
             try check()
             return .object([
                 "session": .string(id.uuidString), "submittedActions": .number(Double(completed)),
-                "submittedEvents": .number(Double(submitted)), "acknowledgment": .string("protocol-submission"),
+                "submittedEvents": .number(Double(submitted)),
             ])
         } catch {
             if !finished {
@@ -145,7 +149,11 @@ extension CommandLineController {
                 failure = ControlFailure(.backendFailed, "The remote input submission failed.")
             }
             throw ControlFailure(
-                failure.code, failure.message, hint: failure.hint,
+                failure.code, failure.message,
+                hint: submitted > 0
+                    ? "Some input reached the remote desktop before this failure. "
+                        + (failure.hint.isEmpty ? "Take a screenshot before repeating it." : failure.hint)
+                    : failure.hint,
                 details: .object(["submittedActions": .number(Double(completed)), "submittedEvents": .number(Double(submitted))]))
         }
     }
@@ -276,7 +284,9 @@ private struct InputPlan {
     }
 
     private func chord(_ text: String, modifiersOnly: Bool = false) throws -> [PhysicalKey] {
-        do { return try PhysicalKey.chord(text, modifiersOnly: modifiersOnly) } catch { throw ControlFailure(.invalidArgument, error.localizedDescription) }
+        do { return try PhysicalKey.chord(text, modifiersOnly: modifiersOnly) } catch {
+            throw ControlFailure(.invalidArgument, error.localizedDescription, hint: "List the key names with `remora capabilities --session S`.")
+        }
     }
 
     private mutating func modifiers(_ request: ControlRequest) throws -> [PhysicalKey] {
@@ -337,8 +347,8 @@ private struct InputPlan {
             }
             release(additions)
         case "scroll":
-            try request.validateArguments(["at", "dx", "dy"])
-            let at = try point(request, "at")
+            try request.validateArguments(["x", "y", "dx", "dy"])
+            let at = try point(request)
             let dx = try number(request, "dx", default: 0)
             let dy = try number(request, "dy", default: 0)
             if dx != 0, !capabilities.contains(.horizontalWheel) { throw ControlFailure(.unsupported, "The server did not negotiate a horizontal wheel.") }
