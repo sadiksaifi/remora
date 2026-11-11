@@ -118,7 +118,11 @@ extension CommandLineController {
             if !disconnected, case .disconnected(let reason) = session.state {
                 throw ControlFailure(.backendFailed, reason?.description ?? "The session disconnected.")
             }
-            guard ContinuousClock.now < deadline else { throw ControlFailure(.timeout, "The session did not reach the requested state before the deadline.") }
+            guard ContinuousClock.now < deadline else {
+                throw ControlFailure(
+                    .timeout, "The session did not reach the requested state before the deadline.",
+                    hint: "Wait again, or inspect `remora session get`.")
+            }
             do { try await Task.sleep(until: min(deadline, ContinuousClock.now.advanced(by: .milliseconds(25))), clock: .continuous) } catch {
                 throw ControlFailure(.cancelled, "The command was interrupted.")
             }
