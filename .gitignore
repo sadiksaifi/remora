@@ -21,6 +21,9 @@ build/
 .build/
 .swiftpm/
 
+# Python
+__pycache__/
+
 # Engine build output (rebuilt by Vendor/build-engine.sh)
 Vendor/build
 Vendor/src/
