@@ -186,28 +186,33 @@ rfbBool rfbRemoraAppleEnd(rfbClient *c) {
     if(a->dirty) c->GotFrameBufferUpdate(c,a->left,a->top,a->right-a->left,a->bottom-a->top);
     return TRUE;
 }
-rfbBool rfbRemoraAppleKey(rfbClient *c,uint32_t keysym,rfbBool down) {
+/* Apple's combined input format shares its elapsed-time counter across keys and pointers. */
+static rfbBool sendInput(rfbClient *c,uint8_t plain[16]) {
     Apple *a=state(c);
     if(!a || !a->keyValid || c->remoraDiagnostic.phase!=RFB_REMORA_READY) return fail(c,APPLE_PROFILE);
+    uint8_t wire[18]={0x10,0}; int length=0;
+    struct timespec now; clock_gettime(CLOCK_MONOTONIC,&now);
+    uint32_t timestamp=(uint32_t)((uint64_t)now.tv_sec*1000000+now.tv_nsec/1000);
+    put32(plain+6,timestamp-a->previousInputTime);
+    rfbBool ok=encrypt_aes128ecb(wire+2,&length,a->key,plain,16) && length==16;
+    if(ok) ok=WriteToRFBServer(c,(char *)wire,sizeof(wire));
+    if(ok) a->previousInputTime=timestamp;
+    OPENSSL_cleanse(plain,16); OPENSSL_cleanse(wire,sizeof(wire));
+    return ok;
+}
+rfbBool rfbRemoraAppleKey(rfbClient *c,uint32_t keysym,rfbBool down) {
     /* Option is Meta for ARD, preserving the source's held-key identity on both transitions. */
     if(keysym==0xffe9) keysym=0xffe7;
     if(keysym==0xffea) keysym=0xffe8;
-    uint8_t plain[16]={0xff,down?1:0},wire[18]={0x10,0}; int length=0;
-    struct timespec now; clock_gettime(CLOCK_MONOTONIC,&now);
-    uint32_t timestamp=(uint32_t)((uint64_t)now.tv_sec*1000000+now.tv_nsec/1000);
-    put32(plain+2,keysym); put32(plain+6,timestamp-a->previousInputTime);
-    rfbBool ok=encrypt_aes128ecb(wire+2,&length,a->key,plain,sizeof(plain)) && length==16;
-    if(ok) ok=WriteToRFBServer(c,(char *)wire,sizeof(wire));
-    if(ok) a->previousInputTime=timestamp;
-    OPENSSL_cleanse(plain,sizeof(plain)); OPENSSL_cleanse(wire,sizeof(wire));
-    return ok;
+    uint8_t plain[16]={0xff,down?1:0}; put32(plain+2,keysym);
+    return sendInput(c,plain);
 }
 rfbBool rfbRemoraApplePointer(rfbClient *c,int x,int y,int mask) {
-    if(!state(c) || !state(c)->keyValid || c->remoraDiagnostic.phase!=RFB_REMORA_READY) return fail(c,APPLE_PROFILE);
     /* The common source-button state stays in Remora. Only the wire mask changes. */
-    uint8_t p[6]={5,(uint8_t)((mask&1)|((mask&4)>>1)|((mask&2)<<1))};
-    put16(p+2,x); put16(p+4,y);
-    if(!WriteToRFBServer(c,(char *)p,sizeof(p))) return FALSE;
+    uint8_t plain[16]={0};
+    plain[10]=0xff; plain[11]=(uint8_t)((mask&1)|((mask&4)>>1)|((mask&2)<<1));
+    put16(plain+12,x); put16(plain+14,y);
+    if(!sendInput(c,plain)) return FALSE;
     /* Native horizontal deltas are positive toward RFB button 0x20 (left). */
     int dx=(mask&64)?-1:(mask&32)?1:0;
     int dy=(mask&8)?1:(mask&16)?-1:0;

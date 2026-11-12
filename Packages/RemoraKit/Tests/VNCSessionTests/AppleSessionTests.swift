@@ -222,7 +222,7 @@ private final class ApplePixels: FrameSink, @unchecked Sendable {
         session.sendKey(.init(keyCode: 56, isDown: true))
         session.sendKey(.init(keyCode: 56, isDown: false))
         session.sendKey(.init(keyCode: 58, isDown: true))
-        try await Task.sleep(for: .milliseconds(40))
+        try await Task.sleep(for: .milliseconds(200))
         session.sendKey(.init(keyCode: 58, isDown: false))
         try await request.send(.unicode("α"), deadline: deadline)
         try await request.send(.pointer(.init(x: 3, y: 4), .left), deadline: deadline)
@@ -241,9 +241,11 @@ private final class ApplePixels: FrameSink, @unchecked Sendable {
         ])
     #expect(keys.allSatisfy { $0.count == 3 })
     // Apple sends elapsed microseconds since the preceding combined input event.
-    // An absolute uptime stamp would be far outside this controlled hold interval.
-    #expect((20_000...2_000_000).contains(keys[2][2]))
+    // The held key has a longer interval than the immediately following Unicode event.
+    #expect((100_000...2_000_000).contains(keys[2][2]))
+    #expect(keys[3][2] < keys[2][2])
     let pointers = try #require(wire["pointers"] as? [[Int]])
+    #expect(wire["combined_pointers"] as? Int == pointers.count)
     #expect(pointers.contains([3, 9, 7]))
     #expect(pointers.suffix(2) == [[1, 9, 7], [0, 9, 7]])
     #expect(wire["scrolls"] as? [[Int]] == [[0, 1, 0, 65536, 0, 1, 9, 7], [-1, 0, -65536, 0, -1, 0, 9, 7]])

@@ -98,6 +98,7 @@ def apple_frames(outcome, exact, send, key, report, connection):
     def update(payload, encoding=1011, rect=(0,0,16,8)):
         send(struct.pack('>BBHHHHHi',0,0,1,*rect,encoding) + (struct.pack('>I',len(payload)) if encoding==1011 else b'') + payload)
     report['keys'] = []; report['pointers'] = []; report['scrolls'] = []
+    report['combined_pointers'] = 0
     report['requests_after_initial'] = 0; report['subscriptions'] = []
     def client_message():
         kind = exact(1)[0]
@@ -107,10 +108,18 @@ def apple_frames(outcome, exact, send, key, report, connection):
         elif kind == 0x10:
             flags = exact(1)[0]
             plain = aes_ecb(key,exact(16),True)
-            if flags != 0 or plain[0] != 255 or any(plain[10:]): raise ValueError('encrypted event framing')
-            down, symbol, timestamp = plain[1], int.from_bytes(plain[2:6],'big'), int.from_bytes(plain[6:10],'big')
-            if down not in (0,1): raise ValueError('key direction')
-            report['keys'].append([symbol,down,timestamp])
+            if flags != 0: raise ValueError('encrypted event flags')
+            if plain[0] == 255:
+                if any(plain[10:]): raise ValueError('key-only event framing')
+                down, symbol, timestamp = plain[1], int.from_bytes(plain[2:6],'big'), int.from_bytes(plain[6:10],'big')
+                if down not in (0,1): raise ValueError('key direction')
+                report['keys'].append([symbol,down,timestamp])
+            elif plain[10] == 255:
+                if any(plain[:6]): raise ValueError('pointer-only event framing')
+                mask,x,y = struct.unpack('>BHH',plain[11:])
+                report['pointers'].append([mask,x,y])
+                report['combined_pointers'] += 1
+            else: raise ValueError('missing combined event marker')
         elif kind == 5:
             mask,x,y = struct.unpack('>BHH',exact(5))
             report['pointers'].append([mask,x,y])
