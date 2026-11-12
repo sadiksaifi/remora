@@ -63,7 +63,7 @@ rfbBool rfbRemoraAppleSetup(rfbClient *c) {
     return WriteToRFBServer(c,mode,sizeof(mode));
 }
 /* The initial full request can go unanswered, or produce only controls/partial
- * coverage. Keep requesting a baseline until push subscription can take over.
+ * coverage. Keep requesting a baseline alongside the push subscription.
  * Called between complete messages, never during a rectangle decode. */
 rfbBool rfbRemoraAppleRetryBaseline(rfbClient *c) {
     Apple *a=state(c);
@@ -166,15 +166,15 @@ void rfbRemoraAppleRaw(rfbClient *c,const rfbFramebufferUpdateRectHeader *r) {
     damage(state(c),r->r.x,r->r.y,r->r.w,r->r.h);
     if(r->r.x==0 && r->r.y==0 && r->r.w==c->width && r->r.h==c->height) state(c)->baseline=TRUE;
 }
-/* Subscription is a source-defined zero-interval full-region 0x09, not standard ContinuousUpdates. */
+/* AutoFBUpdate uses interval 0 to subscribe and UINT32_MAX to pause, with flags 1. */
 rfbBool rfbRemoraAppleSetDemand(rfbClient *c,rfbBool enabled) {
     Apple *a=state(c);
     if(!a) return fail(c,APPLE_PROFILE);
     if(!a->baseline && enabled && !a->demand) a->baselineRequestAt=monotonic()+1;
     a->demand=enabled;
-    if(!a->baseline || a->subscribed==enabled) return TRUE;
+    if(a->subscribed==enabled) return TRUE;
     if(c->RemoraUpdateAllowed && !c->RemoraUpdateAllowed(c,FALSE)) return FALSE;
-    uint8_t m[16]={9,0}; put16(m+2,enabled?1:0);
+    uint8_t m[16]={9,0,0,1}; put32(m+4,enabled?0:UINT32_MAX);
     put16(m+12,c->width); put16(m+14,c->height);
     if(!WriteToRFBServer(c,(char *)m,sizeof(m))) return FALSE;
     a->subscribed=enabled;

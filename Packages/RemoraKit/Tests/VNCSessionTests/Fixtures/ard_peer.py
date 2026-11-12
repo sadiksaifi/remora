@@ -127,6 +127,13 @@ def apple_frames(outcome, exact, send, key, report, connection):
             report['requests_after_initial'] += 1
         else: raise ValueError('unexpected Apple client message')
         return kind
+    # A valid server may wait for the automatic-update subscription before its
+    # first frame, even after admitting the initial explicit full request.
+    for _ in range(64):
+        if client_message()==9: break
+    else: raise ValueError('missing startup subscription')
+    if report['subscriptions'][-1] != [0,1,0,0,0,16,8]: raise ValueError('subscription region')
+    report['subscribed_before_baseline'] = True
     if outcome == 'apple-no-baseline':
         update(partial); return
     if outcome == 'apple-truncated':
@@ -145,16 +152,11 @@ def apple_frames(outcome, exact, send, key, report, connection):
         report['baseline_retry_ms'] = round((time.monotonic()-began)*1000)
         if outcome == 'apple-retry-hidden': time.sleep(0.1)
     update(full)
-    # Subscription may follow already-admitted input. Read independently until it arrives.
-    for _ in range(64):
-        if client_message()==9: break
-    else: raise ValueError('missing subscription')
-    if report['subscriptions'][-1] != [0,1,0,0,0,16,8]: raise ValueError('subscription region')
     if outcome == 'apple-hidden-baseline':
-        report['baseline_retry_ms'] = round((time.monotonic()-began)*1000)
         for _ in range(64):
             if client_message()==3: break
         else: raise ValueError('missing resume refresh')
+        report['baseline_retry_ms'] = round((time.monotonic()-began)*1000)
     if outcome == 'apple-geometry':
         update(b'',-223,(0,0,32,8)); return
     if outcome == 'apple-bad-cache':
@@ -368,6 +370,10 @@ def serve_once(offer_mode, outcome, port):
                             raise ValueError('initial full request must follow SetMode')
                         if apple and outcome != 'apple-success':
                             apple_frames(outcome,exact,send,hashlib.md5(shared).digest(),report,connection)
+                            # Deliver every queued frame before closing, including when
+                            # the native driver has sent input that this case ignores.
+                            connection.shutdown(socket.SHUT_WR)
+                            while connection.recv(4096): pass
                         elif outcome in ('fragmented-small', 'fragmented-large'):
                             compressed = synthetic_zrle(dimension)
                             report['compressed_bytes'] = len(compressed)
@@ -397,10 +403,12 @@ def serve_once(offer_mode, outcome, port):
                             # Tight control 12 is reserved, not a valid subencoding.
                             send(struct.pack('>BBHHHHHi', 0, 0, 1, 0, 0, 16, 16, 7) + bytes([0xc0]))
                         else:
-                            send(struct.pack('>BBHHHHHi', 0, 0, 1, 0, 0, 16, 16, 0) + bytes(16 * 16 * 4))
                             if outcome == 'apple-success':
                                 if exact(1) != bytes([9]): raise ValueError('subscription required')
                                 report['subscription'] = list(struct.unpack('>BHIHHHH',exact(15)))
+                                if report['subscription'] != [0,1,0,0,0,16,16]: raise ValueError('subscription region')
+                                report['subscribed_before_baseline'] = True
+                            send(struct.pack('>BBHHHHHi', 0, 0, 1, 0, 0, 16, 16, 0) + bytes(16 * 16 * 4))
                             if outcome == 'runtime-success':
                                 if exact(1) != bytes([3]):
                                     raise ValueError('incremental request required')

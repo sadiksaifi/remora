@@ -51,6 +51,8 @@ private final class AppleFrames: FrameSink, @unchecked Sendable {
     #expect(result["credentials_valid"] as? Bool == true)
     #expect(result["client_init"] as? Int == 0x81)
     #expect(result["control_mode"] as? Bool == true)
+    #expect(result["subscribed_before_baseline"] as? Bool == true)
+    #expect(result["subscription"] as? [Int] == [0, 1, 0, 0, 0, 16, 16])
     #expect(result["error_class"] == nil)
     #expect(connected)
     #expect(frames.count == 1)
@@ -130,6 +132,7 @@ private final class ApplePixels: FrameSink, @unchecked Sendable {
 @Test @MainActor func appleFullPartialAndCacheUpdatesUseSubscriptionWithoutIncrementalRequests() async throws {
     let (wire, _, pixels) = try await appleSession("apple-sequence", offers: "apple-mixed")
     #expect(wire["selected_security_id"] as? Int == 30)
+    #expect(wire["subscribed_before_baseline"] as? Bool == true)
     #expect(wire["requests_after_initial"] as? Int == 0)
     #expect(wire["subscriptions"] as? [[Int]] == [[0, 1, 0, 0, 0, 16, 8]])
     #expect(pixels.samples == [[148, 148, 148], [151, 147, 148], [151, 147, 148]])
@@ -153,6 +156,7 @@ private final class ApplePixels: FrameSink, @unchecked Sendable {
 @Test(arguments: ["dropped", "empty", "quant", "raw", "controls"])
 @MainActor func appleRetriesFullRequestsUntilACompleteBaselineArrives(_ first: String) async throws {
     let (wire, _, pixels) = try await appleSession("apple-retry-\(first)")
+    #expect(wire["subscribed_before_baseline"] as? Bool == true)
     #expect(wire["requests_after_initial"] as? Int == (first == "dropped" ? 2 : 1))
     #expect(wire["subscriptions"] as? [[Int]] == [[0, 1, 0, 0, 0, 16, 8]])
     #expect(pixels.samples.count == (first == "raw" ? 4 : 3))
@@ -169,7 +173,7 @@ private final class ApplePixels: FrameSink, @unchecked Sendable {
     }
     #expect(try #require(wire["baseline_retry_ms"] as? Int) >= 1200)
     #expect(wire["requests_after_initial"] as? Int == 1)
-    #expect(wire["subscriptions"] as? [[Int]] == [[0, 1, 0, 0, 0, 16, 8]])
+    #expect(wire["subscriptions"] as? [[Int]] == [[0, 1, 0, 0, 0, 16, 8], [0, 1, 4_294_967_295, 0, 0, 16, 8], [0, 1, 0, 0, 0, 16, 8]])
     #expect(pixels.samples.count == 3)
 }
 
@@ -261,7 +265,7 @@ private final class ApplePixels: FrameSink, @unchecked Sendable {
         #expect(!session.awaitsRedraw)
         #expect(frames.samples.count > before)
     }
-    #expect(wire["subscriptions"] as? [[Int]] == [[0, 1, 0, 0, 0, 16, 8], [0, 0, 0, 0, 0, 16, 8], [0, 1, 0, 0, 0, 16, 8]])
+    #expect(wire["subscriptions"] as? [[Int]] == [[0, 1, 0, 0, 0, 16, 8], [0, 1, 4_294_967_295, 0, 0, 16, 8], [0, 1, 0, 0, 0, 16, 8]])
     #expect(wire["requests_after_initial"] as? Int == 1)
 }
 
