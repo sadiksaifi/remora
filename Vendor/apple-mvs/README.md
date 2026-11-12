@@ -24,34 +24,53 @@ Option maps to Meta, legacy character keysyms above Latin-1 map to Unicode, and 
 
 ## Responsiveness on LAN
 
-On 2026-11-12 a development build on a MacBook Pro M4 Pro running macOS 27.0.1 was compared with Screen Sharing's standard connection, using Adaptive Quality, against a MacBook Pro M3 Pro running macOS 26.6.2 on the same LAN. Each client displayed the same 3024x1964 desktop in a 1512x1034 window. A local probe posted physical input and timed the first changed pixels in the client window with ScreenCaptureKit. It requested 120 Hz capture on a 60 Hz display; this measures captured response, not physical display latency.
+On 2026-11-13, a development build on a MacBook Pro M4 Pro running macOS 27.0.1 was compared with Screen Sharing's standard connection using Adaptive Quality against a MacBook Pro M3 Pro running macOS 26.6.2 over Ethernet. Both clients showed the same 3024x1964 desktop in a 1512x1034 window. A local probe posted physical input and timed the first changed pixels with ScreenCaptureKit, requesting 120 Hz capture on a 60 Hz display. These are captured-response measurements, not physical display latency.
 
-Six alternating Apple-mode/Screen Sharing pairs ran one client at a time, with 16 trials per action in each round. Scroll alternated six lines down and up. Typing alternated one physical A key and Delete, with the pointer outside the text region. Each insertion shifted the watched line by one cell, and each deletion restored it exactly. Menu trials alternated opening TextEdit's File menu and closing it with Escape. Every trial in these six pairs observed a response. Standard mode ran one further round with the same physical inputs, window geometry and thresholds.
+Six alternating Apple-mode/Screen Sharing pairs ran one client at a time, with 16 trials per action per round. Scroll alternated six lines down and up, typing alternated one A and Delete, and menu trials opened TextEdit's File menu and closed it with Escape. The pointer stayed outside the typing region. All 576 planned inputs produced a response. Each insertion shifted the watched line by one cell and each deletion restored it. Every menu remained open for its planned Escape. Independent host process-log checks found no external native-test activity during any pair. No pair or performed observation was replaced or excluded.
 
-Each cell is the median of the per-round medians in milliseconds. Parentheses give the population standard deviation of those round medians. Typing and menu columns measure insertion and opening; scroll includes both directions.
+The primary estimate is the median of six round medians. Scroll pools both directions; typing measures insertion and menu measures opening. Gaps are Apple mode minus Screen Sharing, in milliseconds.
 
-| Client | Scroll | Type | Open menu | Rounds |
+| Action | Apple mode | Screen Sharing | Gap | 95% paired-cluster interval for gap |
 |---|---:|---:|---:|---:|
-| Remora Apple mode | 75 (7.0) | 66 (8.8) | 122 (9.5) | 6 |
-| macOS Screen Sharing | 72 (4.3) | 66 (9.6) | 115 (7.2) | 6 |
-| Remora standard mode | 621 | 396 | 1145 | 1 |
+| Scroll | 67.7 | 64.4 | +3.3 | [-1.4, +9.8] |
+| Type | 58.3 | 64.1 | -5.8 | [-9.5, -1.7] |
+| Open menu | 127.8 | 119.4 | +8.4 | [+6.3, +14.8] |
 
-Apple mode's three median gaps are below 10 ms, and it is faster than standard mode for every action. The variance criterion in #68 is still unmet: Apple mode's scroll and menu round medians vary more than Screen Sharing's. Typing variance is lower. Deletion medians are 63 ms for Apple mode and 71 ms for Screen Sharing; menu closing medians are 155 ms and 148 ms. Standard mode takes 397 ms for deletion and 233 ms for menu closing. Its scroll round trips did not restore the watched region exactly, so the scroll comparison establishes response to the same input rather than equal final scroll distance.
+All three observed primary gaps meet the 10 ms point-estimate rule. The menu interval extends beyond 10 ms, so the experiment does not establish that its gap is within 10 ms with 95% confidence. Pooling all menu trials instead gives a 12.4 ms median gap with interval [9.5, 15.6]; that is a different estimate from the prespecified median of round medians.
 
-Per-round medians below are Apple mode / Screen Sharing, in milliseconds.
+Trial-level interquartile ranges and confidence intervals replace the original ordering of six observed round standard deviations, as agreed for this series. Each action/direction cell has 48 observations per client.
 
-| Round | Scroll | Type | Open menu |
+| Action/direction | IQR Apple / Screen Sharing | IQR gap | 95% paired-cluster interval |
 |---|---:|---:|---:|
-| 1 | 78.0 / 68.2 | 58.9 / 76.2 | 120.7 / 104.5 |
-| 2 | 73.4 / 77.1 | 80.9 / 90.9 | 132.3 / 113.3 |
-| 3 | 85.9 / 76.9 | 69.1 / 64.3 | 141.5 / 121.6 |
-| 4 | 75.7 / 70.0 | 71.5 / 64.7 | 115.9 / 117.6 |
-| 5 | 65.6 / 73.1 | 54.6 / 67.3 | 114.9 / 113.2 |
-| 6 | 66.0 / 65.6 | 61.9 / 65.4 | 122.4 / 127.4 |
+| Scroll down | 10.5 / 13.1 | -2.6 | [-8.7, -0.2] |
+| Scroll up | 12.5 / 14.4 | -2.0 | [-8.4, +4.3] |
+| Insert | 15.6 / 9.4 | +6.2 | [+1.4, +9.1] |
+| Delete | 13.4 / 14.0 | -0.6 | [-6.6, +7.4] |
+| Open menu | 6.6 / 12.6 | -6.0 | [-11.3, +1.3] |
+| Close menu | 15.2 / 14.4 | +0.8 | [-5.8, +10.6] |
 
-Rounds 1-3 used `7ee3d82`; rounds 4-6 used `a9a3584`, which adds startup recovery without changing steady-state input or rendering. A separate A-B-B-A experiment with 16 menu trials per block tested a non-incremental full request after input. It improved opening by about 10 ms but slowed closing by about 19 ms and forced additional full-desktop work, so it was removed. Accepted timing runs used neither tracing nor concurrent captures. Calibration failures and pre-input capture/geometry failures are retained separately. One earlier menu-close probe timed out although the next capture showed the menu closed; its cause remains unproven. Raw trials, metadata, the frozen probe and the summary calculation are under `.snap/benchmark/final/`.
+Typing insertion has a wider observed IQR in Remora. The prespecified global one-sided spread test gives 19/64 = 0.2969 by swapping whole paired rounds jointly across all six cells. Non-rejection does not establish equal spread or equivalence. The six-round population standard deviations, reported descriptively as Apple / Screen Sharing, are 2.92 / 2.79 ms for scroll, 3.05 / 2.55 for typing, and 3.19 / 2.43 for opening a menu. Confidence intervals use 20,000 paired-cluster bootstrap draws and only six paired clusters. Fixed client order, drift and the small number of clusters limit their interpretation.
 
-The decoder and image-quality settings are unchanged. A 303-second editing workload is described below. In the earlier 2026-11-08 comparison, Escape in Preview's empty search field left the focus ring visible in both Remora and Screen Sharing; that behavior came from Preview.
+The [numeric observations, method, environment audit and reproducer](../../Tools/vnc/benchmarks/2026-11-13/README.md) contain all 576 observations and the complete analysis. Earlier G, H, J and K runs are retained separately and are not pooled into these results. H stopped after a Screen Sharing menu opened and closed before Escape; its cause remains unknown. J stopped on a missing typed glyph, and K stopped on a menu-opening timeout. Host logs match those two Remora incidents and K's earlier menu closures to unrelated native AppKit tests that created key panels on the served Mac. No trace identifies the exact input hop in either incident. This series used a process-log validity rule fixed before collection and encountered no such test run. It does not establish general input reliability.
+
+A separate prospective control compared Apple mode, standard VNC and Screen Sharing with the same 1200 ms quiet period and 8-second settling deadline. It recorded both first changed pixels and the first frame matching the eventual watched region, ignoring only the fixed blinking-caret box for settling and completion matching. Completion uses sampled luminance differences above 48 and the original frame timestamp; it does not add the quiet period. The first-response search and its three-second deadline stayed unchanged. These single-round controls are descriptive and are not pooled into the six-pair analysis.
+
+The table gives first-change / watched-region-completion medians in milliseconds. Scroll uses both directions; the other rows have eight observations per client, except standard-mode menu rows as noted below.
+
+| Action | Apple first / complete | Screen Sharing first / complete | Standard first / complete |
+|---|---:|---:|---:|
+| Scroll | 70.0 / 96.4 | 74.8 / 81.9 | 614.3 / 664.7 |
+| Insert | 67.8 / 67.8 | 65.2 / 65.2 | 62.2 / 62.2 |
+| Delete | 70.0 / 70.0 | 61.4 / 61.4 | 61.6 / 61.6 |
+| Open menu | 127.0 / 127.0 | 122.1 / 135.8 | 1124.3 / 1513.2 |
+| Close menu | 100.9 / 170.5 | 105.7 / 170.9 | 130.1 / 314.0 |
+
+Apple mode and Screen Sharing each completed all 48 control inputs. Standard mode completed scroll and typing, then its eighth menu opening exceeded the three-second response search. A later capture showed the open menu. The table's standard-mode menu medians therefore condition on seven observed openings and seven closings; one performed opening timed out and the final planned closing was not attempted. The timeout and stopped round are retained, without replacement or imputation. In this control, Apple mode was faster for scrolling and menus; single-key typing was comparable and does not show an Apple-mode advantage.
+
+An earlier standard-mode attempt with the original 400 ms quiet rule stopped when a partial text repaint failed the restoration guard. A later capture showed the restored text. That attempt remains separate. The longer-quiet control was fixed before collecting any of its three client rounds. [Control observations and method](../../Tools/vnc/benchmarks/2026-11-13/COMPLETION-METHOD.txt) retain both metrics, the timeout, sample counts and source hashes.
+
+
+The decoder and image-quality settings are unchanged. The 303-second editing workload below ran on `36e595f`; later changes preserve window presentation demand and recover a startup timeout. In the earlier 2026-11-08 comparison, Escape in Preview's empty search field left the focus ring visible in both Remora and Screen Sharing; that behavior came from Preview.
 
 ## Connection reliability
 

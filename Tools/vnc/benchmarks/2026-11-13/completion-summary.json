@@ -1,0 +1,332 @@
+{
+  "design": "One prespecified descriptive control round per client; no replacement, pooling or confidence inference",
+  "quiet_ms": 1200,
+  "settle_deadline_ms": 8000,
+  "first_response_search_deadline_ms": 3000,
+  "stability_completion_mask_window_rect": [
+    160,
+    155,
+    5,
+    20
+  ],
+  "source_sha256": "006098950a9a6b64d04f4271e633efbbbb221bd96ae7d3232e26dc2430d9ef83",
+  "clients": {
+    "apple": {
+      "planned_rows": 48,
+      "recorded_rows": 48,
+      "performed_n": 48,
+      "observed_n": 48,
+      "not_attempted_after_stop": 0,
+      "cells": {
+        "scroll.both": {
+          "performed_n": 16,
+          "observed_n": 16,
+          "complete_n": 16,
+          "first_median_ms": 69.99572916666666,
+          "complete_median_ms": 96.39054166666666,
+          "timeout_n": 0,
+          "timeout_search_lower_bound_ms": null
+        },
+        "scroll.forward": {
+          "performed_n": 8,
+          "observed_n": 8,
+          "complete_n": 8,
+          "first_median_ms": 75.61679166666667,
+          "complete_median_ms": 109.077375,
+          "timeout_n": 0,
+          "timeout_search_lower_bound_ms": null
+        },
+        "scroll.reverse": {
+          "performed_n": 8,
+          "observed_n": 8,
+          "complete_n": 8,
+          "first_median_ms": 64.58802083333333,
+          "complete_median_ms": 83.1469375,
+          "timeout_n": 0,
+          "timeout_search_lower_bound_ms": null
+        },
+        "type.both": {
+          "performed_n": 16,
+          "observed_n": 16,
+          "complete_n": 16,
+          "first_median_ms": 67.84360416666667,
+          "complete_median_ms": 67.84360416666667,
+          "timeout_n": 0,
+          "timeout_search_lower_bound_ms": null
+        },
+        "type.forward": {
+          "performed_n": 8,
+          "observed_n": 8,
+          "complete_n": 8,
+          "first_median_ms": 67.84360416666667,
+          "complete_median_ms": 67.84360416666667,
+          "timeout_n": 0,
+          "timeout_search_lower_bound_ms": null
+        },
+        "type.reverse": {
+          "performed_n": 8,
+          "observed_n": 8,
+          "complete_n": 8,
+          "first_median_ms": 69.97616666666667,
+          "complete_median_ms": 69.97616666666667,
+          "timeout_n": 0,
+          "timeout_search_lower_bound_ms": null
+        },
+        "menu.both": {
+          "performed_n": 16,
+          "observed_n": 16,
+          "complete_n": 16,
+          "first_median_ms": 112.99758333333332,
+          "complete_median_ms": 141.72562499999998,
+          "timeout_n": 0,
+          "timeout_search_lower_bound_ms": null
+        },
+        "menu.forward": {
+          "performed_n": 8,
+          "observed_n": 8,
+          "complete_n": 8,
+          "first_median_ms": 127.00091666666667,
+          "complete_median_ms": 127.00091666666667,
+          "timeout_n": 0,
+          "timeout_search_lower_bound_ms": null
+        },
+        "menu.reverse": {
+          "performed_n": 8,
+          "observed_n": 8,
+          "complete_n": 8,
+          "first_median_ms": 100.85372916666668,
+          "complete_median_ms": 170.47133333333332,
+          "timeout_n": 0,
+          "timeout_search_lower_bound_ms": null
+        }
+      }
+    },
+    "standard": {
+      "planned_rows": 48,
+      "recorded_rows": 47,
+      "performed_n": 47,
+      "observed_n": 46,
+      "not_attempted_after_stop": 1,
+      "cells": {
+        "scroll.both": {
+          "performed_n": 16,
+          "observed_n": 16,
+          "complete_n": 16,
+          "first_median_ms": 614.2821458333333,
+          "complete_median_ms": 664.6903541666667,
+          "timeout_n": 0,
+          "timeout_search_lower_bound_ms": null
+        },
+        "scroll.forward": {
+          "performed_n": 8,
+          "observed_n": 8,
+          "complete_n": 8,
+          "first_median_ms": 620.99275,
+          "complete_median_ms": 661.3627291666667,
+          "timeout_n": 0,
+          "timeout_search_lower_bound_ms": null
+        },
+        "scroll.reverse": {
+          "performed_n": 8,
+          "observed_n": 8,
+          "complete_n": 8,
+          "first_median_ms": 582.560125,
+          "complete_median_ms": 682.3327291666667,
+          "timeout_n": 0,
+          "timeout_search_lower_bound_ms": null
+        },
+        "type.both": {
+          "performed_n": 16,
+          "observed_n": 16,
+          "complete_n": 16,
+          "first_median_ms": 62.1788125,
+          "complete_median_ms": 62.1788125,
+          "timeout_n": 0,
+          "timeout_search_lower_bound_ms": null
+        },
+        "type.forward": {
+          "performed_n": 8,
+          "observed_n": 8,
+          "complete_n": 8,
+          "first_median_ms": 62.2109375,
+          "complete_median_ms": 62.2109375,
+          "timeout_n": 0,
+          "timeout_search_lower_bound_ms": null
+        },
+        "type.reverse": {
+          "performed_n": 8,
+          "observed_n": 8,
+          "complete_n": 8,
+          "first_median_ms": 61.627562499999996,
+          "complete_median_ms": 61.627562499999996,
+          "timeout_n": 0,
+          "timeout_search_lower_bound_ms": null
+        },
+        "menu.both": {
+          "performed_n": 15,
+          "observed_n": 14,
+          "complete_n": 14,
+          "first_median_ms": 313.17847916666665,
+          "complete_median_ms": 785.9259791666666,
+          "timeout_n": 1,
+          "timeout_search_lower_bound_ms": 3000
+        },
+        "menu.forward": {
+          "performed_n": 8,
+          "observed_n": 7,
+          "complete_n": 7,
+          "first_median_ms": 1124.312625,
+          "complete_median_ms": 1513.2010833333331,
+          "timeout_n": 1,
+          "timeout_search_lower_bound_ms": 3000
+        },
+        "menu.reverse": {
+          "performed_n": 7,
+          "observed_n": 7,
+          "complete_n": 7,
+          "first_median_ms": 130.125,
+          "complete_median_ms": 314.0419583333333,
+          "timeout_n": 0,
+          "timeout_search_lower_bound_ms": null
+        }
+      }
+    },
+    "screen_sharing": {
+      "planned_rows": 48,
+      "recorded_rows": 48,
+      "performed_n": 48,
+      "observed_n": 48,
+      "not_attempted_after_stop": 0,
+      "cells": {
+        "scroll.both": {
+          "performed_n": 16,
+          "observed_n": 16,
+          "complete_n": 16,
+          "first_median_ms": 74.80402083333334,
+          "complete_median_ms": 81.926875,
+          "timeout_n": 0,
+          "timeout_search_lower_bound_ms": null
+        },
+        "scroll.forward": {
+          "performed_n": 8,
+          "observed_n": 8,
+          "complete_n": 8,
+          "first_median_ms": 76.07191666666668,
+          "complete_median_ms": 82.21395833333334,
+          "timeout_n": 0,
+          "timeout_search_lower_bound_ms": null
+        },
+        "scroll.reverse": {
+          "performed_n": 8,
+          "observed_n": 8,
+          "complete_n": 8,
+          "first_median_ms": 73.53710416666667,
+          "complete_median_ms": 80.79695833333332,
+          "timeout_n": 0,
+          "timeout_search_lower_bound_ms": null
+        },
+        "type.both": {
+          "performed_n": 16,
+          "observed_n": 16,
+          "complete_n": 16,
+          "first_median_ms": 63.801833333333335,
+          "complete_median_ms": 63.801833333333335,
+          "timeout_n": 0,
+          "timeout_search_lower_bound_ms": null
+        },
+        "type.forward": {
+          "performed_n": 8,
+          "observed_n": 8,
+          "complete_n": 8,
+          "first_median_ms": 65.19912500000001,
+          "complete_median_ms": 65.19912500000001,
+          "timeout_n": 0,
+          "timeout_search_lower_bound_ms": null
+        },
+        "type.reverse": {
+          "performed_n": 8,
+          "observed_n": 8,
+          "complete_n": 8,
+          "first_median_ms": 61.38129166666667,
+          "complete_median_ms": 61.38129166666667,
+          "timeout_n": 0,
+          "timeout_search_lower_bound_ms": null
+        },
+        "menu.both": {
+          "performed_n": 16,
+          "observed_n": 16,
+          "complete_n": 16,
+          "first_median_ms": 115.76645833333333,
+          "complete_median_ms": 149.73827083333333,
+          "timeout_n": 0,
+          "timeout_search_lower_bound_ms": null
+        },
+        "menu.forward": {
+          "performed_n": 8,
+          "observed_n": 8,
+          "complete_n": 8,
+          "first_median_ms": 122.06095833333333,
+          "complete_median_ms": 135.78789583333332,
+          "timeout_n": 0,
+          "timeout_search_lower_bound_ms": null
+        },
+        "menu.reverse": {
+          "performed_n": 8,
+          "observed_n": 8,
+          "complete_n": 8,
+          "first_median_ms": 105.7385,
+          "complete_median_ms": 170.93849999999998,
+          "timeout_n": 0,
+          "timeout_search_lower_bound_ms": null
+        }
+      }
+    }
+  },
+  "sources": [
+    {
+      "client": "apple",
+      "action": "scroll",
+      "sha256": "e40b4da16115b189a4b604e64df90c33bb4b8aa9cfb4ae4f298a7c1d6497b08d"
+    },
+    {
+      "client": "apple",
+      "action": "type",
+      "sha256": "5812e28638691b2ca0a3f1c460eed68ba30413e1ce6e659c83de597492467a09"
+    },
+    {
+      "client": "apple",
+      "action": "menu",
+      "sha256": "5ee36aea82d3a7c36a830ba6fecb51a4ff5585c56f8560ce65585f4ea2b56aa4"
+    },
+    {
+      "client": "standard",
+      "action": "scroll",
+      "sha256": "e57541a0aeb168c2767ecb858333d8a6848db5da9d77314f70c5a6fce0b9ef0a"
+    },
+    {
+      "client": "standard",
+      "action": "type",
+      "sha256": "8edc814037633a144c448612c44ce67f307a949e53d55db766c84e1be28c5fa9"
+    },
+    {
+      "client": "standard",
+      "action": "menu",
+      "sha256": "b42fc66b4c4892538345cf83324e827a8766533212adc3772136adaff80223cf"
+    },
+    {
+      "client": "screen_sharing",
+      "action": "scroll",
+      "sha256": "ebfa00458976f20ed5cc0794062db06fc384ddd9eac2b58ad801fb5786432d68"
+    },
+    {
+      "client": "screen_sharing",
+      "action": "type",
+      "sha256": "29bbe673065fcf45788c1f3bee7c939fde1f8d441d7173d3a682993331167593"
+    },
+    {
+      "client": "screen_sharing",
+      "action": "menu",
+      "sha256": "abf8f1a78d240c01a5743a21884ba39f6d0e417b4f9c1cf8b4b95007368e3760"
+    }
+  ]
+}
