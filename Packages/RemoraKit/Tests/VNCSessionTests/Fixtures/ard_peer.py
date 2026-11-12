@@ -221,14 +221,30 @@ def apple_frames(outcome, exact, send, key, report, connection):
             raise ValueError('unexpected client message after baseline')
 
 
+def accepted(listener, report, deadline):
+    """Yield each accepted connection in turn. Leaving the loop closes the last one."""
+    import time
+    while True:
+        listener.settimeout(max(0.001, deadline - time.monotonic()))
+        connection, _ = listener.accept()
+        report['attempts'] += 1
+        with connection:
+            yield connection
+
+
 def serve_once(offer_mode, outcome, port):
     # Imported only for the explicitly requested listener subcommand. This
     # helper has no remote host argument, DNS call, connect call, or retry loop.
+    # Only an init-withheld outcome accepts a second connection, from the client.
     import socket
     import time
     known_answer_check()
     report = {'synthetic_only': True, 'attempts': 0, 'stage': 'listen', 'credentials_valid': False}
-    deadline = time.monotonic() + 10
+    # A withheld ServerInit holds the client for its ten-second read deadline.
+    withheld = outcome.endswith(('init-withheld', 'init-withheld-once'))
+    withheld_public = None
+    stalled = outcome.startswith('apple-init-stalled-')
+    deadline = time.monotonic() + (16 if withheld or stalled else 10)
     offers = {
         'apple-mixed': OFFERS,
         'ard-only': [30],
@@ -244,11 +260,8 @@ def serve_once(offer_mode, outcome, port):
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
             listener.bind(('127.0.0.1', port))
             listener.listen(1)
-            listener.settimeout(max(0.001, deadline - time.monotonic()))
             print(json.dumps({'loopback_port': listener.getsockname()[1]}), flush=True)
-            connection, _ = listener.accept()
-            report['attempts'] = 1
-            with connection:
+            for connection in accepted(listener, report, deadline):
                 if outcome in ('fragmented-small', 'fragmented-large'):
                     connection.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
                 def exact(count):
@@ -324,6 +337,8 @@ def serve_once(offer_mode, outcome, port):
                 ciphertext, client_public = exact(128), int.from_bytes(exact(SIZE), 'big')
                 if not 1 < client_public < P - 1:
                     raise ValueError('invalid client public value')
+                if withheld_public is not None:
+                    report['fresh_exchange'] = client_public != withheld_public
                 shared = fixed(pow(client_public, SERVER_EXPONENT, P))
                 plaintext = aes_ecb(hashlib.md5(shared).digest(), ciphertext, True)
                 fields = [plaintext[:64], plaintext[64:]]
@@ -340,7 +355,15 @@ def serve_once(offer_mode, outcome, port):
                         else: raise ValueError('client data after failed authentication')
                     report['security_result'] = 1
                     return report
-                send(struct.pack('>I', 0))
+                name = (bytes(2)+struct.pack('>I',4 if outcome=='apple-session-select' else 0)+bytes(16) if apple and outcome!='apple-no-extension' else b'') + b'synthetic-ard-peer'
+                dimension = 256 if outcome == 'fragmented-large' else 16
+                height = 8 if apple and outcome != 'apple-success' else dimension
+                server_init = struct.pack('>HHBBBBHHHBBBBBBI', dimension, height, 32, 24, 0, 1,
+                                          255, 255, 255, 16, 8, 0, 0, 0, 0, len(name))
+                prefetched = int(outcome.rsplit('-',1)[1]) if outcome.startswith('apple-init-stalled-prefetched-') else 0
+                # One peer write makes the success result and early header prefix
+                # available to the client's greedy AuthResult socket read together.
+                send(struct.pack('>I', 0) + server_init[:prefetched])
                 report['security_result'] = 0
                 report['stage'] = 'client_init'
                 report['client_init'] = exact(1)[0]
@@ -349,11 +372,40 @@ def serve_once(offer_mode, outcome, port):
                 if outcome == 'server-init-eof':
                     report['stage'] = 'intentional_server_init_eof'
                     return report
-                name = (bytes(2)+struct.pack('>I',4 if outcome=='apple-session-select' else 0)+bytes(16) if apple and outcome!='apple-no-extension' else b'') + b'synthetic-ard-peer'
-                dimension = 256 if outcome == 'fragmented-large' else 16
-                height = 8 if apple and outcome != 'apple-success' else dimension
-                send(struct.pack('>HHBBBBHHHBBBBBBI', dimension, height, 32, 24, 0, 1,
-                                 255, 255, 255, 16, 8, 0, 0, 0, 0, len(name)) + name)
+                if stalled:
+                    if outcome == 'apple-init-stalled-partial': send(server_init[:1])
+                    if outcome == 'apple-init-stalled-name': send(server_init + name[:1])
+                    report['stage'] = 'server_init_prefix_stalled'
+                    report['prefetched_prefix_sent'] = prefetched
+                    try: exact(1)
+                    except EOFError: report['closed_without_input'] = True
+                    else: raise ValueError('client input after incomplete ServerInit')
+                    listener.settimeout(0.5)
+                    try: extra, _ = listener.accept()
+                    except socket.timeout:
+                        report['second_connection'] = False; return report
+                    report['second_connection'] = True
+                    report['attempts'] += 1
+                    extra.close()
+                    raise ValueError('client retried a partial ServerInit')
+                if withheld and report['attempts'] == 1:
+                    # Authenticated, ClientInit read, and no ServerInit. The client
+                    # must close this connection without sending anything more.
+                    report['stage'] = 'server_init_withheld'
+                    report['withheld_client_init'] = report['client_init']
+                    withheld_public = client_public
+                    try: exact(1)
+                    except EOFError: report['withheld_closed_without_input'] = True
+                    else: raise ValueError('client data after withheld ServerInit')
+                    if outcome.endswith('-once'):
+                        listener.settimeout(0.5)
+                        try: extra, _ = listener.accept()
+                        except socket.timeout:
+                            report['second_connection'] = False; return report
+                        extra.close()
+                        raise ValueError('unexpected second connection')
+                    continue
+                send(server_init + name)
                 if outcome in ('apple-no-extension','apple-session-select'):
                     try: exact(1)
                     except EOFError:

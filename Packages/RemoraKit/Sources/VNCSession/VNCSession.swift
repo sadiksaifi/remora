@@ -20,6 +20,10 @@ public final class VNCSession: AgentInputSession, @unchecked Sendable {
     private let state = State()
     // Used only by the native session worker, including its input-only read hook.
     private var workerInput = VNCInputState()
+    // Used only by the native session worker. A prompted answer is kept for the one
+    // recovery handshake after a withheld Apple ServerInit, then dropped.
+    private var promptedCredentials: SessionCredentials?
+    private var recovering = false
     let handshakeAttemptID = UUID().uuidString
 
     @MainActor
@@ -284,6 +288,7 @@ public final class VNCSession: AgentInputSession, @unchecked Sendable {
         autoreleasepool {
             var handle: OpaquePointer?
             defer {
+                promptedCredentials = nil
                 state.lock.withLock {
                     state.connected = false
                     state.handle = nil
@@ -305,20 +310,44 @@ public final class VNCSession: AgentInputSession, @unchecked Sendable {
                     state.pinURL = pinURL
                 }
                 guard !state.lock.withLock({ state.stopping }) else { return }
-                guard
-                    let created = configuration.host.withCString({
-                        rm_vnc_create($0, configuration.port, configuration.vncMode == .apple, callbacks(), Unmanaged.passUnretained(self).toOpaque())
-                    })
-                else {
-                    throw Failure("LibVNCClient allocation failed.")
+                func openContext() throws -> OpaquePointer {
+                    guard
+                        let created = configuration.host.withCString({
+                            rm_vnc_create($0, configuration.port, configuration.vncMode == .apple, callbacks(), Unmanaged.passUnretained(self).toOpaque())
+                        })
+                    else {
+                        throw Failure("LibVNCClient allocation failed.")
+                    }
+                    handle = created
+                    state.lock.withLock {
+                        state.handle = created
+                        if state.stopping { rm_vnc_abort(created) }
+                    }
+                    return created
                 }
-                handle = created
-                state.lock.withLock {
-                    state.handle = created
-                    if state.stopping { rm_vnc_abort(created) }
-                }
-                let connected = rm_vnc_connect(created)
+                var created = try openContext()
+                var connected = rm_vnc_connect(created)
                 logHandshake(created, connected: connected)
+                // Native error 11: the Mac accepted ARD authentication, then sent no ServerInit before the read
+                // deadline. Retire that context under the lock, so stop() cannot abort freed memory. Freeing it
+                // closes its socket and cleanses its ARD key. Then open one new context to the same endpoint with
+                // the same profile and credentials. The connection deadline is not renewed, and every other
+                // failure stays terminal.
+                let retired =
+                    !connected && rm_vnc_error(created) == 11
+                    && state.lock.withLock {
+                        if !state.stopping { state.handle = nil }
+                        return !state.stopping
+                    }
+                if retired {
+                    handle = nil
+                    rm_vnc_free(created)
+                    recovering = true
+                    created = try openContext()
+                    connected = rm_vnc_connect(created)
+                    logHandshake(created, connected: connected)
+                }
+                promptedCredentials = nil
                 guard connected else {
                     let diagnostic = rm_vnc_diagnostic(created)
                     let reason: DisconnectReason =
@@ -508,6 +537,9 @@ public final class VNCSession: AgentInputSession, @unchecked Sendable {
             let answer: SessionCredentials?
             if let password = config.password, !usernameRequired || !config.username.isEmpty {
                 answer = .init(username: config.username, password: password)
+            } else if session.recovering, let prompted = session.promptedCredentials {
+                // The server accepted this answer on the retired transport. Do not ask again.
+                answer = prompted
             } else {
                 answer = session.challenge(cancel: nil) { responder in
                     [
@@ -518,6 +550,7 @@ public final class VNCSession: AgentInputSession, @unchecked Sendable {
                                 responder: responder, fields: usernameRequired ? .usernamePassword : .password)),
                     ]
                 }
+                session.promptedCredentials = answer
             }
             // A nil answer is the user's cancellation, not a rejected account.
             guard let answer else {
