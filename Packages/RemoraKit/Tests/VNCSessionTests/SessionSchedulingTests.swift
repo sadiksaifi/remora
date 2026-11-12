@@ -1,6 +1,7 @@
 import Foundation
 import OSLog
 import RemoraCore
+import Synchronization
 import Testing
 
 @testable import VNCSession
@@ -164,12 +165,17 @@ final class MarkerFrames: FrameSink, @unchecked Sendable {
         let frames = MarkerFrames()
         let pins = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: pins) }
+        let releases = Mutex(0)
         let session = VNCSession(
             configuration: .init(host: "127.0.0.1", port: peer.port, username: "", desktopSize: .init(width: 16, height: 16)), frameSink: frames,
-            inputFeedback: { _, _ in
+            inputFeedback: { source, feedback in
+                if case .release = feedback { releases.withLock { $0 += 1 } }
+                guard case .human = source, case .key(_, true, _) = feedback else { return }
                 // Reset at a real acknowledged write boundary. The next queued
                 // write fails while the same worker is still inside the frame read.
                 peer.resetAndWait()
+                // Teardown feedback must be safe after the peer has closed stdin.
+                peer.process.waitUntilExit()
             }, certificateStoreURL: pins)
         defer { session.disconnect() }
         let fallback = Task {
@@ -191,7 +197,10 @@ final class MarkerFrames: FrameSink, @unchecked Sendable {
             if case .stateChanged(.disconnected(let failure)) = event { reason = failure }
         }
         #expect(reason == .protocolError("The VNC input submission failed. The transport was closed."))
-        #expect(!peer.events("reset").isEmpty)
+        let releaseDeadline = ContinuousClock.now.advanced(by: .seconds(1))
+        while releases.withLock({ $0 }) < 2, ContinuousClock.now < releaseDeadline { try await Task.sleep(for: .milliseconds(5)) }
+        #expect(releases.withLock { $0 } == 2)
+        #expect(peer.events("reset").count == 1)
         #expect(frames.values.isEmpty)
     }
 }
