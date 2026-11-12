@@ -17,6 +17,7 @@ typedef struct {
     uint8_t key[16];
     rfbBool keyValid, baseline, dirty, demand, subscribed;
     double baselineRequestAt;
+    uint32_t previousInputTime;
     uint32_t left, top, right, bottom;
     mvs_decoder *decoder;
 } Apple;
@@ -193,9 +194,11 @@ rfbBool rfbRemoraAppleKey(rfbClient *c,uint32_t keysym,rfbBool down) {
     if(keysym==0xffea) keysym=0xffe8;
     uint8_t plain[16]={0xff,down?1:0},wire[18]={0x10,0}; int length=0;
     struct timespec now; clock_gettime(CLOCK_MONOTONIC,&now);
-    put32(plain+2,keysym); put32(plain+6,(uint32_t)((uint64_t)now.tv_sec*1000000+now.tv_nsec/1000));
+    uint32_t timestamp=(uint32_t)((uint64_t)now.tv_sec*1000000+now.tv_nsec/1000);
+    put32(plain+2,keysym); put32(plain+6,timestamp-a->previousInputTime);
     rfbBool ok=encrypt_aes128ecb(wire+2,&length,a->key,plain,sizeof(plain)) && length==16;
     if(ok) ok=WriteToRFBServer(c,(char *)wire,sizeof(wire));
+    if(ok) a->previousInputTime=timestamp;
     OPENSSL_cleanse(plain,sizeof(plain)); OPENSSL_cleanse(wire,sizeof(wire));
     return ok;
 }

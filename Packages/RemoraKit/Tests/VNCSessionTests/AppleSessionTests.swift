@@ -235,9 +235,10 @@ private final class ApplePixels: FrameSink, @unchecked Sendable {
         keys.map { Array($0.prefix(2)) } == [
             [0xffe1, 1], [0xffe7, 1], [0xffe7, 0], [0x0100_03b1, 1], [0x0100_03b1, 0], [0xffbe, 1], [0xffbe, 0], [0xffe1, 0],
         ])
-    #expect(keys.allSatisfy { $0.count == 3 && $0[2] > 0 })
-    let microseconds = (keys[2][2] - keys[1][2] + 4_294_967_296) % 4_294_967_296
-    #expect((20_000...2_000_000).contains(microseconds))
+    #expect(keys.allSatisfy { $0.count == 3 })
+    // Apple sends elapsed microseconds since the preceding combined input event.
+    // An absolute uptime stamp would be far outside this controlled hold interval.
+    #expect((20_000...2_000_000).contains(keys[2][2]))
     let pointers = try #require(wire["pointers"] as? [[Int]])
     #expect(pointers.contains([3, 9, 7]))
     #expect(pointers.suffix(2) == [[1, 9, 7], [0, 9, 7]])
