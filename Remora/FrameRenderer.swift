@@ -50,7 +50,7 @@ final class FrameRenderer: FrameSink, Sendable {
     // Space submissions by a refresh interval so drawables cannot queue behind vsync.
     // Acquisition stays off the main thread even when the window is occluded.
     private let presentationQueue = DispatchQueue(label: "Remote desktop presentation", qos: .userInteractive)
-    private let presentation = Mutex((inFlight: false, requested: false, earliest: CFTimeInterval.zero))
+    private let presentation = Mutex((inFlight: false, requested: false, earliest: CFTimeInterval.zero, submittedRevision: 0))
     private let counters = Mutex(Statistics())
 
     init(device: any MTLDevice) throws(Failure) {
@@ -147,7 +147,8 @@ final class FrameRenderer: FrameSink, Sendable {
         on layer: CAMetalLayer, redraw: Bool, interval: CFTimeInterval,
         didComplete: @escaping @MainActor @Sendable (CGSize?) -> Void
     ) {
-        guard desktop.needsSubmission(redraw: redraw) else {
+        let submittedRevision = presentation.withLock { $0.submittedRevision }
+        guard desktop.needsSubmission(since: submittedRevision, redraw: redraw) else {
             finish(size: nil, retry: false, didComplete: didComplete)
             return
         }
@@ -162,7 +163,7 @@ final class FrameRenderer: FrameSink, Sendable {
         pass.colorAttachments[0].storeAction = .store
         pass.colorAttachments[0].clearColor = MTLClearColor(red: 0, green: 0, blue: 0, alpha: 1)
         do {
-            _ = try desktop.submit { texture, command in
+            let submission = try desktop.submit { texture, command in
                 guard let encoder = command.makeRenderCommandEncoder(descriptor: pass) else { throw Failure.allocationFailed }
                 let size = CGSize(width: texture.width, height: texture.height)
                 let drawableSize = CGSize(width: drawable.texture.width, height: drawable.texture.height)
@@ -193,6 +194,7 @@ final class FrameRenderer: FrameSink, Sendable {
                 presentation.withLock { $0.earliest = CACurrentMediaTime() + interval }
                 command.present(drawable)
             }
+            presentation.withLock { $0.submittedRevision = submission.revision }
         } catch {
             counters.withLock { $0.lastFailure = .commandFailed(error.localizedDescription) }
             finish(size: nil, retry: true, didComplete: didComplete)
