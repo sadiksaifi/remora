@@ -22,6 +22,8 @@ final class SessionViewController: NSViewController {
     private let onPromptResolved: (UUID) -> Void
     private let onRememberCredentials: (SessionCredentials) throws -> Void
     var onControlEvent: ((String, ControlValue?) -> Void)?
+    /// Receives the shown display's name, or nil while the remote reports at most one display.
+    var onDisplayChange: ((String?) -> Void)?
     var inputGeometryRevision = 0
     private var frameBaseline = 0
     private var retiredFrameRevision = 0
@@ -97,7 +99,92 @@ final class SessionViewController: NSViewController {
     /// The server was paused and its redraw has not arrived yet.
     var awaitsRedraw: Bool { session?.awaitsRedraw == true }
     /// The frame shows the desktop as the server has it now.
-    var hasFreshFrame: Bool { frameRevision > 0 && !awaitsRedraw && frameSize == desktopSize }
+    var hasFreshFrame: Bool { frameRevision > 0 && !awaitsRedraw && frameSize == desktopSize && displayIsReady }
+
+    /// The remote displays and which one the tab shows. Empty when the remote reports none, as over RDP.
+    private(set) var displays = SessionDisplays()
+    /// False while a remote with displays switches, fails to switch, or has not shown one yet.
+    var displayIsReady: Bool { displays.displays.isEmpty || displays.isReady }
+
+    /// Shows one remote display, for the tab menu, the View menu and the command line. Until the new
+    /// display's first frame, the session drops input and captures and agent observations expire.
+    @discardableResult
+    func selectDisplay(_ id: UInt32) -> Result<Void, DisplaySelectionFailure> {
+        guard state == .connected, let session else { return .failure(.unavailable) }
+        let result = session.selectDisplay(id)
+        if case .success = result { applyDisplays(session.displays) }
+        return result
+    }
+
+    /// The display left or right of the shown one in menu order, wrapping around.
+    func selectAdjacentDisplay(forward: Bool) {
+        let ordered = displays.ordered
+        guard ordered.count > 1, displays.pendingID == nil,
+            let index = ordered.firstIndex(where: { $0.id == displays.selectedID }) ?? (forward ? ordered.indices.last : ordered.indices.first)
+        else { return }
+        let next = ordered[(index + (forward ? 1 : ordered.count - 1)) % ordered.count]
+        if case .failure = selectDisplay(next.id) { NSSound.beep() }
+    }
+
+    var canChooseDisplay: Bool { state == .connected && displays.displays.count > 1 && displays.pendingID == nil }
+
+    private func applyDisplays(_ new: SessionDisplays) {
+        let old = displays
+        guard new != old else { return }
+        displays = new
+        if new.selectedID != old.selectedID || new.isReady != old.isReady {
+            inputGeometryRevision += 1
+            control.invalidateObservation()
+        }
+        // The first display after connecting is not a switch, so it shows no switching status or note.
+        let switching = shownDisplay
+        if new.isReady { shownDisplay = true }
+        if let pending = new.pendingID, switching {
+            overlays?.showDisplaySwitch(DisplaySwitchStatus(message: "Switching to \(new.name(of: pending) ?? "Display")…"), after: .milliseconds(150))
+        } else if new.isReady {
+            overlays?.showDisplaySwitch(nil)
+            if switching, old.pendingID != nil, let note = displayNotice ?? new.name(of: new.selectedID) {
+                overlays?.confirm(note, systemImage: "display", sound: false)
+            }
+            displayNotice = nil
+        }
+        onDisplayChange?(new.name(of: new.pendingID ?? new.selectedID))
+        updateDesktopAccessibility()
+        onControlEvent?("session.display", nil)
+        // The remote dropped the shown display. Show another rather than keep a picture of nothing.
+        if let gone = old.selectedID ?? old.pendingID, new.selectedID == nil, new.pendingID == nil,
+            !new.displays.contains(where: { $0.id == gone })
+        {
+            showDefaultDisplay(after: "\(old.name(of: gone) ?? "The display") was disconnected.")
+        }
+    }
+
+    /// Replaces the display name in the note that follows the next completed switch.
+    private var displayNotice: String?
+    /// This attempt has shown a remote display.
+    private var shownDisplay = false
+
+    private func showDefaultDisplay(after notice: String) {
+        guard let id = displays.defaultID else { return }
+        displayNotice = notice
+        if case .failure = selectDisplay(id) { displayNotice = nil }
+    }
+
+    private func displaySelectionFailed(_ id: UInt32, _ reason: DisplaySelectionFailure) {
+        let name = displays.name(of: id) ?? "The display"
+        sessionLog.error("Display selection failed: \(String(describing: reason), privacy: .public)")
+        switch reason {
+        case .unavailable:
+            overlays?.showDisplaySwitch(nil)
+            showDefaultDisplay(after: "\(name) is no longer available.")
+        case .unsupported, .busy, .timedOut:
+            let status = DisplaySwitchStatus(message: "\(name) isn’t responding.") { [weak self] in
+                if case .failure = self?.selectDisplay(id) { NSSound.beep() }
+            }
+            overlays?.showDisplaySwitch(status)
+        }
+    }
+
     /// Reads the frame back off the main actor, which the copy and the GPU wait would stall.
     func showsBlankFrame() async -> Bool {
         guard let desktop = renderer?.desktop else { return false }
@@ -288,6 +375,10 @@ final class SessionViewController: NSViewController {
         capture.setSource(nil)
         retiredFrameRevision = frameRevision
         renderer = nil
+        displays = SessionDisplays()
+        displayNotice = nil
+        shownDisplay = false
+        onDisplayChange?(nil)
         state = .disconnected(nil)
         desktopView?.setSessionConnected(false)
         overlays = nil
@@ -391,6 +482,7 @@ final class SessionViewController: NSViewController {
     }
 
     func takeScreenshot(copyToClipboard: Bool = false) async throws -> URL? {
+        guard displayIsReady else { throw CaptureFailure.noFrame }
         if copyToClipboard {
             let png = try await capture.screenshotPNG()
             NSPasteboard.general.clearContents()
@@ -402,7 +494,10 @@ final class SessionViewController: NSViewController {
         return try await capture.saveScreenshot(connectionName: connection.name)
     }
 
-    func startRecording() throws { try capture.startRecording(connectionName: connection.name) }
+    func startRecording() throws {
+        guard displayIsReady else { throw CaptureFailure.noFrame }
+        try capture.startRecording(connectionName: connection.name)
+    }
 
     @discardableResult
     func stopRecording() async -> Result<URL, CaptureFailure>? { await capture.stopRecording() }
@@ -606,6 +701,10 @@ final class SessionViewController: NSViewController {
             sessionLog.info("Desktop size: \(size.width)x\(size.height)")
         case .dynamicResizeChanged(let available):
             if available { display.requestResize() }
+        case .displaysChanged(let displays):
+            applyDisplays(displays)
+        case .displaySelectionFailed(let id, let reason):
+            displaySelectionFailed(id, reason)
         case .cursorChanged(let cursor):
             desktopView.apply(cursor: cursor)
             updateOverlayCursor(cursor)
@@ -836,6 +935,9 @@ final class SessionViewController: NSViewController {
         } else {
             parts.append(state.statusTitle)
         }
+        if let name = displays.name(of: displays.pendingID ?? displays.selectedID) {
+            parts.append(displays.pendingID == nil ? "\(name) of \(displays.displays.count)" : "switching to \(name)")
+        }
         parts.append(desktopView.isKeyboardCaptured ? "keyboard captured" : "keyboard released")
         switch capture.recordingState {
         case .recording: parts.append("recording")
@@ -1035,4 +1137,18 @@ extension SessionViewController {
         }
         NotificationCenter.default.post(name: Self.controlDidChange, object: self)
     }
+}
+
+extension SessionDisplays {
+    /// Left to right, then top to bottom, as the menus number them.
+    var ordered: [RemoteDisplay] { displays.sorted { ($0.x, $0.y, $0.id) < ($1.x, $1.y, $1.id) } }
+
+    /// "Display 2" in menu order, or nil when there is nothing to choose between.
+    func name(of id: UInt32?) -> String? {
+        guard displays.count > 1, let id, let index = ordered.firstIndex(where: { $0.id == id }) else { return nil }
+        return "Display \(index + 1)"
+    }
+
+    /// The display the remote marks as main, otherwise the first in menu order.
+    var defaultID: UInt32? { (displays.first(where: \.isMain) ?? ordered.first)?.id }
 }

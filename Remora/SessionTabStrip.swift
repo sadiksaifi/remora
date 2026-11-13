@@ -173,7 +173,7 @@ private struct SessionTabView: View {
         }
         .contentShape(Capsule())
         .onTapGesture(perform: onSelect)
-        .help(tab.title)
+        .help(tab.display.map { "\(tab.title) – \($0)" } ?? tab.title)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(tab.title)
         .accessibilityValue(accessibilityValue)
@@ -261,6 +261,7 @@ private struct SessionTabView: View {
 
     private var accessibilityValue: String {
         var status = tab.needsAttention ? "Needs attention" : tab.state.statusTitle
+        if let display = tab.display { status += ", \(display)" }
         if let agentStatus { status += ", \(agentStatus.trimmingCharacters(in: ["."]))" }
         switch recording {
         case .recording: return "\(status), recording"

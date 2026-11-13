@@ -190,7 +190,8 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
         homeToolbarItem.isHidden = tabs.isEmpty
         tabsToolbarItem.isHidden = tabs.isEmpty
         window.titleVisibility = tabs.isEmpty ? .visible : .hidden
-        window.title = tabs.first { $0.id == sessionTabs.selection }?.title ?? "Connections"
+        let shown = tabs.first { $0.id == sessionTabs.selection }
+        window.title = shown.map { tab in tab.display.map { "\(tab.title) – \($0)" } ?? tab.title } ?? "Connections"
         tabStripWidth.constant = SessionTabStrip.idealWidth(forTabCount: tabs.count)
         searchToolbarItem.searchField.suggestionsDelegate = currentPage is SessionViewController ? self : nil
         for item in tabMenuItems {
@@ -260,6 +261,39 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
     @objc func takeScreenshot(_ sender: Any?) { targetSession(sender)?.captureScreenshot(copyToClipboard: false) }
     @objc func copyScreenshot(_ sender: Any?) { targetSession(sender)?.captureScreenshot(copyToClipboard: true) }
     @objc func toggleRecording(_ sender: Any?) { targetSession(sender)?.toggleRecording() }
+    @objc func showNextDisplay(_ sender: Any?) { sessionTabs.selectedSession?.selectAdjacentDisplay(forward: true) }
+    @objc func showPreviousDisplay(_ sender: Any?) { sessionTabs.selectedSession?.selectAdjacentDisplay(forward: false) }
+
+    /// A display item in a tab's menu. Choosing one from a hidden tab's menu shows that tab too,
+    /// because Remora draws only the shown tab.
+    private struct DisplayChoice {
+        let tab: UUID
+        let display: UInt32
+    }
+
+    @objc private func chooseDisplay(_ sender: NSMenuItem) {
+        guard let choice = sender.representedObject as? DisplayChoice, let session = sessionTabs.session(for: choice.tab) else { return }
+        select(choice.tab)
+        guard sessionTabs.selection == choice.tab else { return }
+        let displays = session.displays
+        guard displays.pendingID != nil || displays.selectedID != choice.display else { return }
+        if case .failure = session.selectDisplay(choice.display) { NSSound.beep() }
+    }
+
+    /// The Display section of a tab's menu, or nothing while the remote reports at most one display.
+    private func displayItems(for id: UUID) -> [NSMenuItem] {
+        guard let displays = sessionTabs.session(for: id)?.displays, displays.displays.count > 1 else { return [] }
+        let shown = displays.pendingID ?? displays.selectedID
+        return [.sectionHeader(title: "Display")]
+            + displays.ordered.map { display in
+                let item = NSMenuItem(title: displays.name(of: display.id) ?? "", action: #selector(chooseDisplay(_:)), keyEquivalent: "")
+                item.subtitle = "\(display.size.width) × \(display.size.height)" + (display.isMain ? " · Main" : "")
+                item.target = self
+                item.representedObject = DisplayChoice(tab: id, display: display.id)
+                item.state = display.id == shown ? .on : .off
+                return item
+            }
+    }
 
     /// Take Screenshot, Copy Screenshot, and Start Recording, for the Session menu and the tab actions menu.
     /// Copy Screenshot is a visible item, because an alternate would only show while holding all four modifiers.
@@ -341,6 +375,11 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
         case #selector(toggleTabKeyboardCapture(_:)):
             menuItem.state = session?.hasKeyboard == true ? .on : .off
             return session?.isConnected == true && session === sessionTabs.selectedSession
+        case #selector(chooseDisplay(_:)):
+            guard let choice = menuItem.representedObject as? DisplayChoice else { return false }
+            return sessionTabs.session(for: choice.tab)?.canChooseDisplay == true && canChangeTabs
+        case #selector(showNextDisplay(_:)), #selector(showPreviousDisplay(_:)):
+            return sessionTabs.selectedSession?.canChooseDisplay == true
         case #selector(toggleShowKeyPresses(_:)):
             menuItem.state = AppSettings.showKeyPresses ? .on : .off
             return true
@@ -359,7 +398,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
         case #selector(releaseKeyboardCapture(_:)):
             return session?.hasKeyboard ?? false
         case #selector(takeScreenshot(_:)), #selector(copyScreenshot(_:)):
-            return session?.isConnected ?? false
+            return session?.isConnected == true && session?.displayIsReady == true
         case #selector(toggleRecording(_:)):
             switch session?.capture.recordingState {
             case .recording:
@@ -370,7 +409,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
                 return false
             default:
                 menuItem.title = "Start Recording"
-                return session?.isConnected ?? false
+                return session?.isConnected == true && session?.displayIsReady == true
             }
         default:
             return true
@@ -396,10 +435,13 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
     }
 
     /// The context menu has the agent control items that apply and Close Tab. The menu button's menu
-    /// puts Capture Keyboard, Show Key Presses, and the capture items first.
+    /// puts the remote displays, Capture Keyboard, Show Key Presses, and the capture items first.
     private func tabMenu(for id: UUID, includingActions: Bool) -> NSMenu {
         let menu = NSMenu()
         if includingActions {
+            let displayItems = displayItems(for: id)
+            for item in displayItems { menu.addItem(item) }
+            if !displayItems.isEmpty { menu.addItem(.separator()) }
             let keyboard = menu.addItem(withTitle: "Capture Keyboard", action: #selector(toggleTabKeyboardCapture(_:)), keyEquivalent: "")
             keyboard.target = self
             keyboard.representedObject = id

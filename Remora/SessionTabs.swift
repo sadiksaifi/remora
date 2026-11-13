@@ -19,6 +19,8 @@ final class SessionTabs {
         var control = SessionControl.State.idle
         /// The command-line program that last took control.
         var agentName = ""
+        /// The shown remote display's name, or nil while the remote reports at most one display.
+        var display: String?
     }
 
     @ObservationIgnored var onControlEvent: ((String, SessionViewController, ControlValue?) -> Void)?
@@ -122,6 +124,7 @@ final class SessionTabs {
         sessions[id] = session
         tabs.append(Tab(id: id, title: connection.name, state: session.state))
         if shouldSelect { select(id) }
+        session.onDisplayChange = { [weak self] display in self?.update(id) { $0.display = display } }
         session.configureCommandLine(agent: agent, resolution: resolution)
         session.start()
         session.onControlEvent = { [weak self, weak session] type, data in
