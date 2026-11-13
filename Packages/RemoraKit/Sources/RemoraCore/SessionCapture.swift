@@ -47,7 +47,7 @@ public struct CaptureFrame: Sendable {
     /// True when the frame is black all over, like the frames a Windows server sends while it attaches a session.
     /// Checks a grid of pixels, and allows the few levels of noise a video codec leaves in black.
     public var isBlank: Bool {
-        pixels.withUnsafeBytes { bytes in
+        pixels.withUnsafeBytes { (bytes: UnsafeRawBufferPointer) in
             for y in stride(from: 0, to: size.height, by: max(1, size.height / 64)) {
                 for x in stride(from: 0, to: size.width, by: max(1, size.width / 64)) {
                     let pixel = (y * size.width + x) * 4
