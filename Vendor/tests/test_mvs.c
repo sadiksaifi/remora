@@ -352,8 +352,48 @@ static void test_fuzz(long iterations) {
     printf("fuzz: %ld iterations, %ld typed failures\n", iterations, errors);
 }
 
+static void test_regional_initialization(void) {
+    screen s = screen_new(48, 24);
+    /* Two displays initialize in separate messages with unused desktop between them. */
+    CHECK(decode_at(&s, &FULL, 32, 0) == MVS_OK);
+    CHECK(decode_at(&s, &FULL, 0, 16) == MVS_OK);
+    CHECK(decode_at(&s, &PARTIAL_CR_UP, 32, 0) == MVS_OK);
+    CHECK(decode_at(&s, &PARTIAL_CR_UP, 0, 16) == MVS_OK);
+    CHECK(rgb_is(&s, 32, 0, REDDISH));
+    CHECK(rgb_is(&s, 0, 16, REDDISH));
+    /* A skip still depends on existing pixels, even without DCT coefficients. */
+    buffer skip = partial_update(14, 19, bits("00 00", marker("mvs", 2), NULL));
+    CHECK(decode_at(&s, &skip, 16, 8) == MVS_E_BASELINE);
+    screen_free(&s);
+    s = screen_new(16, 8);
+    CHECK(decode(&s, &skip) == MVS_E_BASELINE);
+    screen_free(&s);
+}
+
+static void test_raw_coverage_and_geometry_reset(void) {
+    screen s=screen_new(16,8);
+    buffer skip=partial_update(14,19,bits("00 00",marker("mvs",2),NULL));
+    CHECK(mvs_mark_raw(s.decoder,16,8,0,0,16,4)==MVS_OK);
+    CHECK(!mvs_region_initialized(s.decoder,0,0,16,8));
+    CHECK(decode(&s,&skip)==MVS_E_BASELINE);
+    CHECK(mvs_mark_raw(s.decoder,16,8,0,4,16,4)==MVS_OK);
+    CHECK(mvs_region_initialized(s.decoder,0,0,16,8));
+    CHECK(decode(&s,&skip)==MVS_OK);
+    CHECK(decode(&s,&PARTIAL_CR_UP)==MVS_E_BASELINE);
+    CHECK(decode(&s,&FULL)==MVS_OK);
+    CHECK(mvs_mark_raw(s.decoder,16,8,1,1,1,1)==MVS_OK);
+    CHECK(decode(&s,&PARTIAL_CR_UP)==MVS_OK);
+    CHECK(rgb_is(&s,0,0,REDDISH));
+    mvs_reset_picture(s.decoder);
+    CHECK(!mvs_region_initialized(s.decoder,0,0,16,8));
+    CHECK(decode(&s,&skip)==MVS_E_BASELINE);
+    screen_free(&s);
+}
+
 int main(int argc, char **argv) {
     build_vectors();
+    test_regional_initialization();
+    test_raw_coverage_and_geometry_reset();
     test_reference_vectors();
     test_written_tiles();
     test_idct_flat();

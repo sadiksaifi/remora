@@ -26,6 +26,9 @@
  *  - Tiles are decoded straight into the caller's framebuffer. Match tiles
  *    copy from it. noVNC-ARD keeps a second RGBA framebuffer only because
  *    it cannot read back its canvas.
+ *  - Pixel initialization masks reject references to untouched regions. Raw
+ *    writes initialize pixels without inventing differential descriptors. Display
+ *    acknowledgements reset picture descriptors, retaining quantizers and cache.
  *  - Cache slots render on every load. noVNC-ARD's rendered-slot cache is
  *    an optimisation with the same output.
  */
@@ -50,7 +53,7 @@ typedef enum {
     MVS_E_RICE = 11,         /* unary prefix longer than MVS_MAX_RICE_PREFIX */
     MVS_E_HUFFMAN = 12,      /* no K.5 code within 16 bits */
     MVS_E_REPEAT = 13,       /* repeat tile without a previous DCT tile */
-    MVS_E_BASELINE = 14,     /* partial DCT tile without a full-update baseline */
+    MVS_E_BASELINE = 14,     /* partial update or copy reads an uninitialized baseline */
     MVS_E_CACHE_SLOT = 15,   /* cache slot 0, >= 65000, or never written */
     MVS_E_HEADER_MARKER = 16,
     MVS_E_BODY_MARKER = 17,
@@ -92,6 +95,8 @@ typedef struct mvs_decoder mvs_decoder;
 
 mvs_decoder *mvs_create(void);
 void mvs_destroy(mvs_decoder *decoder);
+/* Keep the stream cache and quantizers; invalidate picture and differential baselines. */
+void mvs_reset_picture(mvs_decoder *decoder);
 
 /* Decodes one rect payload (the bytes after the u32 length). A failure
  * leaves the decoder unusable for the session: the caller disconnects. */
@@ -99,6 +104,12 @@ mvs_error mvs_decode(mvs_decoder *decoder, const mvs_surface *surface,
                      uint32_t x, uint32_t y, uint32_t w, uint32_t h,
                      const uint8_t *payload, size_t length,
                      mvs_written_fn written, void *context, mvs_stats *stats);
+
+/* Coverage is independent of DCT descriptors. Raw writes do not establish a DCT baseline.
+ * Geometry changes discard all coverage. Query only after a successful complete message. */
+int mvs_region_initialized(const mvs_decoder *, uint32_t x, uint32_t y, uint32_t w, uint32_t h);
+mvs_error mvs_mark_raw(mvs_decoder *, uint32_t width, uint32_t height,
+                       uint32_t x, uint32_t y, uint32_t w, uint32_t h);
 
 /* Bytes the decoder holds for its current framebuffer size, computed with
  * checked arithmetic. Fills the parts when the pointers are non-null. */
