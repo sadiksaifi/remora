@@ -3,7 +3,10 @@ import Foundation
 import RemoraControl
 
 struct ImageOptions: ParsableArguments {
-    @Option(help: "Read X and Y as pixels in the screenshot that returned this image value, including one shrunk with --max-size.") var image: String?
+    @Option(
+        help:
+            "Read X and Y as pixels in this screenshot, including one shrunk with --max-size. Without --image, coordinates start at the selected display's top-left."
+    ) var image: String?
     func adding(to arguments: [String: ControlValue]) -> [String: ControlValue] {
         var arguments = arguments
         if let image { arguments["image"] = .string(image) }
@@ -123,7 +126,7 @@ struct InputCommand: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "input", abstract: "Run up to 256 ordered JSON actions from stdin within 60 seconds.",
         discussion: """
-            Stdin holds a JSON array, such as [{"action":"click","x":100,"y":200}]. Points are pixels from the top-left, or [x,y] pairs for from and to.
+            Stdin holds a JSON array, such as [{"action":"click","x":100,"y":200}]. Points are pixels from the selected display's top-left, or [x,y] pairs for from and to.
 
             ACTION       FIELDS
             move         x, y

@@ -8,6 +8,7 @@ struct ScreenshotCommand: AsyncParsableCommand {
         discussion: """
             The result's path is the saved PNG. Pass its image value as --image to pointer commands, \
             and its frame value to wait --after.
+            The image covers only the selected display. Switching displays expires earlier image mappings.
             """)
     @OptionGroup var options: CommonOptions
     @OptionGroup var target: SessionOptions
