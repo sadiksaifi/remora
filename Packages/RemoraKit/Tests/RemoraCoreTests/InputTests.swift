@@ -41,7 +41,7 @@ import Testing
             0x1C0000,
             [
                 0x21, 0x1E, 0x12, 0x13, 0x14, 0x15, 0x17, 0x16, 0x1A, 0x1C, 0x19,
-                0x04, 0x0D, 0x01, 0x0F,
+                0x04, 0x0D, 0x01, 0x0F, 0x7B, 0x7C,
             ]
         ),  // Tab navigation, Home, close, capture.
         (0x1E0000, [0x01]),  // Copy Screenshot.
@@ -63,7 +63,7 @@ import Testing
     #expect(routing.route(keyCode: 0x04, rawFlags: 0, event: .keyDown) == .remote)
     #expect(routing.route(keyCode: 0x04, rawFlags: 0, event: .keyUp) == .remote)
     #expect(routing.route(keyCode: 0x30, rawFlags: 0x100000, event: .keyDown) == .remote)  // Cmd-Tab.
-    #expect(routing.route(keyCode: 0x7B, rawFlags: 0x1C0000, event: .keyDown) == .remote)  // Window manager.
+    #expect(routing.route(keyCode: 0x7E, rawFlags: 0x1C0000, event: .keyDown) == .remote)  // Window manager.
     #expect(routing.route(keyCode: 0x35, rawFlags: 0x1C0000, event: .keyDown) == .releaseCapture)
 }
 
@@ -79,11 +79,11 @@ import Testing
     #expect(routing.route(keyCode: 0x01, rawFlags: 0x1E0000, event: .keyDown) == .beginLocalChord)
     #expect(keyboard.releaseAll() == [KeyInput(keyCode: 0x3A, isDown: false), KeyInput(keyCode: 0x3B, isDown: false)])
     routing = KeyboardRouting()
-    #expect(routing.route(keyCode: 0x7B, rawFlags: 0x1C0000, event: .keyDown) == .remote)
+    #expect(routing.route(keyCode: 0x7E, rawFlags: 0x1C0000, event: .keyDown) == .remote)
     #expect(
-        keyboard.key(keyCode: 0x7B, isDown: true, rawFlags: 0x1C0000) == [
+        keyboard.key(keyCode: 0x7E, isDown: true, rawFlags: 0x1C0000) == [
             KeyInput(keyCode: 0x37, isDown: true), KeyInput(keyCode: 0x3A, isDown: true),
-            KeyInput(keyCode: 0x3B, isDown: true), KeyInput(keyCode: 0x7B, isDown: true),
+            KeyInput(keyCode: 0x3B, isDown: true), KeyInput(keyCode: 0x7E, isDown: true),
         ])
 }
 
