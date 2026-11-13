@@ -21,6 +21,7 @@ extension CommandLineController {
                 "horizontalWheel": .bool(capabilities.contains(.horizontalWheel)), "maximumActions": .number(256), "maximumDurationMs": .number(60_000),
             ])
         }
+        try requireDisplayReady(session)
         try session.checkAgentInput()
         guard session.activeAgentInput == nil else { throw ControlFailure(.inputBusy, "Another input command is running on this session.") }
         let receipt: ScreenshotReceipt?
@@ -60,6 +61,7 @@ extension CommandLineController {
             guard session.isConnected else {
                 throw ControlFailure(.notConnected, "The session disconnected during input.")
             }
+            try requireDisplayReady(session)
             guard session.inputGeometryRevision == geometryRevision else {
                 throw ControlFailure(.imageExpired, "The desktop geometry changed during input. Take a new screenshot.")
             }

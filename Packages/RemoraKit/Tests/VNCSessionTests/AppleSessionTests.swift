@@ -167,19 +167,20 @@ private final class ApplePixels: FrameSink, @unchecked Sendable {
     #expect(wire["subscribed_before_baseline"] as? Bool == true)
     #expect(wire["requests_after_initial"] as? Int == (first == "dropped" ? 2 : 1))
     #expect(wire["subscriptions"] as? [[Int]] == [[0, 1, 0, 0, 0, 16, 8]])
-    #expect(pixels.samples.count == (first == "raw" ? 4 : 3))
+    #expect(pixels.samples.count == 3)
     #expect(Array(pixels.samples.suffix(3)) == [[148, 148, 148], [151, 147, 148], [151, 147, 148]])
 }
 
 @Test(arguments: [false, true])
 @MainActor func appleBaselineRetriesPauseWhileHiddenAndResumeWithOneFullRequest(_ baselineWhileHidden: Bool) async throws {
     let outcome = baselineWhileHidden ? "apple-hidden-baseline" : "apple-retry-hidden"
-    let (wire, _, pixels) = try await appleSession(outcome, updatesEnabled: false) { session, frames in
-        try await Task.sleep(for: .milliseconds(1300))
+    let hiddenMilliseconds = baselineWhileHidden ? 1300 : 11_000
+    let (wire, _, pixels) = try await appleSession(outcome, updatesEnabled: false, patience: .seconds(15)) { session, frames in
+        try await Task.sleep(for: .milliseconds(hiddenMilliseconds))
         #expect(frames.samples.count == (baselineWhileHidden ? 1 : 0))
         session.setDisplayUpdatesEnabled(true)
     }
-    #expect(try #require(wire["baseline_retry_ms"] as? Int) >= 1200)
+    #expect(try #require(wire["baseline_retry_ms"] as? Int) >= hiddenMilliseconds - 100)
     #expect(wire["requests_after_initial"] as? Int == 1)
     #expect(wire["subscriptions"] as? [[Int]] == [[0, 1, 0, 0, 0, 16, 8], [0, 1, 4_294_967_295, 0, 0, 16, 8], [0, 1, 0, 0, 0, 16, 8]])
     #expect(pixels.samples.count == 3)

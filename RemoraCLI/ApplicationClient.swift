@@ -30,7 +30,7 @@ struct ApplicationClient {
             }
         }
         try await prepare(client)
-        let readOnly = request.command.hasSuffix(".list") || request.command.hasSuffix(".get") || request.command == "wait"
+        let readOnly = request.command.hasSuffix(".list") || request.command.hasSuffix(".get") || ["wait", "session.displays"].contains(request.command)
         return try await client.request(request, timeout: timeout, isMutation: !readOnly)
     }
 

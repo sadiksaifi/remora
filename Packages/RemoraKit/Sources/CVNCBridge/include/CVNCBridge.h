@@ -28,6 +28,14 @@ typedef struct {
     bool cancelled;
 } RMVNCRuntimeDiagnostic;
 typedef struct {
+    uint32_t id;
+    int x, y, width, height;
+    bool main;
+} RMVNCDisplay;
+typedef struct {
+    /* Selected is a fully published picture; pending is an admitted request. */
+    void (*displays)(void *, const RMVNCDisplay *, uint32_t, uint32_t selected, bool ready, uint32_t pending, bool switching);
+    void (*displayFailure)(void *, uint32_t id, int reason); /* 1 unavailable, 2 timed out */
     void (*size)(void *, int, int, bool);
     void (*frame)(void *, const uint8_t *, int, int, int, int, int, int);
     void (*cursor)(void *, const uint8_t *, int, int, int, int);
@@ -52,13 +60,17 @@ bool rm_vnc_step(RMVNC *);
 RMVNCDiagnostic rm_vnc_diagnostic(RMVNC *);
 RMVNCRuntimeDiagnostic rm_vnc_runtime_diagnostic(RMVNC *);
 int rm_vnc_error(RMVNC *); /* 1 DNS, 2 refused, 3 timeout, 4 auth, 5 certificate, 6 protocol, 7 unsupported size,
- * 8 unsupported Apple profile, 9 Apple decode failure, 10 unsupported Apple geometry change,
- * 11 Apple ServerInit withheld after accepted authentication (one fresh context may retry) */
+ * 8 unsupported Apple profile, 9 Apple decode failure, 10 unsupported Apple geometry,
+ * 11 Apple ServerInit withheld after accepted authentication (one fresh context may retry),
+ * 12 reported generic multi-display layout without display selection */
 const char *rm_vnc_security(RMVNC *);
 bool rm_vnc_resize_supported(RMVNC *);
 bool rm_vnc_resize(RMVNC *, uint16_t, uint16_t);
 bool rm_vnc_refresh(RMVNC *);
 bool rm_vnc_set_display_demand(RMVNC *, bool);
+/* Worker-only. No combined-desktop selection is admitted. */
+bool rm_vnc_select_display(RMVNC *, uint32_t);
+bool rm_vnc_display_selection_required(RMVNC *);
 uint32_t rm_vnc_unicode_keysym(uint32_t scalar);
 bool rm_vnc_key(RMVNC *, uint32_t keysym, uint32_t qnum, bool down);
 bool rm_vnc_pointer(RMVNC *, uint16_t, uint16_t, uint8_t mask);

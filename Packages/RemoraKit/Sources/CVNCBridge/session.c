@@ -37,7 +37,15 @@ struct RMVNC {
     int confirmedWidth, confirmedHeight;
     bool resizeActive, resizeQueued, resizeReplyPending, resizeCorrectionUsed, geometryChanged;
     double resizeDeadline;
+    bool displayRequired, displayReady, displayPending, displayAcked, displayRequestQueued, displayDemandPaused, frameDirty;
+    uint32_t displayID;
+    double displayDeadline;
+    int damageLeft, damageTop, damageRight, damageBottom;
 };
+static void publish_displays(RMVNC *s);
+static void complete_frame(rfbClient *c);
+static void displays_changed(rfbClient *c);
+static bool reconcile_displays(RMVNC *s);
 uint32_t rm_vnc_apple_keysym(uint32_t);
 static char client_tag;
 static RMVNC *owner(rfbClient *c) { return rfbClientGetClientData(c, &client_tag); }
@@ -179,12 +187,19 @@ static void resize_reply(rfbClient *c, unsigned int result, uint16_t width, uint
 }
 static void size(rfbClient *c, rfbBool requested) {
     RMVNC *s = owner(c);
-    if (s->confirmedWidth != c->width || s->confirmedHeight != c->height) s->geometryChanged = true;
+    if (s->confirmedWidth != c->width || s->confirmedHeight != c->height) {
+        s->geometryChanged = true;
+        if(s->displayRequired && c->remoraDisplayCount) {
+            if(!s->displayPending) s->displayDeadline=now()+10;
+            s->displayReady=false; s->displayPending=true; s->displayAcked=false; s->frameDirty=false;
+            publish_displays(s);
+        }
+    }
     s->confirmedWidth = c->width; s->confirmedHeight = c->height;
     if (!c->remoraResizeSupported) cancel_resize(s);
-    if (s->cb.size) s->cb.size(s->user, c->width, c->height, requested);
+    if (s->cb.size && c->remoraDiagnostic.serverMinor != 889 && !s->apple) s->cb.size(s->user, c->width, c->height, requested);
 }
-static void frame(rfbClient *c, int x, int y, int w, int h) {
+static void publish_frame(rfbClient *c, int x, int y, int w, int h) {
     RMVNC *s = owner(c);
     if (s->cb.frame && !atomic_load(&s->cancelled)) {
         if (!c->remoraRuntime.failure && c->remoraRuntime.callbacks < UINT32_MAX) c->remoraRuntime.callbacks++;
@@ -214,6 +229,94 @@ static void frame(rfbClient *c, int x, int y, int w, int h) {
             p->lastCallback = performance_clock(); p->callbackNS += p->lastCallback-began;
         }
     }
+}
+static void frame(rfbClient *c, int x, int y, int w, int h) {
+    RMVNC *s=owner(c);
+    if(!s->displayRequired) { publish_frame(c,x,y,w,h); return; }
+    if(!s->apple && s->displayAcked && !rfbRemoraDisplayRaw(c,x,y,w,h)) {
+        failed(s,9); return;
+    }
+    if(!s->frameDirty) { s->damageLeft=x; s->damageTop=y; s->damageRight=x+w; s->damageBottom=y+h; }
+    else {
+        if(x<s->damageLeft) s->damageLeft=x;
+        if(y<s->damageTop) s->damageTop=y;
+        if(x+w>s->damageRight) s->damageRight=x+w;
+        if(y+h>s->damageBottom) s->damageBottom=y+h;
+    }
+    s->frameDirty=true;
+}
+static void publish_displays(RMVNC *s) {
+    rfbClient *c=s->client;
+    RMVNCDisplay displays[64];
+    for(uint32_t i=0;i<c->remoraDisplayCount;i++) {
+        rfbRemoraDisplay d=c->remoraDisplays[i];
+        displays[i]=(RMVNCDisplay){d.id,d.x,d.y,d.width,d.height,d.main!=0};
+    }
+    if(s->cb.displays) s->cb.displays(s->user,displays,c->remoraDisplayCount,s->displayID,s->displayReady,s->displayID,s->displayPending);
+}
+static int display_order(const void *a,const void *b) {
+    const rfbRemoraDisplay *x=a,*y=b;
+    if(x->x!=y->x) return x->x<y->x?-1:1;
+    if(x->y!=y->y) return x->y<y->y?-1:1;
+    return x->id<y->id?-1:x->id!=y->id;
+}
+static void displays_changed(rfbClient *c) {
+    RMVNC *s=owner(c);
+    bool waiting=s->displayPending;
+    s->confirmedWidth=c->width; s->confirmedHeight=c->height;
+    s->displayRequired=true; s->displayReady=false; s->frameDirty=false;
+    qsort(c->remoraDisplays,c->remoraDisplayCount,sizeof(c->remoraDisplays[0]),display_order);
+    bool found=false;
+    for(uint32_t i=0;i<c->remoraDisplayCount;i++) if(c->remoraDisplays[i].id==s->displayID) found=true;
+    if(!found && c->remoraDisplayCount) {
+        waiting=false;
+        if(s->displayPending && s->cb.displayFailure) s->cb.displayFailure(s->user,s->displayID,1);
+        s->displayID=c->remoraDisplays[0].id;
+        for(uint32_t i=0;i<c->remoraDisplayCount;i++) if(c->remoraDisplays[i].main) { s->displayID=c->remoraDisplays[i].id; break; }
+    }
+    s->displayPending=c->remoraDisplayCount>0;
+    s->displayAcked=s->displayPending && c->remoraDisplayID==s->displayID;
+    s->displayRequestQueued=s->displayPending && !s->displayAcked;
+    if(!waiting) s->displayDeadline=now()+10;
+    publish_displays(s);
+}
+static void complete_frame(rfbClient *c) {
+    RMVNC *s=owner(c);
+    if(s->error || !s->displayRequired || !s->frameDirty) return;
+    bool ready=s->displayAcked && rfbRemoraDisplayReady(c);
+    if(ready && (s->displayPending || s->displayReady)) {
+        bool first=s->displayPending;
+        if(first && s->cb.size) s->cb.size(s->user,c->width,c->height,false);
+        publish_frame(c,first?0:s->damageLeft,first?0:s->damageTop,
+            first?c->width:s->damageRight-s->damageLeft,first?c->height:s->damageBottom-s->damageTop);
+        if(first) { s->displayReady=true; s->displayPending=false; publish_displays(s); }
+    }
+    s->frameDirty=false;
+}
+bool rm_vnc_display_selection_required(RMVNC *s) { return s->displayRequired; }
+bool rm_vnc_select_display(RMVNC *s,uint32_t id) {
+    rfbClient *c=s->client;
+    if(!c || !s->displayRequired || s->displayPending) return false;
+    bool found=false;
+    for(uint32_t i=0;i<c->remoraDisplayCount;i++) if(c->remoraDisplays[i].id==id) found=true;
+    if(!found) return false;
+    s->displayID=id; s->displayReady=false; s->displayPending=true; s->displayAcked=false;
+    s->frameDirty=false; s->displayRequestQueued=true; s->displayDeadline=now()+10;
+    publish_displays(s);
+    return reconcile_displays(s);
+}
+static bool reconcile_displays(RMVNC *s) {
+    if(!s->displayDemandPaused && s->displayRequired && !s->client->remoraDisplayCount && now()>=s->displayDeadline) return failed(s,10);
+    if(s->displayRequestQueued) {
+        s->displayRequestQueued=false;
+        if(!rfbRemoraSelectDisplay(s->client,s->displayID)) return false;
+    }
+    if(!s->displayDemandPaused && s->displayPending && now()>=s->displayDeadline) {
+        s->displayPending=false; s->displayReady=false; s->displayAcked=false;
+        publish_displays(s);
+        if(s->cb.displayFailure) s->cb.displayFailure(s->user,s->displayID,2);
+    }
+    return true;
 }
 static void cursor(rfbClient *c, int x, int y, int w, int h, int bpp) {
     RMVNC *s = owner(c);
@@ -382,6 +485,7 @@ bool rm_vnc_connect(RMVNC *s) {
     c->format.redShift=16; c->format.greenShift=8; c->format.blueShift=0;
     c->format.redMax=c->format.greenMax=c->format.blueMax=255;
     c->RemoraDesktopSize=size; c->RemoraResizeReply=resize_reply;
+    c->RemoraDisplays=displays_changed; c->RemoraFrameComplete=complete_frame;
     c->RemoraUpdateAllowed=update_allowed;
     c->MallocFrameBuffer=allocate; c->GotFrameBufferUpdate=frame; c->GotCursorShape=cursor;
     c->GotXCutText=clipboard; c->GotXCutTextUTF8=clipboard_utf8;
@@ -392,6 +496,13 @@ bool rm_vnc_connect(RMVNC *s) {
     SetClientAuthSchemes(c,schemes,4);
     if (!rfbClientInitialise(c))
         return failed(s,c->remoraAuthFailed ? 4 : c->remoraAppleError ? c->remoraAppleError : server_init_withheld(s) ? 11 : 6);
+    s->displayRequired=s->apple || c->remoraDiagnostic.serverMinor==889;
+    if(s->displayRequired) { s->displayID=UINT32_MAX; s->displayDeadline=now()+10; }
+    if(s->displayRequired && !s->apple) {
+        c->appData.encodingsString="zrle raw";
+        const char mode[4]={10,0,0,1};
+        if(!SetFormatAndEncodings(c) || !WriteToRFBServer(c,mode,sizeof(mode))) return failed(s,6);
+    }
     size(c, false);
     s->error=0;
     return !atomic_load(&s->cancelled);
@@ -458,13 +569,13 @@ bool rm_vnc_step(RMVNC *s) {
         cancel_resize(s); return false;
     }
     if (atomic_load(&s->cancelled)) return false;
-    if (s->apple) {
+    if (s->displayRequired && c->remoraAppleState && (!c->remoraDisplayCount || s->displayPending || s->displayReady)) {
         s->inputBusy++;
         bool requested = rfbRemoraAppleRetryBaseline(c);
         s->inputBusy--;
         if (!requested) return false;
     }
-    return reconcile_resize(s);
+    return !s->error && reconcile_displays(s) && reconcile_resize(s);
 }
 RMVNCDiagnostic rm_vnc_diagnostic(RMVNC *s) {
     RMVNCDiagnostic result = s->diagnostic;
@@ -532,6 +643,12 @@ bool rm_vnc_set_display_demand(RMVNC *s, bool enabled) {
     if (atomic_load(&s->cancelled)) return false;
     s->inputBusy++;
     bool sent=rfbRemoraAppleSetDemand(s->client,enabled);
+    if(sent) {
+        /* Hidden tabs intentionally stop pictures. Give the resumed baseline
+         * its full deadline without discarding the server's acknowledgement. */
+        if(enabled && s->displayDemandPaused) s->displayDeadline=now()+10;
+        s->displayDemandPaused=!enabled;
+    }
     s->inputBusy--; return sent;
 }
 bool rm_vnc_refresh(RMVNC *s) {

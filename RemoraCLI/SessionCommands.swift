@@ -24,7 +24,8 @@ struct ConnectCommand: AsyncParsableCommand {
             The saved connection is unchanged.
             Each side must be 200 to 8192 pixels, with an even width.
             RDP starts at the saved resolution, or 1920x1080 for fit-to-window connections.
-            VNC starts at the server's size; use session resize to request other dimensions.
+            VNC starts on the server's main display when reported, otherwise its first display.
+            Use session displays to list displays and session display to choose one.
             """) var resolution: String?
     @MainActor func run() async throws {
         var args: [String: ControlValue] = ["connection": .string(connection), "background": .bool(background), "noWait": .bool(noWait)]
@@ -39,7 +40,7 @@ struct ConnectCommand: AsyncParsableCommand {
 struct SessionCommand: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "session", abstract: "Inspect and control session tabs.",
-        subcommands: [List.self, Get.self, Show.self, Disconnect.self, Close.self, Resize.self, Release.self])
+        subcommands: [List.self, Get.self, Displays.self, Display.self, Show.self, Disconnect.self, Close.self, Resize.self, Release.self])
     @OptionGroup var options: CommonOptions
     struct List: AsyncParsableCommand {
         static let configuration = CommandConfiguration(abstract: "List the open session tabs.")
@@ -47,10 +48,34 @@ struct SessionCommand: AsyncParsableCommand {
         @MainActor func run() async throws { try await options.execute(.init(command: "session.list")) }
     }
     struct Get: AsyncParsableCommand {
-        static let configuration = CommandConfiguration(abstract: "Show one session: its state, who holds control, its desktop size and its latest frame.")
+        static let configuration = CommandConfiguration(abstract: "Show a session's state, control owner, selected display, desktop size and latest frame.")
         @OptionGroup var options: CommonOptions
         @OptionGroup var target: SessionOptions
         @MainActor func run() async throws { try await options.execute(.init(command: "session.get", session: target.target)) }
+    }
+    struct Displays: AsyncParsableCommand {
+        static let configuration = CommandConfiguration(
+            abstract: "List the remote displays and the selected and pending display IDs.",
+            discussion:
+                "Display IDs belong to this session and can change after reconnecting. An empty list means the server has not reported selectable displays.")
+        @OptionGroup var options: CommonOptions
+        @OptionGroup var target: SessionOptions
+        @MainActor func run() async throws { try await options.execute(.init(command: "session.displays", session: target.target)) }
+    }
+    struct Display: AsyncParsableCommand {
+        static let configuration = CommandConfiguration(
+            abstract: "Choose one remote display and wait for its fresh picture.",
+            discussion: """
+                Use an ID from session displays. This changes the display shown in the same tab for the user and agents, without activating the tab.
+                Pointer coordinates, screenshots and recordings cover only the selected display.
+                Input and captures are unavailable while the display changes. Take a new screenshot before sending input afterward.
+                """)
+        @OptionGroup var options: CommonOptions
+        @OptionGroup var target: SessionOptions
+        @Argument(help: "Display ID from session displays.") var display: UInt32
+        @MainActor func run() async throws {
+            try await options.execute(.init(command: "session.display", session: target.target, arguments: ["display": .number(Double(display))]))
+        }
     }
     struct Show: AsyncParsableCommand {
         static let configuration = CommandConfiguration(abstract: "Select the session's tab and bring Remora to the front.")

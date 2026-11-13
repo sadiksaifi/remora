@@ -4,6 +4,7 @@
 #include <string.h>
 #include <stdio.h>
 static unsigned frames, failures, expected;
+static int regional;
 static rfbCredential *credential(rfbClient *c,int type) {
     (void)c;
     if(type!=rfbCredentialTypeUser) return NULL;
@@ -38,12 +39,21 @@ static void frame(rfbClient *c,int x,int y,int w,int h) {
             failures++;
         }
     }
+    if(regional) {
+        int left=frames<2?8:0;
+        if(x!=left || y || w!=8 || h!=8) failures++;
+        uint32_t pixel;
+        memcpy(&pixel,c->frameBuffer+(size_t)left*4,4);
+        uint32_t wanted=frames%2?0xff979394u:0xff949494u;
+        if(pixel!=wanted) failures++;
+    }
     frames++;
 }
 int main(int argc,char **argv) {
     if(argc!=3 && argc!=4) return 2;
     int demand=argc==4 && !strcmp(argv[3],"demand"), demandTested=0;
     expected=(unsigned)atoi(argv[2]);
+    regional=argc==4 && !strcmp(argv[3],"regions");
     rfbClient *c=rfbGetClient(8,3,4);
     c->remoraApple889=TRUE; c->GetCredential=credential;
     c->format.bigEndian=FALSE; c->format.redShift=16; c->format.greenShift=8; c->format.blueShift=0;

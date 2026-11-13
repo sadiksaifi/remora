@@ -88,10 +88,48 @@ public final class VNCSession: AgentInputSession, @unchecked Sendable {
     }
     public var maximumResizeArea: UInt64? { supportsDynamicResize ? 67_108_864 : nil }
     public var inputCapabilities: AgentInputCapabilities {
-        state.lock.withLock { state.connected && !state.stopping ? [.unicode, .horizontalWheel] : [] }
+        state.lock.withLock { state.connected && !state.stopping && state.pictureReady ? [.unicode, .horizontalWheel] : [] }
     }
     /// The actual negotiated security label, available after connection.
     public var negotiatedSecurity: String? { state.lock.withLock { state.security } }
+
+    public var displays: SessionDisplays { state.lock.withLock { state.displays } }
+
+    @discardableResult
+    public func selectDisplay(_ id: UInt32) -> Result<Void, DisplaySelectionFailure> {
+        state.lock.withLock {
+            guard state.connected, !state.stopping, state.displays.displays.contains(where: { $0.id == id }) else {
+                return .failure(state.displays.displays.isEmpty ? .unsupported : .unavailable)
+            }
+            guard state.displays.pendingID == nil else { return .failure(.busy) }
+            if state.displays.selectedID == id { return .success(()) }
+            state.pictureReady = false
+            state.displays = .init(displays: state.displays.displays, pendingID: id)
+            state.displaySelection = id
+            invalidateInput()
+            continuation.yield(.displaysChanged(state.displays))
+            if let handle = state.handle { rm_vnc_set_input_pending(handle, true) }
+            return .success(())
+        }
+    }
+
+    /// Called under admission lock. Held wire state is released by the worker before SetDisplay.
+    private func invalidateInput() {
+        for receipt in state.receipts { receipt.resolve(.cancelled) }
+        state.receipts.removeAll()
+        state.commands.removeAll()
+        state.agent = nil
+        state.agentCancelled = true
+        state.agentPending = false
+    }
+
+    private func releaseDisplayInput(_ handle: OpaquePointer) -> Bool {
+        let wire = Transport(handle: handle)
+        let released = workerInput.releaseForDisplay(wire: wire)
+        inputFeedback(.human, .release)
+        inputFeedback(.agent, .release)
+        return released
+    }
 
     public func requestResize(_ size: DesktopSize, scale: Double) {
         guard configuration.allowsDynamicResize, (1...16384).contains(size.width), (1...16384).contains(size.height),
@@ -143,7 +181,7 @@ public final class VNCSession: AgentInputSession, @unchecked Sendable {
 
     public func beginAgentInput() -> (any AgentInputRequest)? {
         state.lock.withLock {
-            guard state.connected, !state.stopping, state.agent == nil else { return nil }
+            guard state.connected, !state.stopping, state.pictureReady, state.agent == nil else { return nil }
             state.nextAgent &+= 1
             let id = state.nextAgent
             state.agent = id
@@ -154,7 +192,7 @@ public final class VNCSession: AgentInputSession, @unchecked Sendable {
 
     private func enqueue(_ command: Command) {
         state.lock.withLock {
-            guard state.connected, !state.stopping else { return }
+            guard state.connected, !state.stopping, state.pictureReady else { return }
             guard state.commands.count < 4096 else {
                 state.stopping = true
                 state.reason = .protocolError("The VNC input queue overflowed.")
@@ -168,7 +206,7 @@ public final class VNCSession: AgentInputSession, @unchecked Sendable {
 
     private func submit(_ event: AgentInputEvent?, id: UInt64) -> Receipt? {
         state.lock.withLock {
-            guard state.connected, !state.stopping, state.agent == id,
+            guard state.connected, !state.stopping, state.pictureReady, state.agent == id,
                 event == nil || (!state.agentCancelled && !state.agentPending)
             else { return nil }
             let receipt = Receipt()
@@ -206,7 +244,8 @@ public final class VNCSession: AgentInputSession, @unchecked Sendable {
         switch code {
         case 8: "The server sent an unsupported Apple profile message."
         case 9: "The Apple desktop update could not be decoded."
-        case 10: "The experimental Apple profile does not support changing the server desktop size."
+        case 10: "The Mac did not provide a supported single-display picture."
+        case 12: "The VNC server reports multiple displays without a supported display-selection protocol."
         default: nil
         }
     }
@@ -235,7 +274,7 @@ public final class VNCSession: AgentInputSession, @unchecked Sendable {
         }
         var failed = false
         for command in commands {
-            guard !state.lock.withLock({ state.stopping }) else { break }
+            guard state.lock.withLock({ !state.stopping && state.pictureReady }) else { break }
             switch command {
             case .humanKey(let key):
                 let scan = rm_rdp_scancode(key.keyCode, isoKeyboard)
@@ -362,7 +401,7 @@ public final class VNCSession: AgentInputSession, @unchecked Sendable {
                                 "The experimental Apple profile requires RFB 003.889, ARD authentication, and a supported shared desktop without session encryption."
                             )
                         case 9: .protocolError("The Apple desktop update could not be decoded.")
-                        case 10: .protocolError("The experimental Apple profile does not support changing the server desktop size.")
+                        case 10: .protocolError("The Mac did not provide a supported single-display picture.")
                         case 7: .protocolError(unsupportedSizeDetail(width: diagnostic.framebufferWidth, height: diagnostic.framebufferHeight))
                         // Diagnostic failure 2 is the vendor's local security-policy refusal.
                         default:
@@ -378,6 +417,7 @@ public final class VNCSession: AgentInputSession, @unchecked Sendable {
                 log.info("Connected using \(security, privacy: .public)")
                 state.lock.withLock {
                     state.connected = true
+                    state.pictureReady = !rm_vnc_display_selection_required(created)
                     state.networkDeadline = nil
                     state.security = security
                 }
@@ -386,6 +426,21 @@ public final class VNCSession: AgentInputSession, @unchecked Sendable {
                 if configuration.vncMode == .apple { emit(.cursorChanged(.systemDefault)) }
                 rm_vnc_enable_input_service(created)
                 while !state.lock.withLock({ state.stopping }) {
+                    let selection = state.lock.withLock {
+                        let id = state.displaySelection
+                        state.displaySelection = nil
+                        return id
+                    }
+                    if let selection {
+                        guard releaseDisplayInput(created) else { throw Failure("The old display input could not be released.") }
+                        if !rm_vnc_select_display(created, selection) {
+                            state.lock.withLock {
+                                state.displays = .init(displays: state.displays.displays)
+                                continuation.yield(.displaySelectionFailed(id: selection, reason: .unavailable))
+                                continuation.yield(.displaysChanged(state.displays))
+                            }
+                        }
+                    }
                     guard serviceInput(created, limit: Int.max) else { break }
                     let pending = state.lock.withLock {
                         let pending = (state.clipboard, state.resize, state.refresh, state.displayDemandChanged ? state.displayUpdatesEnabled : nil)
@@ -444,6 +499,11 @@ public final class VNCSession: AgentInputSession, @unchecked Sendable {
             guard !state.ended else { return }
             state.ended = true
             state.connected = false
+            state.pictureReady = false
+            if !state.displays.displays.isEmpty {
+                state.displays = .init(displays: state.displays.displays)
+                continuation.yield(.displaysChanged(state.displays))
+            }
             state.networkDeadline = nil
             state.cancelChallenge = nil
             state.watchdog?.cancel()
@@ -500,16 +560,40 @@ public final class VNCSession: AgentInputSession, @unchecked Sendable {
 
     private func callbacks() -> RMVNCCallbacks {
         var cb = RMVNCCallbacks()
+        cb.displays = { user, entries, count, selected, ready, pending, switching in
+            let session = owner(user)
+            let displays = (0..<Int(count)).map { index in
+                let d = entries![index]
+                return RemoteDisplay(id: d.id, x: Int(d.x), y: Int(d.y), size: .init(width: Int(d.width), height: Int(d.height)), isMain: d.main)
+            }
+            let snapshot = SessionDisplays(displays: displays, selectedID: ready ? selected : nil, pendingID: switching ? pending : nil)
+            let handle = session.state.lock.withLock {
+                // A newly admitted user request fences an older callback still on the worker.
+                if let requested = session.state.displaySelection, snapshot.pendingID != requested { return Optional<OpaquePointer>.none }
+                let changed = session.state.displays != snapshot
+                session.state.displays = snapshot
+                session.state.pictureReady = snapshot.isReady
+                if !snapshot.isReady { session.invalidateInput() }
+                if changed { session.continuation.yield(.displaysChanged(snapshot)) }
+                return !snapshot.isReady ? session.state.handle : nil
+            }
+            if let handle, !session.releaseDisplayInput(handle) { session.stop(.protocolError("The old display input could not be released.")) }
+        }
+        cb.displayFailure = { user, id, reason in
+            owner(user).emit(.displaySelectionFailed(id: id, reason: reason == 2 ? .timedOut : .unavailable))
+        }
         cb.size = { user, width, height, requested in owner(user).emit(.desktopSizeChanged(.init(width: Int(width), height: Int(height)), requested: requested))
         }
         cb.frame = { user, pixels, width, height, x, y, w, h in
             guard let pixels else { return }
             let owner = owner(user)
-            owner.frameSink.consume(
-                .init(
-                    pixels: pixels, width: Int(width), height: Int(height), stride: Int(width) * 4,
-                    dirtyRectangles: [.init(x: Int(x), y: Int(y), width: Int(w), height: Int(h))]))
             owner.state.lock.withLock {
+                guard owner.state.displaySelection == nil, !owner.state.stopping else { return }
+                owner.frameSink.consume(
+                    .init(
+                        pixels: pixels, width: Int(width), height: Int(height), stride: Int(width) * 4,
+                        dirtyRectangles: [.init(x: Int(x), y: Int(y), width: Int(w), height: Int(h))]))
+                if owner.state.displays.displays.isEmpty { owner.state.pictureReady = true }
                 if owner.state.redrawSent { (owner.state.redrawOwed, owner.state.redrawSent) = (false, false) }
             }
         }
@@ -624,6 +708,9 @@ extension VNCSession {
     }
     fileprivate final class State: @unchecked Sendable {
         let lock = NSLock()
+        var displays = SessionDisplays()
+        var displaySelection: UInt32?
+        var pictureReady = false
         var started = false, ended = false, stopping = false, connected = false, resizeSupported = false
         var handle: OpaquePointer?
         var reason: DisconnectReason?

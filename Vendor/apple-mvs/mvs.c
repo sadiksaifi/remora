@@ -361,6 +361,7 @@ void mvs_idct8x8(const int32_t block[64], uint8_t out[64]) {
  * that partial updates are coded against. */
 typedef struct {
     int8_t y[64];
+    uint64_t initialized; /* One bit per pixel, independent of DCT baseline coefficients. */
     uint32_t frame_seq;
     int32_t ref_index;
     int32_t match_x, match_y;
@@ -415,6 +416,12 @@ void mvs_destroy(mvs_decoder *d) {
     free(d);
 }
 
+void mvs_reset_picture(mvs_decoder *d) {
+    if (!d) return;
+    free(d->desc); d->desc=NULL;
+    d->tiles=0; d->fb_width=d->fb_height=d->tiles_x=0;
+}
+
 size_t mvs_memory_bytes(const mvs_decoder *d, size_t *descriptor_bytes, size_t *cache_out, size_t *tiles) {
     size_t desc = 0, total;
     if (d && d->fb_width) desc = mvs_descriptor_bytes_for(d->fb_width, d->fb_height, tiles);
@@ -444,6 +451,36 @@ static mvs_error ensure_screen(mvs_decoder *d, uint32_t width, uint32_t height) 
     return MVS_OK;
 }
 
+/* Coverage follows actual pixels, including clipped tiles and unaligned Raw rectangles.
+ * Descriptor allocation resets coverage whenever geometry changes. */
+static bool coverage(mvs_decoder *d, uint32_t x, uint32_t y, uint32_t w, uint32_t h, bool mark) {
+    if (!d || !d->desc || !w || !h || (uint64_t)x+w>d->fb_width || (uint64_t)y+h>d->fb_height) return false;
+    for (uint32_t ty=y/8; ty<=(y+h-1)/8; ty++) {
+        for (uint32_t tx=x/8; tx<=(x+w-1)/8; tx++) {
+            uint32_t left=x>tx*8?x-tx*8:0, right=x+w<tx*8+8?x+w-tx*8:8;
+            uint32_t top=y>ty*8?y-ty*8:0, bottom=y+h<ty*8+8?y+h-ty*8:8;
+            uint64_t mask=0, row=((UINT64_C(1)<<(right-left))-1)<<left;
+            for (uint32_t r=top; r<bottom; r++) mask|=row<<(r*8);
+            tile_desc *t=&d->desc[(size_t)ty*d->tiles_x+tx];
+            if (mark) {
+                t->initialized|=mask;
+            } else if ((t->initialized&mask)!=mask) return false;
+        }
+    }
+    return true;
+}
+
+int mvs_region_initialized(const mvs_decoder *d, uint32_t x, uint32_t y, uint32_t w, uint32_t h) {
+    return coverage((mvs_decoder *)d,x,y,w,h,false);
+}
+
+mvs_error mvs_mark_raw(mvs_decoder *d, uint32_t width, uint32_t height, uint32_t x, uint32_t y, uint32_t w, uint32_t h) {
+    if (!d) return MVS_E_ARGUMENT;
+    mvs_error e=ensure_screen(d,width,height);
+    if (e) return e;
+    return coverage(d,x,y,w,h,true)?MVS_OK:MVS_E_RECT;
+}
+
 /* ---- Framebuffer access ---- */
 
 static void put_tile(mvs_decoder *d, const mvs_surface *s, uint32_t tx, uint32_t ty, uint32_t tw, uint32_t th,
@@ -459,6 +496,7 @@ static void put_tile(mvs_decoder *d, const mvs_surface *s, uint32_t tx, uint32_t
             memcpy(dst + (size_t)col * 4, &px, 4);
         }
     }
+    coverage(d,tx,ty,tw,th,true);
     if (written) written(context, tx, ty, tw, th);
 }
 
@@ -473,10 +511,12 @@ static void copy_tile(mvs_decoder *d, const mvs_surface *s, int64_t sx, int64_t 
     }
     uint32_t cols = tw < d->fb_width - (uint32_t)sx ? tw : d->fb_width - (uint32_t)sx;
     uint32_t rows = th < d->fb_height - (uint32_t)sy ? th : d->fb_height - (uint32_t)sy;
+    if (!coverage(d,(uint32_t)sx,(uint32_t)sy,cols,rows,false)) { fail(&d->error,MVS_E_BASELINE); return; }
     for (uint32_t row = 0; row < rows; row++) {
         memmove(s->pixels + (size_t)(dy + row) * s->stride + (size_t)dx * 4,
                 s->pixels + (size_t)((uint32_t)sy + row) * s->stride + (size_t)sx * 4, (size_t)cols * 4);
     }
+    coverage(d,dx,dy,cols,rows,true);
     if (written && cols && rows) written(context, dx, dy, cols, rows);
 }
 
@@ -672,6 +712,7 @@ static void full_update(mvs_decoder *d, const mvs_surface *s, uint32_t x, uint32
             tile_desc *t = &d->desc[screen];
             t->frame_seq = d->frame_seq;
             t->ref_index = -1;
+            t->cb_valid = t->cr_valid = 0;
             bool rendered = true;
             if (d->stats) d->stats->full_tiles[type]++;
             switch (type) {
@@ -834,7 +875,10 @@ static mvs_error decode_rect(mvs_decoder *d, const mvs_surface *s, uint32_t x, u
     }
     if ((uint64_t)x + w > s->width || (uint64_t)y + h > s->height) return MVS_E_RECT;
     if (type == 0x00) full_update(d, s, x, y, w, h, payload, length, written, context);
-    else partial_update(d, s, x, y, w, h, payload, length, written, context);
+    else {
+        if (!coverage(d,x,y,w,h,false)) return MVS_E_BASELINE;
+        partial_update(d, s, x, y, w, h, payload, length, written, context);
+    }
     return d->error;
 }
 

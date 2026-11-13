@@ -14,7 +14,21 @@
      ${LIBVNCCLIENT_DIR}/rfbclient.c
 --- a/include/rfb/rfbclient.h
 +++ b/include/rfb/rfbclient.h
-@@ -588,7 +588,13 @@
+@@ -320,6 +320,13 @@
+ enum { RFB_REMORA_PERF_REQUEST_BEGIN=1, RFB_REMORA_PERF_REQUEST_OK,
+        RFB_REMORA_PERF_REQUEST_FAILED, RFB_REMORA_PERF_PARSED };
+ 
++/* Bounded Apple DisplayInfo2 entries, in server desktop coordinates. */
++typedef struct {
++    uint32_t id;
++    int x, y, width, height;
++    rfbBool main;
++} rfbRemoraDisplay;
++
+ typedef struct _rfbClient {
+ 	uint8_t* frameBuffer;
+ 	int width, height;
+@@ -589,7 +596,21 @@
          uint16_t remoraLastResizeWidth, remoraLastResizeHeight;
          void (*RemoraDesktopSize)(struct _rfbClient*, rfbBool requested);
          void (*RemoraResizeReply)(struct _rfbClient*, unsigned int result, uint16_t width, uint16_t height);
@@ -22,8 +36,16 @@
 +  rfbBool remoraApple889;
 +  void *remoraAppleState;
 +  int remoraAppleError;
++  rfbRemoraDisplay remoraDisplays[64];
++  uint32_t remoraDisplayCount, remoraDisplayID;
++  void (*RemoraDisplays)(struct _rfbClient*);
++  void (*RemoraFrameComplete)(struct _rfbClient*);
  } rfbClient;
 +rfbBool rfbRemoraAppleSetDemand(rfbClient *, rfbBool);
++rfbBool rfbRemoraSelectDisplay(rfbClient *, uint32_t);
++rfbBool rfbRemoraDisplayReset(rfbClient *);
++rfbBool rfbRemoraDisplayReady(rfbClient *);
++rfbBool rfbRemoraDisplayRaw(rfbClient *, int x, int y, int w, int h);
 +rfbBool rfbRemoraAppleRetryBaseline(rfbClient *);
  
  /* A first failure freezes its phase, last completed stage, and numeric errors. */
@@ -127,7 +149,7 @@
  
    if (!WriteToRFBServer(client,  (char *)&ci, sz_rfbClientInitMsg)) return FALSE;
  
-@@ -1344,6 +1368,7 @@
+@@ -1345,11 +1369,16 @@
      return FALSE;
  
  
@@ -135,7 +157,16 @@
    if (!SupportsClient2Server(client, rfbSetEncodings)) return TRUE;
  
    se->type = rfbSetEncodings;
-@@ -1561,6 +1586,7 @@
+   se->pad = 0;
+   se->nEncodings = 0;
++  if (client->remoraDiagnostic.serverMinor == 889) {
++    encs[se->nEncodings++] = rfbClientSwap32IfLE(1101);
++    encs[se->nEncodings++] = rfbClientSwap32IfLE(1105);
++  }
+ 
+   if (client->appData.encodingsString) {
+     const char *encStr = client->appData.encodingsString;
+@@ -1562,6 +1591,7 @@
  rfbBool
  SendFramebufferUpdateRequest(rfbClient* client, int x, int y, int w, int h, rfbBool incremental)
  {
@@ -143,7 +174,7 @@
    rfbRemoraRuntimeStage(client, RFB_REMORA_WRITE);
    rfbFramebufferUpdateRequestMsg fur;
  
-@@ -1740,6 +1766,7 @@
+@@ -1741,6 +1771,7 @@
  rfbBool
  SendPointerEvent(rfbClient* client,int x, int y, int buttonMask)
  {
@@ -151,7 +182,7 @@
    rfbPointerEventMsg pe;
  
    if (!SupportsClient2Server(client, rfbPointerEvent)) return TRUE;
-@@ -1840,6 +1867,7 @@
+@@ -1841,6 +1872,7 @@
  rfbBool
  SendKeyEvent(rfbClient* client, uint32_t key, rfbBool down)
  {
@@ -159,18 +190,18 @@
    rfbKeyEventMsg ke;
  
    if (!SupportsClient2Server(client, rfbKeyEvent)) return TRUE;
-@@ -2152,6 +2180,10 @@
+@@ -2153,6 +2185,10 @@
  
    if (!client->remoraRuntime.failure) client->remoraRuntime.messageType = msg.type;
    rfbRemoraRuntimeStage(client, RFB_REMORA_MESSAGE);
-+  if (client->remoraApple889) {
++  if (client->remoraApple889 || msg.type == 0x51) {
 +    int handled=rfbRemoraAppleMessage(client,msg.type);
 +    if (handled) return handled>0;
 +  }
    switch (msg.type) {
  
    case rfbSetColourMapEntries:
-@@ -2201,6 +2233,7 @@
+@@ -2202,6 +2238,7 @@
        return FALSE;
  
      msg.fu.nRects = rfbClientSwap16IfLE(msg.fu.nRects);
@@ -178,19 +209,34 @@
      if (client->remoraPerf.enabled) {
        client->remoraPerf.declaredRects = msg.fu.nRects;
        client->remoraPerf.header = client->RemoraPerformanceClock();
-@@ -2236,6 +2269,11 @@
-         client->remoraRuntime.encoding = (int32_t)rect.encoding;
+@@ -2238,6 +2275,11 @@
          client->remoraRuntime.x = rect.r.x; client->remoraRuntime.y = rect.r.y;
          client->remoraRuntime.width = rect.r.w; client->remoraRuntime.height = rect.r.h;
-+      }
-+      if (client->remoraApple889) {
+       }
++      if (client->remoraApple889 || rect.encoding == 1105 || rect.encoding == 1101) {
 +        int handled=rfbRemoraAppleRect(client,&rect);
 +        if (handled<0) return FALSE;
 +        if (handled>0) continue;
-       }
++      }
        if (rect.encoding == rfbEncodingLastRect) break;
        rfbRemoraRuntimeStage(client, RFB_REMORA_DECODE);
-@@ -2729,13 +2767,16 @@
+ 
+@@ -2314,6 +2356,14 @@
+           }
+         }
+ 
++        /* Generic RFB has no negotiated per-display selection operation here.
++         * Refuse a reported combined layout before decoding its pixel rectangles. */
++        if (appliedResize && screens > 1 && !client->remoraDisplayCount) {
++          client->remoraAppleError = 12;
++          rfbRemoraRuntimeFail(client, RFB_REMORA_DECODER, 0, 0);
++          return FALSE;
++        }
++
+         /* Status 4 means forwarded, not rejected. It carries requested geometry,
+          * not confirmed framebuffer dimensions, and preserves the capability. */
+         if (!forwardedResize || screens != 1 || invalidScreen)
+@@ -2730,13 +2780,18 @@
        /* Now we may discard "soft cursor locks". */
        client->SoftCursorUnlockScreen(client);
  
@@ -205,7 +251,9 @@
 -    if (!earlyRequested) {
 +    if (client->remoraApple889) {
 +      if (!rfbRemoraAppleEnd(client)) return FALSE;
-+    } else if (!earlyRequested) {
++    }
++    if (client->RemoraFrameComplete) client->RemoraFrameComplete(client);
++    if (!client->remoraApple889 && !earlyRequested) {
        if (!SendIncrementalFramebufferUpdateRequest(client)) return FALSE;
      }
  
@@ -225,7 +273,8 @@
    if (!SetFormatAndEncodings(client))
      return FALSE;
  
-@@ -478,5 +481,6 @@
+@@ -478,6 +481,7 @@
+   }
  
    rfbRemoraDiagnosticComplete(client, RFB_REMORA_READY);
 +  if (client->remoraApple889 && !rfbRemoraAppleSetDemand(client, TRUE)) return FALSE;

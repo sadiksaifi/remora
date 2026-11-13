@@ -178,11 +178,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         alert.informativeText = """
             Double-click a connection to open it in a tab. Each connection has at most one tab.
 
+            When the remote computer has several displays, a tab shows one. Choose it from the tab’s Tab Actions menu.
+
             In a session, Command acts as the Windows or Super key, Control as Control, and Option as Alt.
 
             These shortcuts stay on this Mac while a session has the keyboard:
             Control-Option-Command-[ and ] show the previous and next tab.
             Control-Option-Command-1 through 9 show tab 1 through 9.
+            Control-Option-Command-Right Arrow and Left Arrow show the next and previous remote display.
             Control-Option-Command-H shows the connections list.
             Control-Option-Command-W closes the tab and disconnects it.
             Control-Option-Command-S saves a screenshot of the remote desktop. Add Shift to copy it instead.
@@ -269,6 +272,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let viewMenu = addMenu("View", to: mainMenu)
         let fullScreen = viewMenu.addItem(withTitle: "Enter Full Screen", action: #selector(NSWindow.toggleFullScreen(_:)), keyEquivalent: "f")
         fullScreen.keyEquivalentModifierMask = [.command, .control]
+        viewMenu.addItem(.separator())
+        let arrows = [NSRightArrowFunctionKey, NSLeftArrowFunctionKey].map { String(UnicodeScalar(UInt16($0))!) }
+        viewMenu.addItem(withTitle: "Show Next Display", action: #selector(MainWindowController.showNextDisplay(_:)), keyEquivalent: arrows[0])
+            .keyEquivalentModifierMask = [.control, .option, .command]
+        viewMenu.addItem(withTitle: "Show Previous Display", action: #selector(MainWindowController.showPreviousDisplay(_:)), keyEquivalent: arrows[1])
+            .keyEquivalentModifierMask = [.control, .option, .command]
 
         // While a connected desktop has the keyboard, only Cmd-Q, Ctrl-Cmd-F, and the
         // Ctrl-Option-Cmd shortcuts stay local. Other shortcuts here act once it is released.

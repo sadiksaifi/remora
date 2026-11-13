@@ -63,12 +63,16 @@ extension CommandLineController {
                 }
                 let baseline = session.captureFrameBaseline
                 let geometryRevision = session.inputGeometryRevision
+                try requireDisplayReady(session)
+                let displays = session.inputBackend?.displays
                 let (png, geometry, revision) = try await session.capture.screenshot(region: region, maxSize: maxSize)
                 guard session.attemptID == id, sessions.session(for: session.connection.id) === session else {
                     throw ControlFailure(.sessionEnded, "The session attempt was closed or replaced during capture.")
                 }
-                guard session.inputGeometryRevision == geometryRevision, geometry.desktop == session.desktopSize else {
-                    throw ControlFailure(.imageExpired, "The desktop resized during capture. Take another screenshot.")
+                guard session.inputGeometryRevision == geometryRevision, geometry.desktop == session.desktopSize,
+                    session.inputBackend?.displays == displays, displayIsReady(session)
+                else {
+                    throw ControlFailure(.imageExpired, "The display changed during capture. Take another screenshot.")
                 }
                 try Task.checkCancellation()
                 let receipt = ScreenshotReceipt(session: id, geometry: geometry, frame: revision - baseline, geometryRevision: geometryRevision)
@@ -81,7 +85,7 @@ extension CommandLineController {
                         output: output.map { URL(fileURLWithPath: $0) }
                     ).path
                 }
-                guard session.inputGeometryRevision == geometryRevision else {
+                guard session.inputGeometryRevision == geometryRevision, session.inputBackend?.displays == displays, displayIsReady(session) else {
                     throw ControlFailure(.imageExpired, "Control changed during capture. Take another screenshot.")
                 }
                 session.observedForAgent()
@@ -104,6 +108,7 @@ extension CommandLineController {
                 session.addFrameDemand()
                 defer { session.removeFrameDemand() }
                 try await waitForSettledFrame(session, id: id, deadline: deadline)
+                try requireDisplayReady(session)
                 try session.capture.startRecording(connectionName: session.connection.name, output: output)
             case "recording.stop":
                 if case .failure(let failure) = await session.stopRecording() { throw failure }
@@ -121,7 +126,9 @@ extension CommandLineController {
                     }
                     session.addFrameDemand()
                     defer { session.removeFrameDemand() }
-                    try await waitFor(session, id: id, timeout: timeout) { session.state == .connected && session.frameRevision > after }
+                    try await waitFor(session, id: id, timeout: timeout) {
+                        session.state == .connected && session.frameRevision > after && displayIsReady(session)
+                    }
                     return ControlReply(.success(sessionInfo(session)))
                 case "recording-finished":
                     guard request.arguments["after"] == nil else { throw ControlFailure(.invalidArgument, "after applies only to frame waits.") }

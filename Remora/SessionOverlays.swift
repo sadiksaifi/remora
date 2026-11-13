@@ -10,6 +10,8 @@ final class SessionOverlays: NSObject {
     private var permissionView: NSView?
     private var confirmationView: NSView?
     private var capsuleView: NSView?
+    private var displaySwitchView: NSView?
+    private var displaySwitchTask: Task<Void, Never>?
     private var capsule: AgentControlCapsule?
     private var offeredPermission = false
     private let computerName: String
@@ -130,12 +132,52 @@ final class SessionOverlays: NSObject {
         reconnectingView = overlay
     }
 
-    /// Shows a short note at the bottom of the desktop and plays the system screen capture sound, like
-    /// macOS screenshots do. The note is not part of any capture and ignores the pointer.
-    func confirm(_ message: String) {
+    /// Dims the last frame under a switching or failure capsule, or removes it for nil. The dimming takes
+    /// the pointer, so clicks don't reach a desktop that is switching. `delay` keeps fast switches quiet.
+    func showDisplaySwitch(_ status: DisplaySwitchStatus?, after delay: Duration = .zero) {
+        displaySwitchTask?.cancel()
+        displaySwitchTask = nil
+        guard let status else {
+            displaySwitchView?.removeFromSuperview()
+            displaySwitchView = nil
+            return
+        }
+        guard delay > .zero else { return presentDisplaySwitch(status) }
+        displaySwitchTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: delay)
+            guard !Task.isCancelled else { return }
+            self?.presentDisplaySwitch(status)
+        }
+    }
+
+    private func presentDisplaySwitch(_ status: DisplaySwitchStatus) {
+        if let view = displaySwitchView as? NSHostingView<DisplaySwitchStatus> {
+            view.rootView = status
+        } else if let desktop {
+            let view = NSHostingView(rootView: status)
+            view.sizingOptions = []
+            view.translatesAutoresizingMaskIntoConstraints = false
+            desktop.addSubview(view, positioned: .below, relativeTo: reconnectingView)
+            NSLayoutConstraint.activate([
+                view.topAnchor.constraint(equalTo: desktop.topAnchor),
+                view.bottomAnchor.constraint(equalTo: desktop.bottomAnchor),
+                view.leadingAnchor.constraint(equalTo: desktop.leadingAnchor),
+                view.trailingAnchor.constraint(equalTo: desktop.trailingAnchor),
+            ])
+            displaySwitchView = view
+        }
+        guard let displaySwitchView else { return }
+        NSAccessibility.post(
+            element: displaySwitchView, notification: .announcementRequested,
+            userInfo: [.announcement: status.message, .priority: NSAccessibilityPriorityLevel.high.rawValue])
+    }
+
+    /// Shows a short note at the bottom of the desktop. Capture notes play the system screen capture sound,
+    /// like macOS screenshots do. The note is not part of any capture and ignores the pointer.
+    func confirm(_ message: String, systemImage: String = "checkmark.circle.fill", sound: Bool = true) {
         confirmationView?.removeFromSuperview()
         guard let desktop else { return }
-        let note = PassthroughHostingView(rootView: CaptureConfirmation(message: message))
+        let note = PassthroughHostingView(rootView: CaptureConfirmation(message: message, systemImage: systemImage))
         note.sizingOptions = .intrinsicContentSize
         note.translatesAutoresizingMaskIntoConstraints = false
         desktop.addSubview(note)
@@ -147,7 +189,7 @@ final class SessionOverlays: NSObject {
         NSAccessibility.post(
             element: note, notification: .announcementRequested,
             userInfo: [.announcement: message, .priority: NSAccessibilityPriorityLevel.medium.rawValue])
-        if UserDefaults.standard.object(forKey: "com.apple.sound.uiaudio.enabled") as? Bool ?? true {
+        if sound, UserDefaults.standard.object(forKey: "com.apple.sound.uiaudio.enabled") as? Bool ?? true {
             Self.captureSound?.play()
         }
         Task { @MainActor [weak self, weak note] in

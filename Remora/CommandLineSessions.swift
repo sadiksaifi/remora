@@ -37,7 +37,7 @@ extension CommandLineController {
             reason = failure.map { .string($0.description) } ?? .null
         }
         let size = session.desktopSize ?? session.frameSize
-        return .object([
+        var fields: [String: ControlValue] = [
             "session": .string(session.attemptID.uuidString), "connection": .string(session.connection.id.uuidString),
             "name": .string(session.connection.name), "host": .string(session.attemptConnection.host),
             "port": .number(Double(session.attemptConnection.port)), "state": .string(state), "reason": reason,
@@ -46,12 +46,43 @@ extension CommandLineController {
             "controlTransferring": .bool(session.control.isTransferring),
             "startedBy": .string(session.startedBy), "dynamicResize": .bool(session.supportsDynamicResize),
             "desktop": size.map { .array([.number(Double($0.width)), .number(Double($0.height))]) } ?? .null,
-            "hasFrame": .bool(session.frameSize != nil && session.frameRevision > 0),
+            "hasFrame": .bool(session.frameSize != nil && session.frameRevision > 0 && displayIsReady(session)),
             "frame": .number(Double(session.frameRevision)),
             "recording": recordingInfo(session),
             "sizing": .string((session.attemptResolution ?? session.attemptConnection.resolution) == .fitToWindow ? "fit" : "fixed"),
             "prompt": session.pendingPrompt.map { .string($0.id.uuidString) } ?? .null,
-        ])
+        ]
+        fields.merge(displayFields(session)) { _, display in display }
+        return .object(fields)
+    }
+
+    func displayIsReady(_ session: SessionViewController) -> Bool {
+        guard let state = session.inputBackend?.displays else { return true }
+        return state.displays.isEmpty || state.isReady
+    }
+
+    func requireDisplayReady(_ session: SessionViewController) throws {
+        guard displayIsReady(session) else {
+            throw ControlFailure(.displayNotReady, "The selected display has no complete picture yet.")
+        }
+    }
+
+    private func displayFields(_ session: SessionViewController) -> [String: ControlValue] {
+        let state = session.inputBackend?.displays ?? SessionDisplays()
+        return [
+            "displays": .array(
+                state.displays.enumerated().map { index, display in
+                    .object([
+                        "display": .number(Double(display.id)), "number": .number(Double(index + 1)),
+                        "main": .bool(display.isMain),
+                        "origin": .array([.number(Double(display.x)), .number(Double(display.y))]),
+                        "size": .array([.number(Double(display.size.width)), .number(Double(display.size.height))]),
+                    ])
+                }),
+            "selectedDisplay": state.selectedID.map { .number(Double($0)) } ?? .null,
+            "pendingDisplay": state.pendingID.map { .number(Double($0)) } ?? .null,
+            "displayReady": .bool(session.isConnected && (state.displays.isEmpty || state.isReady)),
+        ]
     }
 
     func promptInfo(_ session: SessionViewController) -> ControlValue? {
@@ -134,7 +165,7 @@ extension CommandLineController {
         var firstFrameAt: TimeInterval?
         do {
             try await waitFor(session, id: id, timeout: max(0, deadline - ProcessInfo.processInfo.systemUptime)) {
-                guard session.state == .connected, session.hasFreshFrame,
+                guard session.state == .connected, session.hasFreshFrame, displayIsReady(session),
                     let arrival = session.lastFrameArrival
                 else { return false }
                 let now = ProcessInfo.processInfo.systemUptime
@@ -275,7 +306,8 @@ extension CommandLineController {
         }
         let allowed: Set<String>
         switch request.command {
-        case "session.get", "session.show", "session.disconnect", "session.close": allowed = []
+        case "session.get", "session.displays", "session.show", "session.disconnect", "session.close": allowed = []
+        case "session.display": allowed = ["display"]
         case "session.resize": allowed = ["resolution"]
         case "wait": allowed = ["for"]
         default: throw ControlFailure(.unknownCommand, "Unknown session command.")
@@ -285,6 +317,40 @@ extension CommandLineController {
         let id = session.attemptID
         switch request.command {
         case "session.get": return sessionInfo(session)
+        case "session.displays":
+            var fields = displayFields(session)
+            fields["session"] = .string(id.uuidString)
+            return .object(fields)
+        case "session.display":
+            try session.checkUserHold()
+            try promptRequired(session)
+            guard session.isConnected, let backend = session.inputBackend else {
+                throw ControlFailure(.notConnected, "The session is not connected.")
+            }
+            guard case .number(let number) = request.arguments["display"], number.isFinite,
+                number.rounded() == number, number >= 0, number <= Double(UInt32.max)
+            else { throw ControlFailure(.invalidArgument, "display must be a display ID from session displays.") }
+            let display = UInt32(number)
+            session.addFrameDemand()
+            defer { session.removeFrameDemand() }
+            switch session.selectDisplay(display) {
+            case .success: break
+            case .failure(.unsupported): throw ControlFailure(.unsupported, "This session does not support selecting a display.")
+            case .failure(.unavailable): throw ControlFailure(.displayUnavailable, "The display is no longer available.")
+            case .failure(.busy): throw ControlFailure(.displayNotReady, "Another display switch is in progress.")
+            case .failure(.timedOut): throw ControlFailure(.frameTimeout, "The display switch timed out.")
+            }
+            try await waitFor(session, id: id, timeout: max(0, deadline - ProcessInfo.processInfo.systemUptime)) {
+                let state = backend.displays
+                guard state.displays.contains(where: { $0.id == display }) else {
+                    throw ControlFailure(.displayUnavailable, "The display was disconnected during the switch.")
+                }
+                if state.isReady, state.selectedID == display { return session.hasFreshFrame }
+                guard state.pendingID != nil else {
+                    throw ControlFailure(.displayNotReady, "The requested display did not become ready. Inspect its current state before retrying.")
+                }
+                return false
+            }
         case "session.show":
             sessions.select(session.connection.id)
             show(nil)
@@ -322,8 +388,10 @@ extension CommandLineController {
                 return sessionInfo(session)
             }
             guard ["connected", "disconnected"].contains(target) else { throw ControlFailure(.invalidArgument, "Wait supports connected or disconnected.") }
+            if target == "connected" { session.addFrameDemand() }
+            defer { if target == "connected" { session.removeFrameDemand() } }
             try await waitFor(session, id: id, timeout: timeout, disconnected: target == "disconnected") {
-                target == "connected" ? session.state == .connected : !session.state.isLive
+                target == "connected" ? session.state == .connected && session.hasFreshFrame && displayIsReady(session) : !session.state.isLive
             }
         default: break
         }

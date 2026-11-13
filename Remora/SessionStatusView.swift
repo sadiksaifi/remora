@@ -212,14 +212,55 @@ struct ShortcutPermissionBanner: View {
 /// The short confirmation after a screenshot.
 struct CaptureConfirmation: View {
     let message: String
+    var systemImage = "checkmark.circle.fill"
 
     var body: some View {
-        Label(message, systemImage: "checkmark.circle.fill")
+        Label(message, systemImage: systemImage)
             .font(.headline)
             .padding(.horizontal, 16)
             .padding(.vertical, 10)
             .glassEffect(.regular, in: .capsule)
             .accessibilityIdentifier("captureConfirmation")
+    }
+}
+
+/// The dimmed last frame while the tab switches to another remote display, with a glass capsule at
+/// its center. A failed switch offers Try Again; the tab menu still offers the other displays.
+struct DisplaySwitchStatus: View {
+    let message: String
+    var retry: (() -> Void)?
+
+    var body: some View {
+        ZStack {
+            Color.black.opacity(0.35)
+            HStack(spacing: 8) {
+                if retry == nil {
+                    ProgressView().controlSize(.small)
+                } else {
+                    Image(systemName: "exclamationmark.triangle")
+                        .font(.system(size: 14))
+                        .foregroundStyle(.secondary)
+                        .accessibilityHidden(true)
+                }
+                Text(message)
+                    .font(.system(size: 13, weight: .semibold))
+                    .lineLimit(1)
+                if let retry {
+                    Button("Try Again", action: retry)
+                        .buttonStyle(.borderedProminent)
+                        .buttonBorderShape(.capsule)
+                        .controlSize(.large)
+                        .accessibilityIdentifier("displayRetry")
+                }
+            }
+            .padding(.leading, 14)
+            .padding(.trailing, retry == nil ? 16 : 5)
+            .frame(height: 38)
+            .glassEffect(.regular, in: .capsule)
+            .accessibilityElement(children: .contain)
+            .accessibilityLabel(message)
+            .accessibilityIdentifier("displaySwitchStatus")
+        }
     }
 }
 

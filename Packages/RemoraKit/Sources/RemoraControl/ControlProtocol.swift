@@ -122,6 +122,8 @@ public struct ControlFailure: Error, Codable, Sendable, Equatable, LocalizedErro
         case frameTimeout = "frame-timeout"
         case streamOverflow = "stream-overflow"
         case imageExpired = "image-expired"
+        case displayUnavailable = "display-unavailable"
+        case displayNotReady = "display-not-ready"
         case timeout, cancelled
 
         public var exitCode: Int32 {
@@ -129,10 +131,10 @@ public struct ControlFailure: Error, Codable, Sendable, Equatable, LocalizedErro
             case .internal, .captureFailed, .ioFailed, .outcomeUnknown, .storeFailed, .credentialFailed, .backendFailed: 1
             case .invalidArgument, .unknownCommand: 2
             case .appUnavailable, .notFound, .ambiguousTarget, .unsupported, .sessionRequired, .sessionEnded, .promptResolved, .connectionDeleted,
-                .streamOverflow, .imageExpired:
+                .streamOverflow, .imageExpired, .displayUnavailable:
                 3
             case .notConnected, .promptRequired, .userActive, .agentStopped, .inputBusy, .observationRequired, .sessionExists, .noFrame, .recordingBusy,
-                .destinationExists:
+                .destinationExists, .displayNotReady:
                 4
             case .timeout, .frameTimeout: 5
             case .cancelled: 130
@@ -173,6 +175,9 @@ public struct ControlFailure: Error, Codable, Sendable, Equatable, LocalizedErro
             case .promptResolved: "Inspect `remora prompt list`."
             case .destinationExists: "Choose a path that does not exist yet."
             case .frameTimeout: "Inspect `remora session get`."
+            case .displayUnavailable: "List current display IDs with `remora session displays`, then choose one with `remora session display D`."
+            case .displayNotReady:
+                "Inspect `remora session displays`. Wait for the pending display, or retry with `remora session display D`, then take a new screenshot."
             case .streamOverflow: "Subscribe again and inspect the new snapshot."
             case .cancelled: ""
             }
