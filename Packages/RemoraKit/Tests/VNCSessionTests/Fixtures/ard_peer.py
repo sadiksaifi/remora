@@ -98,6 +98,7 @@ def apple_frames(outcome, exact, send, key, report, connection):
     def update(payload, encoding=1011, rect=(0,0,16,8)):
         send(struct.pack('>BBHHHHHi',0,0,1,*rect,encoding) + (struct.pack('>I',len(payload)) if encoding==1011 else b'') + payload)
     report['keys'] = []; report['pointers'] = []; report['scrolls'] = []
+    report['combined_pointers'] = 0
     report['requests_after_initial'] = 0; report['subscriptions'] = []
     def client_message():
         kind = exact(1)[0]
@@ -107,10 +108,18 @@ def apple_frames(outcome, exact, send, key, report, connection):
         elif kind == 0x10:
             flags = exact(1)[0]
             plain = aes_ecb(key,exact(16),True)
-            if flags != 0 or plain[0] != 255 or any(plain[10:]): raise ValueError('encrypted event framing')
-            down, symbol, timestamp = plain[1], int.from_bytes(plain[2:6],'big'), int.from_bytes(plain[6:10],'big')
-            if down not in (0,1): raise ValueError('key direction')
-            report['keys'].append([symbol,down,timestamp])
+            if flags != 0: raise ValueError('encrypted event flags')
+            if plain[0] == 255:
+                if any(plain[10:]): raise ValueError('key-only event framing')
+                down, symbol, timestamp = plain[1], int.from_bytes(plain[2:6],'big'), int.from_bytes(plain[6:10],'big')
+                if down not in (0,1): raise ValueError('key direction')
+                report['keys'].append([symbol,down,timestamp])
+            elif plain[10] == 255:
+                if any(plain[:6]): raise ValueError('pointer-only event framing')
+                mask,x,y = struct.unpack('>BHH',plain[11:])
+                report['pointers'].append([mask,x,y])
+                report['combined_pointers'] += 1
+            else: raise ValueError('missing combined event marker')
         elif kind == 5:
             mask,x,y = struct.unpack('>BHH',exact(5))
             report['pointers'].append([mask,x,y])
@@ -127,6 +136,13 @@ def apple_frames(outcome, exact, send, key, report, connection):
             report['requests_after_initial'] += 1
         else: raise ValueError('unexpected Apple client message')
         return kind
+    # A valid server may wait for the automatic-update subscription before its
+    # first frame, even after admitting the initial explicit full request.
+    for _ in range(64):
+        if client_message()==9: break
+    else: raise ValueError('missing startup subscription')
+    if report['subscriptions'][-1] != [0,1,0,0,0,16,8]: raise ValueError('subscription region')
+    report['subscribed_before_baseline'] = True
     if outcome == 'apple-no-baseline':
         update(partial); return
     if outcome == 'apple-truncated':
@@ -145,16 +161,11 @@ def apple_frames(outcome, exact, send, key, report, connection):
         report['baseline_retry_ms'] = round((time.monotonic()-began)*1000)
         if outcome == 'apple-retry-hidden': time.sleep(0.1)
     update(full)
-    # Subscription may follow already-admitted input. Read independently until it arrives.
-    for _ in range(64):
-        if client_message()==9: break
-    else: raise ValueError('missing subscription')
-    if report['subscriptions'][-1] != [0,1,0,0,0,16,8]: raise ValueError('subscription region')
     if outcome == 'apple-hidden-baseline':
-        report['baseline_retry_ms'] = round((time.monotonic()-began)*1000)
         for _ in range(64):
             if client_message()==3: break
         else: raise ValueError('missing resume refresh')
+        report['baseline_retry_ms'] = round((time.monotonic()-began)*1000)
     if outcome == 'apple-geometry':
         update(b'',-223,(0,0,32,8)); return
     if outcome == 'apple-bad-cache':
@@ -210,14 +221,30 @@ def apple_frames(outcome, exact, send, key, report, connection):
             raise ValueError('unexpected client message after baseline')
 
 
+def accepted(listener, report, deadline):
+    """Yield each accepted connection in turn. Leaving the loop closes the last one."""
+    import time
+    while True:
+        listener.settimeout(max(0.001, deadline - time.monotonic()))
+        connection, _ = listener.accept()
+        report['attempts'] += 1
+        with connection:
+            yield connection
+
+
 def serve_once(offer_mode, outcome, port):
     # Imported only for the explicitly requested listener subcommand. This
     # helper has no remote host argument, DNS call, connect call, or retry loop.
+    # Only an init-withheld outcome accepts a second connection, from the client.
     import socket
     import time
     known_answer_check()
     report = {'synthetic_only': True, 'attempts': 0, 'stage': 'listen', 'credentials_valid': False}
-    deadline = time.monotonic() + 10
+    # A withheld ServerInit holds the client for its ten-second read deadline.
+    withheld = outcome.endswith(('init-withheld', 'init-withheld-once'))
+    withheld_public = None
+    stalled = outcome.startswith('apple-init-stalled-')
+    deadline = time.monotonic() + (16 if withheld or stalled else 10)
     offers = {
         'apple-mixed': OFFERS,
         'ard-only': [30],
@@ -233,11 +260,8 @@ def serve_once(offer_mode, outcome, port):
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
             listener.bind(('127.0.0.1', port))
             listener.listen(1)
-            listener.settimeout(max(0.001, deadline - time.monotonic()))
             print(json.dumps({'loopback_port': listener.getsockname()[1]}), flush=True)
-            connection, _ = listener.accept()
-            report['attempts'] = 1
-            with connection:
+            for connection in accepted(listener, report, deadline):
                 if outcome in ('fragmented-small', 'fragmented-large'):
                     connection.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
                 def exact(count):
@@ -313,6 +337,8 @@ def serve_once(offer_mode, outcome, port):
                 ciphertext, client_public = exact(128), int.from_bytes(exact(SIZE), 'big')
                 if not 1 < client_public < P - 1:
                     raise ValueError('invalid client public value')
+                if withheld_public is not None:
+                    report['fresh_exchange'] = client_public != withheld_public
                 shared = fixed(pow(client_public, SERVER_EXPONENT, P))
                 plaintext = aes_ecb(hashlib.md5(shared).digest(), ciphertext, True)
                 fields = [plaintext[:64], plaintext[64:]]
@@ -329,7 +355,15 @@ def serve_once(offer_mode, outcome, port):
                         else: raise ValueError('client data after failed authentication')
                     report['security_result'] = 1
                     return report
-                send(struct.pack('>I', 0))
+                name = (bytes(2)+struct.pack('>I',4 if outcome=='apple-session-select' else 0)+bytes(16) if apple and outcome!='apple-no-extension' else b'') + b'synthetic-ard-peer'
+                dimension = 256 if outcome == 'fragmented-large' else 16
+                height = 8 if apple and outcome != 'apple-success' else dimension
+                server_init = struct.pack('>HHBBBBHHHBBBBBBI', dimension, height, 32, 24, 0, 1,
+                                          255, 255, 255, 16, 8, 0, 0, 0, 0, len(name))
+                prefetched = int(outcome.rsplit('-',1)[1]) if outcome.startswith('apple-init-stalled-prefetched-') else 0
+                # One peer write makes the success result and early header prefix
+                # available to the client's greedy AuthResult socket read together.
+                send(struct.pack('>I', 0) + server_init[:prefetched])
                 report['security_result'] = 0
                 report['stage'] = 'client_init'
                 report['client_init'] = exact(1)[0]
@@ -338,11 +372,40 @@ def serve_once(offer_mode, outcome, port):
                 if outcome == 'server-init-eof':
                     report['stage'] = 'intentional_server_init_eof'
                     return report
-                name = (bytes(2)+struct.pack('>I',4 if outcome=='apple-session-select' else 0)+bytes(16) if apple and outcome!='apple-no-extension' else b'') + b'synthetic-ard-peer'
-                dimension = 256 if outcome == 'fragmented-large' else 16
-                height = 8 if apple and outcome != 'apple-success' else dimension
-                send(struct.pack('>HHBBBBHHHBBBBBBI', dimension, height, 32, 24, 0, 1,
-                                 255, 255, 255, 16, 8, 0, 0, 0, 0, len(name)) + name)
+                if stalled:
+                    if outcome == 'apple-init-stalled-partial': send(server_init[:1])
+                    if outcome == 'apple-init-stalled-name': send(server_init + name[:1])
+                    report['stage'] = 'server_init_prefix_stalled'
+                    report['prefetched_prefix_sent'] = prefetched
+                    try: exact(1)
+                    except EOFError: report['closed_without_input'] = True
+                    else: raise ValueError('client input after incomplete ServerInit')
+                    listener.settimeout(0.5)
+                    try: extra, _ = listener.accept()
+                    except socket.timeout:
+                        report['second_connection'] = False; return report
+                    report['second_connection'] = True
+                    report['attempts'] += 1
+                    extra.close()
+                    raise ValueError('client retried a partial ServerInit')
+                if withheld and report['attempts'] == 1:
+                    # Authenticated, ClientInit read, and no ServerInit. The client
+                    # must close this connection without sending anything more.
+                    report['stage'] = 'server_init_withheld'
+                    report['withheld_client_init'] = report['client_init']
+                    withheld_public = client_public
+                    try: exact(1)
+                    except EOFError: report['withheld_closed_without_input'] = True
+                    else: raise ValueError('client data after withheld ServerInit')
+                    if outcome.endswith('-once'):
+                        listener.settimeout(0.5)
+                        try: extra, _ = listener.accept()
+                        except socket.timeout:
+                            report['second_connection'] = False; return report
+                        extra.close()
+                        raise ValueError('unexpected second connection')
+                    continue
+                send(server_init + name)
                 if outcome in ('apple-no-extension','apple-session-select'):
                     try: exact(1)
                     except EOFError:
@@ -368,6 +431,10 @@ def serve_once(offer_mode, outcome, port):
                             raise ValueError('initial full request must follow SetMode')
                         if apple and outcome != 'apple-success':
                             apple_frames(outcome,exact,send,hashlib.md5(shared).digest(),report,connection)
+                            # Deliver every queued frame before closing, including when
+                            # the native driver has sent input that this case ignores.
+                            connection.shutdown(socket.SHUT_WR)
+                            while connection.recv(4096): pass
                         elif outcome in ('fragmented-small', 'fragmented-large'):
                             compressed = synthetic_zrle(dimension)
                             report['compressed_bytes'] = len(compressed)
@@ -397,10 +464,12 @@ def serve_once(offer_mode, outcome, port):
                             # Tight control 12 is reserved, not a valid subencoding.
                             send(struct.pack('>BBHHHHHi', 0, 0, 1, 0, 0, 16, 16, 7) + bytes([0xc0]))
                         else:
-                            send(struct.pack('>BBHHHHHi', 0, 0, 1, 0, 0, 16, 16, 0) + bytes(16 * 16 * 4))
                             if outcome == 'apple-success':
                                 if exact(1) != bytes([9]): raise ValueError('subscription required')
                                 report['subscription'] = list(struct.unpack('>BHIHHHH',exact(15)))
+                                if report['subscription'] != [0,1,0,0,0,16,16]: raise ValueError('subscription region')
+                                report['subscribed_before_baseline'] = True
+                            send(struct.pack('>BBHHHHHi', 0, 0, 1, 0, 0, 16, 16, 0) + bytes(16 * 16 * 4))
                             if outcome == 'runtime-success':
                                 if exact(1) != bytes([3]):
                                     raise ValueError('incremental request required')

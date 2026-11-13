@@ -354,6 +354,16 @@ static bool connect_socket(RMVNC *s) {
     }
     return false;
 }
+/* Error 11. The Apple-profile server accepted ARD authentication and ClientInit
+ * was written. The ServerInit read then reached its deadline without receiving
+ * a byte. A partial ServerInit, a stalled name, EOF, and every other mode or
+ * phase stay error 6. */
+static bool server_init_withheld(RMVNC *s) {
+    const rfbClient *c = s->client;
+    const rfbRemoraDiagnostic *d = &c->remoraDiagnostic;
+    return s->apple && c->authScheme == rfbARD && d->failure == RFB_REMORA_TIMEOUT && d->phase == RFB_REMORA_SERVER_INIT &&
+        d->lastSuccess == RFB_REMORA_CLIENT_INIT && !d->serverInitPrefetchedBytes && !c->buffered && !c->desktopName;
+}
 bool rm_vnc_connect(RMVNC *s) {
     if (!connect_socket(s)) {
         if (!s->diagnostic.failure) s->diagnostic.failure = s->error == 3 ? RFB_REMORA_TIMEOUT : RFB_REMORA_IO;
@@ -380,7 +390,8 @@ bool rm_vnc_connect(RMVNC *s) {
     c->appData.useRemoteCursor=true; c->canHandleNewFBSize=true;
     const uint32_t schemes[]={rfbVeNCrypt,rfbARD,rfbVncAuth,rfbNoAuth};
     SetClientAuthSchemes(c,schemes,4);
-    if (!rfbClientInitialise(c)) return failed(s,c->remoraAuthFailed ? 4 : c->remoraAppleError ? c->remoraAppleError : 6);
+    if (!rfbClientInitialise(c))
+        return failed(s,c->remoraAuthFailed ? 4 : c->remoraAppleError ? c->remoraAppleError : server_init_withheld(s) ? 11 : 6);
     size(c, false);
     s->error=0;
     return !atomic_load(&s->cancelled);

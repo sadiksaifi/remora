@@ -22,8 +22,9 @@ public final class MetalDesktop: CaptureSource, Sendable {
     public var revision: Int { state.withLock { $0.revision } }
     public var lastFrameArrival: TimeInterval? { state.withLock { $0.storage == nil ? nil : $0.arrival } }
 
-    public func needsSubmission(redraw: Bool) -> Bool {
-        state.withLock { $0.pending != nil || (redraw && $0.storage?.hasSubmitted == true) }
+    /// Each view tracks its submitted revision. Captures may upload that frame first.
+    public func needsSubmission(since revision: Int, redraw: Bool) -> Bool {
+        state.withLock { $0.storage != nil && ($0.revision != revision || redraw) }
     }
 
     /// Callbacks only enqueue work. Never take a snapshot from inside a callback.
@@ -134,7 +135,6 @@ public final class MetalDesktop: CaptureSource, Sendable {
             }
             state.pending = nil
             state.damage = FrameDamage()
-            storage.hasSubmitted = true
             // enqueue, rather than commit, establishes order without encoding under the ingest lock.
             command.enqueue()
             return (
@@ -206,7 +206,6 @@ public final class MetalDesktop: CaptureSource, Sendable {
         let bytesPerRow: Int
         let texture: any MTLTexture
         let slots: [Slot]
-        var hasSubmitted = false
         var size: DesktopSize { .init(width: width, height: height) }
 
         init(device: any MTLDevice, width: Int, height: Int) throws {

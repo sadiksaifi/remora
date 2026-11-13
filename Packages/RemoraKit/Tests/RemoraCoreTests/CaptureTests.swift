@@ -39,6 +39,28 @@ private func desktop(width: Int, height: Int, bgra: [UInt8], sink: MetalDesktop)
     #expect(!frame { pixels in for index in (126 * 256 * 4)..<(127 * 256 * 4) { pixels[index] = 200 } }.isBlank)
 }
 
+@Test func desktopReadbackLeavesChangedFramePendingForPresentation() throws {
+    let frames = try MetalDesktop(device: #require(MTLCreateSystemDefaultDevice()))
+    desktop(width: 2, height: 1, bgra: [0, 0, 0, 255], sink: frames)
+    let baseline = try frames.snapshot()
+    #expect(baseline.isBlank)
+    // Model a window that has already presented this black baseline.
+    let displayedRevision = baseline.revision
+    let pixels: [UInt8] = [0, 0, 0, 255, 17, 91, 203, 255]
+    _ = try pixels.withUnsafeBytes {
+        try frames.ingest(
+            BorrowedFrame(
+                pixels: $0.baseAddress!, width: 2, height: 1, stride: 8,
+                dirtyRectangles: [.init(x: 1, y: 0, width: 1, height: 1)]))
+    }
+    // A connect readiness check must not satisfy the window's demand for this update.
+    let captured = try frames.snapshot()
+    #expect(Array(captured.pixels) == [0, 0, 0, 255, 17, 91, 203, 255])
+    #expect(!captured.isBlank)
+    #expect(frames.needsSubmission(since: displayedRevision, redraw: false))
+    #expect(!frames.needsSubmission(since: captured.revision, redraw: false))
+}
+
 @Test @MainActor func idleHiddenDesktopReadbackWritesCompleteOpaquePNG() async throws {
     let frames = try MetalDesktop(device: #require(MTLCreateSystemDefaultDevice()))
     desktop(width: 8, height: 6, bgra: [21, 87, 231, 0], sink: frames)

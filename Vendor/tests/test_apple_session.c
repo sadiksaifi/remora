@@ -41,7 +41,8 @@ static void frame(rfbClient *c,int x,int y,int w,int h) {
     frames++;
 }
 int main(int argc,char **argv) {
-    if(argc!=3) return 2;
+    if(argc!=3 && argc!=4) return 2;
+    int demand=argc==4 && !strcmp(argv[3],"demand"), demandTested=0;
     expected=(unsigned)atoi(argv[2]);
     rfbClient *c=rfbGetClient(8,3,4);
     c->remoraApple889=TRUE; c->GetCredential=credential;
@@ -55,6 +56,12 @@ int main(int argc,char **argv) {
         for(unsigned i=0;i<64;i++) {
             int n=WaitForMessage(c,100000);
             if(n<0 || (n>0 && !HandleRFBServerMessage(c))) break;
+            if(demand && !demandTested && frames==3) {
+                if(!rfbRemoraAppleSetDemand(c,FALSE) || !rfbRemoraAppleSetDemand(c,FALSE) ||
+                   !rfbRemoraAppleSetDemand(c,TRUE) || !rfbRemoraAppleSetDemand(c,TRUE) ||
+                   !SendFramebufferUpdateRequest(c,0,0,c->width,c->height,FALSE)) return 3;
+                demandTested=1;
+            }
             if(!rfbRemoraAppleRetryBaseline(c)) return 3;
         }
     }

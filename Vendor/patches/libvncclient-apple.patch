@@ -225,7 +225,14 @@
    if (!SetFormatAndEncodings(client))
      return FALSE;
  
-@@ -547,6 +550,7 @@
+@@ -478,5 +481,6 @@
+ 
+   rfbRemoraDiagnosticComplete(client, RFB_REMORA_READY);
++  if (client->remoraApple889 && !rfbRemoraAppleSetDemand(client, TRUE)) return FALSE;
+   return TRUE;
+ }
+ 
+@@ -547,6 +551,7 @@
  }
  
  void rfbClientCleanup(rfbClient* client) {

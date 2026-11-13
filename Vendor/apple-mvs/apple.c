@@ -17,6 +17,7 @@ typedef struct {
     uint8_t key[16];
     rfbBool keyValid, baseline, dirty, demand, subscribed;
     double baselineRequestAt;
+    uint32_t previousInputTime;
     uint32_t left, top, right, bottom;
     mvs_decoder *decoder;
 } Apple;
@@ -62,7 +63,7 @@ rfbBool rfbRemoraAppleSetup(rfbClient *c) {
     return WriteToRFBServer(c,mode,sizeof(mode));
 }
 /* The initial full request can go unanswered, or produce only controls/partial
- * coverage. Keep requesting a baseline until push subscription can take over.
+ * coverage. Keep requesting a baseline alongside the push subscription.
  * Called between complete messages, never during a rectangle decode. */
 rfbBool rfbRemoraAppleRetryBaseline(rfbClient *c) {
     Apple *a=state(c);
@@ -165,15 +166,15 @@ void rfbRemoraAppleRaw(rfbClient *c,const rfbFramebufferUpdateRectHeader *r) {
     damage(state(c),r->r.x,r->r.y,r->r.w,r->r.h);
     if(r->r.x==0 && r->r.y==0 && r->r.w==c->width && r->r.h==c->height) state(c)->baseline=TRUE;
 }
-/* Subscription is a source-defined zero-interval full-region 0x09, not standard ContinuousUpdates. */
+/* AutoFBUpdate uses interval 0 to subscribe and UINT32_MAX to pause, with flags 1. */
 rfbBool rfbRemoraAppleSetDemand(rfbClient *c,rfbBool enabled) {
     Apple *a=state(c);
     if(!a) return fail(c,APPLE_PROFILE);
     if(!a->baseline && enabled && !a->demand) a->baselineRequestAt=monotonic()+1;
     a->demand=enabled;
-    if(!a->baseline || a->subscribed==enabled) return TRUE;
+    if(a->subscribed==enabled) return TRUE;
     if(c->RemoraUpdateAllowed && !c->RemoraUpdateAllowed(c,FALSE)) return FALSE;
-    uint8_t m[16]={9,0}; put16(m+2,enabled?1:0);
+    uint8_t m[16]={9,0,0,1}; put32(m+4,enabled?0:UINT32_MAX);
     put16(m+12,c->width); put16(m+14,c->height);
     if(!WriteToRFBServer(c,(char *)m,sizeof(m))) return FALSE;
     a->subscribed=enabled;
@@ -185,26 +186,33 @@ rfbBool rfbRemoraAppleEnd(rfbClient *c) {
     if(a->dirty) c->GotFrameBufferUpdate(c,a->left,a->top,a->right-a->left,a->bottom-a->top);
     return TRUE;
 }
-rfbBool rfbRemoraAppleKey(rfbClient *c,uint32_t keysym,rfbBool down) {
+/* Apple's combined input format shares its elapsed-time counter across keys and pointers. */
+static rfbBool sendInput(rfbClient *c,uint8_t plain[16]) {
     Apple *a=state(c);
     if(!a || !a->keyValid || c->remoraDiagnostic.phase!=RFB_REMORA_READY) return fail(c,APPLE_PROFILE);
+    uint8_t wire[18]={0x10,0}; int length=0;
+    struct timespec now; clock_gettime(CLOCK_MONOTONIC,&now);
+    uint32_t timestamp=(uint32_t)((uint64_t)now.tv_sec*1000000+now.tv_nsec/1000);
+    put32(plain+6,timestamp-a->previousInputTime);
+    rfbBool ok=encrypt_aes128ecb(wire+2,&length,a->key,plain,16) && length==16;
+    if(ok) ok=WriteToRFBServer(c,(char *)wire,sizeof(wire));
+    if(ok) a->previousInputTime=timestamp;
+    OPENSSL_cleanse(plain,16); OPENSSL_cleanse(wire,sizeof(wire));
+    return ok;
+}
+rfbBool rfbRemoraAppleKey(rfbClient *c,uint32_t keysym,rfbBool down) {
     /* Option is Meta for ARD, preserving the source's held-key identity on both transitions. */
     if(keysym==0xffe9) keysym=0xffe7;
     if(keysym==0xffea) keysym=0xffe8;
-    uint8_t plain[16]={0xff,down?1:0},wire[18]={0x10,0}; int length=0;
-    struct timespec now; clock_gettime(CLOCK_MONOTONIC,&now);
-    put32(plain+2,keysym); put32(plain+6,(uint32_t)((uint64_t)now.tv_sec*1000000+now.tv_nsec/1000));
-    rfbBool ok=encrypt_aes128ecb(wire+2,&length,a->key,plain,sizeof(plain)) && length==16;
-    if(ok) ok=WriteToRFBServer(c,(char *)wire,sizeof(wire));
-    OPENSSL_cleanse(plain,sizeof(plain)); OPENSSL_cleanse(wire,sizeof(wire));
-    return ok;
+    uint8_t plain[16]={0xff,down?1:0}; put32(plain+2,keysym);
+    return sendInput(c,plain);
 }
 rfbBool rfbRemoraApplePointer(rfbClient *c,int x,int y,int mask) {
-    if(!state(c) || !state(c)->keyValid || c->remoraDiagnostic.phase!=RFB_REMORA_READY) return fail(c,APPLE_PROFILE);
     /* The common source-button state stays in Remora. Only the wire mask changes. */
-    uint8_t p[6]={5,(uint8_t)((mask&1)|((mask&4)>>1)|((mask&2)<<1))};
-    put16(p+2,x); put16(p+4,y);
-    if(!WriteToRFBServer(c,(char *)p,sizeof(p))) return FALSE;
+    uint8_t plain[16]={0};
+    plain[10]=0xff; plain[11]=(uint8_t)((mask&1)|((mask&4)>>1)|((mask&2)<<1));
+    put16(plain+12,x); put16(plain+14,y);
+    if(!sendInput(c,plain)) return FALSE;
     /* Native horizontal deltas are positive toward RFB button 0x20 (left). */
     int dx=(mask&64)?-1:(mask&32)?1:0;
     int dy=(mask&8)?1:(mask&16)?-1:0;
