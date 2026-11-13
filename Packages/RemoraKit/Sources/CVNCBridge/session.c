@@ -37,7 +37,7 @@ struct RMVNC {
     int confirmedWidth, confirmedHeight;
     bool resizeActive, resizeQueued, resizeReplyPending, resizeCorrectionUsed, geometryChanged;
     double resizeDeadline;
-    bool displayRequired, displayReady, displayPending, displayAcked, displayRequestQueued, frameDirty;
+    bool displayRequired, displayReady, displayPending, displayAcked, displayRequestQueued, displayDemandPaused, frameDirty;
     uint32_t displayID;
     double displayDeadline;
     int damageLeft, damageTop, damageRight, damageBottom;
@@ -306,12 +306,12 @@ bool rm_vnc_select_display(RMVNC *s,uint32_t id) {
     return reconcile_displays(s);
 }
 static bool reconcile_displays(RMVNC *s) {
-    if(s->displayRequired && !s->client->remoraDisplayCount && now()>=s->displayDeadline) return failed(s,10);
+    if(!s->displayDemandPaused && s->displayRequired && !s->client->remoraDisplayCount && now()>=s->displayDeadline) return failed(s,10);
     if(s->displayRequestQueued) {
         s->displayRequestQueued=false;
         if(!rfbRemoraSelectDisplay(s->client,s->displayID)) return false;
     }
-    if(s->displayPending && now()>=s->displayDeadline) {
+    if(!s->displayDemandPaused && s->displayPending && now()>=s->displayDeadline) {
         s->displayPending=false; s->displayReady=false; s->displayAcked=false;
         publish_displays(s);
         if(s->cb.displayFailure) s->cb.displayFailure(s->user,s->displayID,2);
@@ -643,6 +643,12 @@ bool rm_vnc_set_display_demand(RMVNC *s, bool enabled) {
     if (atomic_load(&s->cancelled)) return false;
     s->inputBusy++;
     bool sent=rfbRemoraAppleSetDemand(s->client,enabled);
+    if(sent) {
+        /* Hidden tabs intentionally stop pictures. Give the resumed baseline
+         * its full deadline without discarding the server's acknowledgement. */
+        if(enabled && s->displayDemandPaused) s->displayDeadline=now()+10;
+        s->displayDemandPaused=!enabled;
+    }
     s->inputBusy--; return sent;
 }
 bool rm_vnc_refresh(RMVNC *s) {
