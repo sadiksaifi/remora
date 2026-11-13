@@ -73,6 +73,18 @@ private final class StalledPeer: @unchecked Sendable {
         if screens == 2 { bytes += [0, 0, 0, 2, 0, 0, 0, 0, 0, width, 0, 16, 0, 0, 0, 0] }
         send(bytes)
     }
+    func sendMultiDisplayFrame() {
+        var bytes: [UInt8] = [
+            0, 0, 0, 2,
+            0, 0, 0, 0, 0, 32, 0, 16, 255, 255, 254, 204,
+            2, 0, 0, 0,
+            0, 0, 0, 1, 0, 0, 0, 0, 0, 16, 0, 16, 0, 0, 0, 0,
+            0, 0, 0, 2, 0, 16, 0, 0, 0, 16, 0, 16, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 32, 0, 16, 0, 0, 0, 0,
+        ]
+        bytes += Array(repeating: 123, count: 32 * 16 * 4)
+        send(bytes)
+    }
     func sendCursor(hidden: Bool) {
         // RichCursor: one opaque red pixel, or the protocol's empty shape.
         let bytes: [UInt8] =
@@ -482,4 +494,35 @@ private func waitForResizes(_ count: Int, from peer: StalledPeer) async throws -
     #expect(connected)
     #expect(elapsed >= .seconds(9) && elapsed < .seconds(12))
     if case .serverEndedSession = reason {} else { Issue.record("A stalled read must still terminate at the existing deadline.") }
+}
+
+private final class MultiDisplayFrames: FrameSink, @unchecked Sendable {
+    private let lock = NSLock()
+    private var stored = 0
+    var count: Int { lock.withLock { stored } }
+    func consume(_ frame: BorrowedFrame) { lock.withLock { stored += 1 } }
+}
+
+@Test @MainActor func genericMultiDisplayLayoutFailsBeforePublishingCombinedPixels() async throws {
+    let peer = try StalledPeer(partialFrame: true, stallRectangle: false)
+    defer { peer.stop() }
+    let frames = MultiDisplayFrames()
+    let session = VNCSession(
+        configuration: .init(host: "127.0.0.1", port: peer.port, username: "", desktopSize: .init(width: 16, height: 16)), frameSink: frames)
+    let deadline = Task {
+        try? await Task.sleep(for: .seconds(2))
+        session.disconnect()
+    }
+    defer {
+        deadline.cancel()
+        session.disconnect()
+    }
+    var reason: DisconnectReason?
+    session.connect()
+    for await event in session.events {
+        if case .stateChanged(.connected) = event { peer.sendMultiDisplayFrame() }
+        if case .stateChanged(.disconnected(let value)) = event { reason = value }
+    }
+    #expect(reason == .serverEndedSession("The VNC server reports multiple displays without a supported display-selection protocol."))
+    #expect(frames.count == 0)
 }

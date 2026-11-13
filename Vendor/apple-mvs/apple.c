@@ -1,7 +1,7 @@
 /* Remora's experimental Apple 003.889 adapter. GPL-3.0-or-later.
  * Wire definitions: peetinc/noVNC-ARD d699293635083c9e0c30c8f9480993865653772a,
  * ard/ard-patch.js. The scroll record follows ard-rs protocol.rs's 0x17/54 layout.
- * The separately licensed, byte-identical MVS implementation is in mvs.c/h.
+ * The separately licensed MVS implementation is in mvs.c/h.
  */
 #include "apple.h"
 #include "mvs.h"
@@ -75,8 +75,8 @@ rfbBool rfbRemoraAppleRetryBaseline(rfbClient *c) {
     return SendFramebufferUpdateRequest(c,0,0,c->width,c->height,FALSE);
 }
 rfbBool rfbRemoraAppleEncodings(rfbClient *c) {
-    uint8_t message[12]={2,0,0,2};
-    put32(message+4,1011); put32(message+8,0);
+    uint8_t message[24]={2,0,0,5};
+    put32(message+4,1011); put32(message+8,0); put32(message+12,1105); put32(message+16,(uint32_t)-223); put32(message+20,1101);
     return WriteToRFBServer(c,(char *)message,sizeof(message));
 }
 static rfbBool skip(rfbClient *c,uint32_t n) {
@@ -88,6 +88,84 @@ static rfbBool skip(rfbClient *c,uint32_t n) {
         n-=chunk;
     }
     return TRUE;
+}
+rfbBool rfbRemoraDisplayReset(rfbClient *c) {
+    if(!state(c)) c->remoraAppleState=calloc(1,sizeof(Apple));
+    Apple *a=state(c);
+    if(!a) return fail(c,APPLE_DECODE);
+    if(!a->decoder) a->decoder=mvs_create();
+    if(!a->decoder) return fail(c,APPLE_DECODE);
+    mvs_reset_picture(a->decoder); a->baseline=FALSE; a->dirty=FALSE;
+    return TRUE;
+}
+rfbBool rfbRemoraDisplayReady(rfbClient *c) {
+    Apple *a=state(c);
+    return a && a->decoder && mvs_region_initialized(a->decoder,0,0,c->width,c->height);
+}
+rfbBool rfbRemoraDisplayRaw(rfbClient *c,int x,int y,int w,int h) {
+    Apple *a=state(c);
+    if(!a || !a->decoder) return FALSE;
+    if(mvs_mark_raw(a->decoder,c->width,c->height,x,y,w,h)!=MVS_OK) return FALSE;
+    a->baseline=mvs_region_initialized(a->decoder,0,0,c->width,c->height);
+    return TRUE;
+}
+/* Both Apple's standard 3.8 and native profile may advertise DisplayInfo2. */
+static rfbBool displayInfo(rfbClient *c) {
+    uint8_t length[2];
+    if(!ReadFromRFBServer(c,(char *)length,2)) return FALSE;
+    uint32_t n=be16(length);
+    if(n<20 || n>20+64*56) return fail(c,APPLE_PROFILE);
+    uint8_t body[20+64*56];
+    if(!ReadFromRFBServer(c,(char *)body,n)) return FALSE;
+    uint32_t count=be16(body+18);
+    if(!count || count>64 || n!=20+count*56 || !be16(body+6) || !be16(body+8)) return fail(c,APPLE_PROFILE);
+    rfbRemoraDisplay displays[64];
+    for(uint32_t i=0;i<count;i++) {
+        const uint8_t *p=body+20+i*56;
+        int left=(int16_t)be16(p+30), top=(int16_t)be16(p+28);
+        rfbRemoraDisplay d={be32(p+16),(int16_t)be16(p+22),(int16_t)be16(p+20),
+            (int16_t)be16(p+34)-left,(int16_t)be16(p+32)-top,(be32(p+36)&1)!=0};
+        if(d.id==UINT32_MAX || d.width<=0 || d.height<=0 || d.width>16384 || d.height>16384 ||
+           (uint64_t)d.width*d.height>67108864) return fail(c,APPLE_PROFILE);
+        for(uint32_t j=0;j<i;j++) if(displays[j].id==d.id) return fail(c,APPLE_PROFILE);
+        displays[i]=d;
+    }
+    uint32_t id=be32(body+10);
+    unsigned width=be16(body+6), height=be16(body+8);
+    if(width>16384 || height>16384 || (uint64_t)width*height>67108864) return fail(c,APPLE_GEOMETRY);
+    if(id!=UINT32_MAX) {
+        rfbBool found=FALSE;
+        for(uint32_t i=0;i<count;i++) if(displays[i].id==id) found=TRUE;
+        if(!found) return fail(c,APPLE_PROFILE);
+    }
+    rfbBool first=c->remoraDisplayCount==0;
+    rfbBool geometry=c->width!=(int)width || c->height!=(int)height;
+    memcpy(c->remoraDisplays,displays,count*sizeof(*displays));
+    c->remoraDisplayCount=count; c->remoraDisplayID=id;
+    /* DisplayInfo2 itself carries geometry, including same-size display switches. */
+    if(!rfbRemoraDisplayReset(c)) return FALSE;
+    if(geometry) {
+        c->width=width; c->height=height;
+        if(c->isUpdateRectManagedByLib) {
+            c->updateRect.x=c->updateRect.y=0; c->updateRect.w=width; c->updateRect.h=height;
+        }
+        if(!c->MallocFrameBuffer(c)) return FALSE;
+    }
+    if(c->RemoraDisplays) c->RemoraDisplays(c);
+    /* A display acknowledgement can stop pushed pixels until explicitly requested. */
+    if(!first && !SendFramebufferUpdateRequest(c,0,0,c->width,c->height,FALSE)) return FALSE;
+    Apple *a=state(c);
+    if(!c->remoraApple889) a->demand=TRUE;
+    if(!first || geometry) a->subscribed=FALSE;
+    if(!rfbRemoraAppleSetDemand(c,a->demand)) return FALSE;
+    return c->remoraApple889 || SendFramebufferUpdateRequest(c,0,0,c->width,c->height,FALSE);
+}
+rfbBool rfbRemoraSelectDisplay(rfbClient *c,uint32_t id) {
+    for(uint32_t i=0;i<c->remoraDisplayCount;i++) if(c->remoraDisplays[i].id==id) {
+        uint8_t message[8]={0x0d}; put32(message+4,id);
+        return WriteToRFBServer(c,(char *)message,sizeof(message));
+    }
+    return FALSE;
 }
 int rfbRemoraAppleMessage(rfbClient *c,uint8_t type) {
     uint8_t h[15]; uint32_t n;
@@ -106,9 +184,7 @@ int rfbRemoraAppleMessage(rfbClient *c,uint8_t type) {
         n=be16(h+1);
         if(n<4) return fail(c,APPLE_PROFILE),-1;
         return skip(c,n)?1:-1;
-    case 0x51: /* DisplayInfo2 message: BE16 body length. No geometry changes supported. */
-        if(!ReadFromRFBServer(c,(char *)h,2)) return -1;
-        return skip(c,be16(h))?1:-1;
+    case 0x51: return displayInfo(c)?1:-1;
     default: return fail(c,APPLE_PROFILE),-1;
     }
 }
@@ -128,10 +204,19 @@ static void damage(void *context,uint32_t x,uint32_t y,uint32_t w,uint32_t h) {
     a->dirty=TRUE;
 }
 int rfbRemoraAppleRect(rfbClient *c,const rfbFramebufferUpdateRectHeader *r) {
+    if(r->encoding==1105) return displayInfo(c)?1:-1;
+    if(r->encoding==1101) {
+        uint8_t h[8];
+        if(!ReadFromRFBServer(c,(char *)h,8)) return -1;
+        uint32_t count=be16(h+4);
+        if(count>64) return fail(c,APPLE_PROFILE),-1;
+        return skip(c,count*28)?1:-1;
+    }
     Apple *a=state(c);
+    if(r->encoding==(uint32_t)-223 || r->encoding==(uint32_t)-308) return 0;
     if(r->encoding==0) return 0;
     if(r->encoding!=1011) {
-        fail(c,(r->encoding==(uint32_t)-223 || r->encoding==(uint32_t)-308)?APPLE_GEOMETRY:APPLE_PROFILE);
+        fail(c,APPLE_PROFILE);
         return -1;
     }
     uint8_t header[4];
@@ -146,8 +231,8 @@ int rfbRemoraAppleRect(rfbClient *c,const rfbFramebufferUpdateRectHeader *r) {
     rfbBool geometry= r->r.w && r->r.h && r->r.x%8==0 && r->r.y%8==0 &&
         (uint32_t)r->r.x+r->r.w<=(uint32_t)c->width && (uint32_t)r->r.y+r->r.h<=(uint32_t)c->height &&
         (r->r.w%8==0 || r->r.x+r->r.w==c->width) && (r->r.h%8==0 || r->r.y+r->r.h==c->height);
-    /* A partial frame may reference untouched tiles. Require an established complete baseline. */
-    if ((!quant && !geometry) || (payload[0]==1 && !a->baseline)) {
+    /* The decoder checks initialized pixels and DCT baselines for each region. */
+    if (!quant && !geometry) {
         free(payload); return fail(c,APPLE_DECODE),-1;
     }
     mvs_surface surface={(uint8_t *)c->frameBuffer,c->width,c->height,(size_t)c->width*4,16,8,0};
@@ -156,15 +241,15 @@ int rfbRemoraAppleRect(rfbClient *c,const rfbFramebufferUpdateRectHeader *r) {
     free(payload);
     if(error!=MVS_OK) return fail(c,APPLE_DECODE),-1;
     if(!quant) {
-        if(stats.kind==MVS_KIND_FULL) damage(a,0,0,c->width,c->height);
-        if(stats.kind==MVS_KIND_FULL && r->r.x==0 && r->r.y==0 && r->r.w==c->width && r->r.h==c->height)
-            a->baseline=TRUE;
+        a->baseline=mvs_region_initialized(a->decoder,0,0,c->width,c->height);
     }
     return 1;
 }
 void rfbRemoraAppleRaw(rfbClient *c,const rfbFramebufferUpdateRectHeader *r) {
     damage(state(c),r->r.x,r->r.y,r->r.w,r->r.h);
-    if(r->r.x==0 && r->r.y==0 && r->r.w==c->width && r->r.h==c->height) state(c)->baseline=TRUE;
+    Apple *a=state(c);
+    if(mvs_mark_raw(a->decoder,c->width,c->height,r->r.x,r->r.y,r->r.w,r->r.h)!=MVS_OK) fail(c,APPLE_DECODE);
+    a->baseline=mvs_region_initialized(a->decoder,0,0,c->width,c->height);
 }
 /* AutoFBUpdate uses interval 0 to subscribe and UINT32_MAX to pause, with flags 1. */
 rfbBool rfbRemoraAppleSetDemand(rfbClient *c,rfbBool enabled) {
@@ -182,7 +267,7 @@ rfbBool rfbRemoraAppleSetDemand(rfbClient *c,rfbBool enabled) {
 }
 rfbBool rfbRemoraAppleEnd(rfbClient *c) {
     Apple *a=state(c);
-    if(!rfbRemoraAppleSetDemand(c,a->demand)) return FALSE;
+    if(c->remoraAppleError || !rfbRemoraAppleSetDemand(c,a->demand)) return FALSE;
     if(a->dirty) c->GotFrameBufferUpdate(c,a->left,a->top,a->right-a->left,a->bottom-a->top);
     return TRUE;
 }

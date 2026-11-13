@@ -167,7 +167,7 @@ private final class ApplePixels: FrameSink, @unchecked Sendable {
     #expect(wire["subscribed_before_baseline"] as? Bool == true)
     #expect(wire["requests_after_initial"] as? Int == (first == "dropped" ? 2 : 1))
     #expect(wire["subscriptions"] as? [[Int]] == [[0, 1, 0, 0, 0, 16, 8]])
-    #expect(pixels.samples.count == (first == "raw" ? 4 : 3))
+    #expect(pixels.samples.count == 3)
     #expect(Array(pixels.samples.suffix(3)) == [[148, 148, 148], [151, 147, 148], [151, 147, 148]])
 }
 

@@ -10,6 +10,41 @@ public struct DesktopSize: Sendable, Equatable {
     }
 }
 
+/// One remote display. Coordinates describe its position in the server desktop.
+public struct RemoteDisplay: Sendable, Equatable {
+    public let id: UInt32
+    public let x: Int
+    public let y: Int
+    public let size: DesktopSize
+    public let isMain: Bool
+
+    public init(id: UInt32, x: Int, y: Int, size: DesktopSize, isMain: Bool) {
+        self.id = id
+        self.x = x
+        self.y = y
+        self.size = size
+        self.isMain = isMain
+    }
+}
+
+/// A selected display becomes ready only after its fresh picture reaches the frame sink.
+public struct SessionDisplays: Sendable, Equatable {
+    public let displays: [RemoteDisplay]
+    public let selectedID: UInt32?
+    public let pendingID: UInt32?
+    public var isReady: Bool { selectedID != nil && pendingID == nil }
+
+    public init(displays: [RemoteDisplay] = [], selectedID: UInt32? = nil, pendingID: UInt32? = nil) {
+        self.displays = displays
+        self.selectedID = selectedID
+        self.pendingID = pendingID
+    }
+}
+
+public enum DisplaySelectionFailure: Error, Sendable, Equatable {
+    case unsupported, unavailable, busy, timedOut
+}
+
 public struct SessionConfiguration: Sendable {
     public let host: String
     public let port: UInt16
@@ -165,6 +200,8 @@ public struct TrustChallenge: Sendable {
 }
 
 public enum SessionEvent: Sendable {
+    case displaysChanged(SessionDisplays)
+    case displaySelectionFailed(id: UInt32, reason: DisplaySelectionFailure)
     case stateChanged(SessionState)
     /// requested is true for a response to this client's resize request.
     case desktopSizeChanged(DesktopSize, requested: Bool = false)
@@ -179,6 +216,10 @@ public enum SessionEvent: Sendable {
 /// Events finish after the terminal disconnected event. Consume the stream once.
 public protocol RemoteSession: AnyObject, Sendable {
     var events: AsyncStream<SessionEvent> { get }
+    var displays: SessionDisplays { get }
+    /// Admits a switch. Input and capture require a ready picture after admission.
+    @discardableResult
+    func selectDisplay(_ id: UInt32) -> Result<Void, DisplaySelectionFailure>
     /// True after the server negotiates dynamic resizing, until that capability is lost.
     var supportsDynamicResize: Bool { get }
     /// Negotiated total pixel area for one resize, or nil when unavailable.
@@ -246,4 +287,10 @@ public struct BorrowedFrame {
 public protocol FrameSink: Sendable {
     /// Called synchronously on an arbitrary background thread. Must be thread-safe.
     func consume(_ frame: BorrowedFrame)
+}
+
+extension RemoteSession {
+    public var displays: SessionDisplays { SessionDisplays() }
+    @discardableResult
+    public func selectDisplay(_ id: UInt32) -> Result<Void, DisplaySelectionFailure> { .failure(.unsupported) }
 }

@@ -20,13 +20,13 @@ with tempfile.TemporaryDirectory(prefix='remora-apple-sanitizers-') as temporary
                     str(root/'build/openssl-install/lib/libcrypto.a'), '-lz', '-o',exe], check=True,timeout=60)
     for mode, frames in [('apple-retry-dropped',3),('apple-retry-empty',3),('apple-retry-quant',3),
                          ('apple-retry-raw',4),('apple-retry-controls',3),
-                         ('apple-sequence',3),('apple-demand',4),('apple-damage',6),('apple-no-baseline',0),('apple-bad-cache',1),
+                         ('apple-sequence',3),('apple-regions',4),('apple-region-uninitialized',1),('apple-demand',4),('apple-damage',6),('apple-no-baseline',0),('apple-bad-cache',1),
                          ('apple-multi-invalid',1),('apple-session-select',0),('apple-reject',0),('apple-wrong-banner',0)]:
         with subprocess.Popen(['/usr/bin/python3','-u',str(peer_source),'ard-only',mode],stdout=subprocess.PIPE,text=True) as peer:
             try:
                 port = json.loads(peer.stdout.readline())['loopback_port']
                 env = dict(os.environ, ASAN_OPTIONS='abort_on_error=1', UBSAN_OPTIONS='halt_on_error=1:print_stacktrace=1')
-                subprocess.run([exe,str(port),str(frames)]+(['demand'] if mode=='apple-demand' else []),check=True,timeout=12,env=env)
+                subprocess.run([exe,str(port),str(frames)]+(['demand'] if mode=='apple-demand' else ['regions'] if mode in ('apple-regions','apple-region-uninitialized') else []),check=True,timeout=12,env=env)
                 report = json.loads(peer.communicate(timeout=2)[0])
                 assert 'error_class' not in report, (mode,report)
                 if mode in ('apple-sequence','apple-no-baseline') or mode.startswith('apple-retry-'):

@@ -151,6 +151,15 @@ struct VNCInputState {
         return other != nil ? true : wire.key(previous, down: false)
     }
 
+    /// A display boundary releases held state without moving an idle pointer.
+    mutating func releaseForDisplay(wire: any VNCInputTransport) -> Bool {
+        let humanHeld = !human.isEmpty || !humanButtons.isEmpty
+        let agentHeld = !agent.isEmpty || !agentButtons.isEmpty
+        guard !humanHeld || release(.human, wire: wire), !agentHeld || release(.agent, wire: wire) else { return false }
+        self = VNCInputState()
+        return true
+    }
+
     mutating func release(_ source: InputSource, wire: any VNCInputTransport) -> Bool {
         let keys = source == .human ? human : agent
         for (scan, key) in keys.sorted(by: { $0.key > $1.key }) {

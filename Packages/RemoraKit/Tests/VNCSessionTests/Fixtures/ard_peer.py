@@ -85,6 +85,100 @@ def mvs_bits(*parts):
     return bytes(int(bits[i:i+8], 2) for i in range(0, len(bits), 8))
 
 
+def display_info(width, height, selected=1, displays=None):
+    if displays is None:
+        displays = [(1, 0, 0, width, height, True)]
+    body = struct.pack('>HHHHHIIH', 1, width, height, width, height, selected, 0, len(displays))
+    for ident, x, y, w, h, main in displays:
+        body += struct.pack('>ddIhhhhhhhhI', 1, 1, ident, y, x, y+h, x+w, 0, 0, h, w, int(main))+bytes(16)
+    return struct.pack('>H', len(body))+body
+
+
+def display_frames(outcome, exact, send, key, report):
+    import time
+    apple = outcome.startswith('apple-')
+    displays = [(7, -16, 0, 16, 8, False), (42, 0, 0, 16, 8, True)]
+    report['display_selections'] = []
+    report['display_inputs'] = []
+    def info(selected, entries=displays):
+        w = 32 if selected == 0xffffffff else 16
+        body = display_info(w, 8, selected, entries)
+        # Exercise both legal carriers. The selected geometry need not have DesktopSize.
+        if apple: send(struct.pack('>BBHHHHHi', 0, 0, 1, 0, 0, w, 8, 1105)+body)
+        else: send(bytes([0x51])+body)
+    def raw(x, w, pixel, width=16):
+        send(struct.pack('>BBHHHHHi', 0, 0, 1, x, 0, w, 8, 0)+bytes(pixel)*(w*8))
+    def message():
+        kind = exact(1)[0]
+        if kind == 10:
+            exact(3); return ('mode',)
+        if kind == 2:
+            h=exact(3); exact(int.from_bytes(h[1:], 'big')*4); return ('encodings',)
+        if kind == 0:
+            exact(19); return ('format',)
+        if kind == 3:
+            incremental,x,y,w,h = struct.unpack('>BHHHH',exact(9))
+            return ('request', incremental, w, h)
+        if kind == 9:
+            exact(15); return ('subscribe',)
+        if kind == 0x0d:
+            combine,pad,ident = struct.unpack('>BHI',exact(7))
+            if combine or pad: raise ValueError('combined display request')
+            report['display_selections'].append(ident)
+            return ('select',ident)
+        if kind == 0x10:
+            exact(1)
+            b=aes_ecb(key,exact(16),True)
+            report['display_inputs'].append(list(b[:6] if b[0]==255 else b[10:]))
+            return ('input',)
+        if kind == 4:
+            down,_,symbol=struct.unpack('>BHI',exact(7))
+            report['display_inputs'].append([255,down,symbol]); return ('input',)
+        if kind == 5:
+            report['display_inputs'].append(list(exact(5))); return ('input',)
+        raise ValueError('unexpected display client record '+str(kind))
+    def wait(kind, value=None):
+        for _ in range(200):
+            m=message()
+            if m[0]==kind and (value is None or m[1]==value): return m
+        raise ValueError('missing display record '+kind)
+    info(0xffffffff)
+    wait('select',42)
+    # In-flight old combined pixels are valid protocol but must never reach FrameSink.
+    raw(0,32,(238,238,238,255),32)
+    info(42)
+    wait('request',0)
+    raw(0,8,(1,2,3,255))
+    time.sleep(0.08)
+    raw(8,8,(1,2,3,255))
+    wait('select',7)
+    report['inputs_before_second_selection'] = len(report['display_inputs'])
+    # Same framebuffer dimensions do not identify the display; metadata is the fence.
+    raw(0,16,(239,239,239,255))
+    info(7)
+    wait('request',0)
+    raw(0,8,(4,5,6,255))
+    if 'timeout' in outcome:
+        wait('select',42)
+        info(42)
+        wait('request',0)
+        raw(0,16,(7,8,9,255))
+        time.sleep(0.15)
+        report['stage']='display_timeout_retried'
+        return
+    time.sleep(0.08)
+    raw(8,8,(4,5,6,255))
+    # The selected display disappears. Backend must choose the remaining main display.
+    time.sleep(0.08)
+    info(0xffffffff, [(42, 0, 0, 16, 8, True)])
+    wait('select',42)
+    info(42, [(42, 0, 0, 16, 8, True)])
+    wait('request',0)
+    raw(0,16,(7,8,9,255))
+    time.sleep(0.15)
+    report['stage'] = 'display_switches_complete'
+
+
 def apple_frames(outcome, exact, send, key, report, connection):
     import select
     import time
@@ -143,6 +237,19 @@ def apple_frames(outcome, exact, send, key, report, connection):
     else: raise ValueError('missing startup subscription')
     if report['subscriptions'][-1] != [0,1,0,0,0,16,8]: raise ValueError('subscription region')
     report['subscribed_before_baseline'] = True
+    send(bytes([0x51])+display_info(16, 8))
+    if outcome in ('apple-regions', 'apple-region-uninitialized'):
+        one_header = mvs_bits('0', '101 0', marker('m'))
+        one_body = mvs_bits('0 0 0', '00', '00', '1110 010 1', '0 01 0', marker('m'))
+        one_full = bytes([0,15,25])+(6+len(one_header)).to_bytes(3,'big')+one_header+one_body
+        one_partial = bytes([1,14,19])+mvs_bits('01','000000','1 0','1010','0','1010',marker('mvs'))
+        update(one_full, rect=(8,0,8,8))
+        if outcome == 'apple-region-uninitialized':
+            update(one_partial, rect=(0,0,8,8)); return
+        update(one_partial, rect=(8,0,8,8))
+        update(one_full, rect=(0,0,8,8))
+        update(one_partial, rect=(0,0,8,8))
+        return
     if outcome == 'apple-no-baseline':
         update(partial); return
     if outcome == 'apple-truncated':
@@ -152,7 +259,7 @@ def apple_frames(outcome, exact, send, key, report, connection):
         # These vectors have only DC coefficients; retain their known DC quantizers.
         elif outcome == 'apple-retry-quant': update(bytes([2])+bytes([16])*64+bytes([19])*64, rect=(0,0,0,0))
         elif outcome == 'apple-retry-raw': update(bytes([148,148,148,255])*64, 0, (0,0,8,8))
-        elif outcome == 'apple-retry-controls': send(bytes([4,7,0x14,0,0,4,0,0,0,0,0x51,0,0]))
+        elif outcome == 'apple-retry-controls': send(bytes([4,7,0x14,0,0,4,0,0,0,0]))
         # Drop the initial request, and in the dropped case also its first retry.
         retries = 2 if outcome == 'apple-retry-dropped' else 1
         for _ in range(64):
@@ -196,7 +303,7 @@ def apple_frames(outcome, exact, send, key, report, connection):
         update(partial[:-1]+bytes([partial[-1]^0x80]))
         return
     # Known control messages and discarded clipboard may precede the next update.
-    send(bytes([4,7,0x14,0,0,4,0,0,0,0,0x51,0,0]))
+    send(bytes([4,7,0x14,0,0,4,0,0,0,0]))
     send(bytes([3,0,0,0])+struct.pack('>I',5)+b'owned')
     send(bytes([0x1f,0,0,0])+struct.pack('>III',0,5,5)+b'owned')
     update(partial); update(cache)
@@ -244,7 +351,7 @@ def serve_once(offer_mode, outcome, port):
     withheld = outcome.endswith(('init-withheld', 'init-withheld-once'))
     withheld_public = None
     stalled = outcome.startswith('apple-init-stalled-')
-    deadline = time.monotonic() + (16 if withheld or stalled else 10)
+    deadline = time.monotonic() + (16 if withheld or stalled or 'display-timeout' in outcome else 10)
     offers = {
         'apple-mixed': OFFERS,
         'ard-only': [30],
@@ -283,7 +390,7 @@ def serve_once(offer_mode, outcome, port):
                     connection.settimeout(remaining)
                     connection.sendall(data)
                 report['stage'] = 'version'
-                send(b'RFB 003.008\n' if outcome=='apple-wrong-banner' else b'RFB 003.889\n')
+                send(b'RFB 003.008\n' if outcome=='apple-wrong-banner' or outcome.startswith(('runtime-', 'fragmented-')) else b'RFB 003.889\n')
                 if outcome=='apple-wrong-banner':
                     try: exact(1)
                     except EOFError:
@@ -429,6 +536,10 @@ def serve_once(offer_mode, outcome, port):
                         request = exact(9)
                         if apple and (not report.get('control_mode') or request != struct.pack('>BHHHH',0,0,0,dimension,height)):
                             raise ValueError('initial full request must follow SetMode')
+                        if outcome in ('apple-displays','standard-displays','apple-display-timeout','standard-display-timeout'):
+                            display_frames(outcome,exact,send,hashlib.md5(shared).digest(),report); return report
+                        if not apple and outcome == 'success':
+                            send(bytes([0x51])+display_info(16,16))
                         if apple and outcome != 'apple-success':
                             apple_frames(outcome,exact,send,hashlib.md5(shared).digest(),report,connection)
                             # Deliver every queued frame before closing, including when
@@ -469,12 +580,22 @@ def serve_once(offer_mode, outcome, port):
                                 report['subscription'] = list(struct.unpack('>BHIHHHH',exact(15)))
                                 if report['subscription'] != [0,1,0,0,0,16,16]: raise ValueError('subscription region')
                                 report['subscribed_before_baseline'] = True
+                                send(bytes([0x51])+display_info(16, 16))
                             send(struct.pack('>BBHHHHHi', 0, 0, 1, 0, 0, 16, 16, 0) + bytes(16 * 16 * 4))
                             if outcome == 'runtime-success':
-                                if exact(1) != bytes([3]):
-                                    raise ValueError('incremental request required')
-                                exact(9)
+                                while True:
+                                    kind=exact(1)[0]
+                                    if kind==3: exact(9); break
+                                    if kind==9: exact(15)
+                                    elif kind==10: exact(3)
+                                    elif kind==0: exact(19)
+                                    elif kind==2:
+                                        head=exact(3); exact(int.from_bytes(head[1:],'big')*4)
+                                    else: raise ValueError('incremental request required')
                         report['stage'] = 'synthetic_frame_sent'
+                        if outcome in ('success','apple-success'):
+                            connection.shutdown(socket.SHUT_WR)
+                            while connection.recv(4096): pass
                         return report
                     else:
                         raise ValueError('unexpected message before framebuffer request')
