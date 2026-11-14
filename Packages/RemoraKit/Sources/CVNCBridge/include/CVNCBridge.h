@@ -56,13 +56,15 @@ void rm_vnc_set_input_pending(RMVNC *, bool);
 /* Worker-only; called after authenticated connected state is published. */
 void rm_vnc_enable_input_service(RMVNC *);
 void rm_vnc_free(RMVNC *);
+/* Worker-only, before free. Empty when no failed TCP endpoint was retained. */
+const char *rm_vnc_failure_address(RMVNC *);
 bool rm_vnc_step(RMVNC *);
 RMVNCDiagnostic rm_vnc_diagnostic(RMVNC *);
 RMVNCRuntimeDiagnostic rm_vnc_runtime_diagnostic(RMVNC *);
 int rm_vnc_error(RMVNC *); /* 1 DNS, 2 refused, 3 timeout, 4 auth, 5 certificate, 6 protocol, 7 unsupported size,
  * 8 unsupported Apple profile, 9 Apple decode failure, 10 unsupported Apple geometry,
  * 11 Apple ServerInit withheld after accepted authentication (one fresh context may retry),
- * 12 reported generic multi-display layout without display selection */
+ * 12 reported generic multi-display layout without display selection, 13 Local Network policy denied DNS resolution */
 const char *rm_vnc_security(RMVNC *);
 bool rm_vnc_resize_supported(RMVNC *);
 bool rm_vnc_resize(RMVNC *, uint16_t, uint16_t);

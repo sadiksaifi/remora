@@ -80,6 +80,7 @@ public enum DisconnectReason: Sendable, Equatable, CustomStringConvertible {
     case hostNotFound
     case connectionRefused
     case connectionTimedOut
+    case localNetworkDenied
     case serverEndedSession(String)
     case protocolError(String)
     case cancelledByUser
@@ -90,10 +91,23 @@ public enum DisconnectReason: Sendable, Equatable, CustomStringConvertible {
         case .certificateRejected: "The server certificate was rejected."
         case .hostNotFound: "The host could not be found."
         case .connectionRefused: "The host refused the connection."
-        case .connectionTimedOut: "The connection timed out or the host is unreachable."
+        case .connectionTimedOut: "The connection timed out or the host is unreachable. \(recoverySuggestion ?? "")"
+        case .localNetworkDenied: "macOS denied local network access to this computer. \(recoverySuggestion ?? "")"
         case .serverEndedSession(let message): "The server ended the session: \(message)"
         case .protocolError(let message): "Remote desktop error: \(message)"
         case .cancelledByUser: "The connection was cancelled."
+        }
+    }
+}
+
+extension DisconnectReason {
+    public var recoverySuggestion: String? {
+        switch self {
+        case .localNetworkDenied:
+            "Open System Settings > Privacy & Security > Local Network and allow Remora, then reconnect. If Remora is already allowed, quit Remora, turn its Local Network access off and on, then reopen it."
+        case .connectionTimedOut:
+            "For a computer on your local network, check Remora in System Settings > Privacy & Security > Local Network. If already allowed, quit Remora, turn its access off and on, then reopen it. A timeout can also come from the network, a VPN, a firewall, or the remote computer."
+        default: nil
         }
     }
 }
