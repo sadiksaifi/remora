@@ -3,6 +3,7 @@
 #include <dns_sd.h>
 #include <sys/socket.h>
 #include <netinet/tcp.h>
+#include <netdb.h>
 #include <arpa/inet.h>
 #include <poll.h>
 #include <unistd.h>
@@ -29,6 +30,7 @@ struct RMVNC {
     double inputServiceAt;
     int fd, wake[2], error;
     char *host;
+    char failureAddress[NI_MAXHOST];
     uint16_t port;
     bool apple;
     /* Worker-owned resize intent. Wire replies and actual geometry are distinct:
@@ -450,8 +452,10 @@ static bool connect_socket(RMVNC *s) {
             struct pollfd fds[2]={{fd,POLLOUT,0},{s->wake[0],POLLIN,0}};
             if (poll(fds,2,100)>0 && fds[0].revents) { socklen_t n=sizeof(error); getsockopt(fd,SOL_SOCKET,SO_ERROR,&error,&n); break; }
         }
-        if (!error && !atomic_load(&s->cancelled)) { s->diagnostic.lastSuccess = RFB_REMORA_TCP; return true; }
+        if (!error && !atomic_load(&s->cancelled)) { s->failureAddress[0] = 0; s->diagnostic.lastSuccess = RFB_REMORA_TCP; return true; }
         pthread_mutex_lock(&s->lock); s->fd=-1; close(fd); pthread_mutex_unlock(&s->lock);
+        if (getnameinfo(addr, length, s->failureAddress, sizeof(s->failureAddress), NULL, 0, NI_NUMERICHOST) != 0)
+            s->failureAddress[0] = 0;
         s->diagnostic.systemError = error;
         s->error=error==ECONNREFUSED ? 2 : 3;
     }
@@ -693,3 +697,5 @@ void rm_vnc_free(RMVNC *s) {
     pthread_mutex_destroy(&s->lock);
     free(s->host); free(s);
 }
+
+const char *rm_vnc_failure_address(RMVNC *s) { return s->failureAddress; }

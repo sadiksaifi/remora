@@ -145,7 +145,8 @@ public struct ControlFailure: Error, Codable, Sendable, Equatable, LocalizedErro
         /// Commands sit in backticks so the build can check that they still parse.
         public var hint: String {
             switch self {
-            case .captureFailed, .backendFailed: "Inspect `remora session get` before retrying."
+            case .captureFailed: "Inspect `remora session get` before retrying."
+            case .backendFailed: "Inspect `remora session get` and follow the connection error's recovery steps before retrying."
             case .noFrame: "Wait with `remora wait --for frame`, then try again."
             case .recordingBusy: "Inspect `remora recording get`, or end it with `remora recording stop`."
             case .internal: "This is a Remora bug. Report the message."

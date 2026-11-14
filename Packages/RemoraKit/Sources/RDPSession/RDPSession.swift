@@ -13,6 +13,7 @@ public final class RDPSession: AgentInputSession, @unchecked Sendable {
     public let events: AsyncStream<SessionEvent>
     private let continuation: AsyncStream<SessionEvent>.Continuation
     private let configuration: SessionConfiguration
+    private let failureDiagnosis: ConnectionFailureDiagnosis
     private let frameSink: any FrameSink
     private let keyboardLayout: UInt32
     private let isoKeyboard: Bool
@@ -22,8 +23,10 @@ public final class RDPSession: AgentInputSession, @unchecked Sendable {
     @MainActor
     public init(
         configuration: SessionConfiguration, frameSink: any FrameSink,
-        inputFeedback: @escaping @Sendable (InputSource, SessionInputFeedback) -> Void = { _, _ in }
+        inputFeedback: @escaping @Sendable (InputSource, SessionInputFeedback) -> Void = { _, _ in },
+        failureDiagnosis: ConnectionFailureDiagnosis = .system
     ) {
+        self.failureDiagnosis = failureDiagnosis
         self.inputFeedback = inputFeedback
         self.configuration = configuration
         self.frameSink = frameSink
@@ -194,8 +197,14 @@ public final class RDPSession: AgentInputSession, @unchecked Sendable {
                 }
                 // run has stopped all channel workers. No callback can use the Unmanaged
                 // pointer after free. The Thread's strong capture keeps self alive here.
+                let failureAddress = string(rm_rdp_failure_address(handle))
+                let failurePort = rm_rdp_failure_port(handle)
                 rm_rdp_free(handle)
-                finish(state.lock.withLock { state.reason })
+                let reason = failureDiagnosis.diagnose(
+                    state.lock.withLock { state.reason }, host: failureAddress.isEmpty ? configuration.host : failureAddress,
+                    port: failurePort == 0 ? configuration.port : failurePort,
+                    isCancelled: { self.state.lock.withLock { self.state.cancelled } })
+                finish(reason)
             } catch {
                 finish(.protocolError(error.localizedDescription))
             }

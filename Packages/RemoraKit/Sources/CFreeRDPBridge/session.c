@@ -57,6 +57,8 @@ struct RMRDPSession {
     unsigned credential_requests;
     RMRDPDisconnectReason network_error;
     int socket_error;
+    char failure_address[NI_MAXHOST];
+    uint16_t failure_port;
 };
 
 RMInput *rm_rdp_input(RMRDPSession *s) { return s->input; }
@@ -107,6 +109,8 @@ static int tcp_connect(rdpContext *context, rdpSettings *settings, const char *h
     snprintf(service, sizeof(service), "%d", port);
     s->network_error = RMRDP_DISCONNECT_NONE;
     s->socket_error = 0;
+    s->failure_address[0] = 0;
+    s->failure_port = (uint16_t)port;
     if (getaddrinfo(host, service, &hints, &addresses) != 0) {
         s->network_error = RMRDP_DISCONNECT_HOST_NOT_FOUND;
         freerdp_set_last_error(context, FREERDP_ERROR_DNS_NAME_NOT_FOUND);
@@ -154,10 +158,16 @@ static int tcp_connect(rdpContext *context, rdpSettings *settings, const char *h
         if (error == 0 && !atomic_load(&s->aborted)) {
             if (fcntl(fd, F_SETFL, flags) == 0) {
                 result = fd;
+                s->failure_address[0] = 0;
                 break;
             }
             error = errno;
         }
+        /* Preserve the concrete endpoint. A hostname NWPath can remain satisfied
+         * even when macOS prohibits every resolved address. */
+        if (getnameinfo(a->ai_addr, a->ai_addrlen, s->failure_address,
+                        sizeof(s->failure_address), NULL, 0, NI_NUMERICHOST) != 0)
+            s->failure_address[0] = 0;
         close(fd);
     }
     freeaddrinfo(addresses);
@@ -618,3 +628,6 @@ void rm_rdp_free(RMRDPSession *s) {
         rm_display_free(display);
     }
 }
+
+const char *rm_rdp_failure_address(RMRDPSession *s) { return s->failure_address; }
+uint16_t rm_rdp_failure_port(RMRDPSession *s) { return s->failure_port; }

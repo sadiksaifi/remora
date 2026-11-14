@@ -50,6 +50,9 @@ struct SessionStatusView: View {
                     .font(.title2.weight(.semibold))
                 Text(message)
                     .foregroundStyle(.secondary)
+                if case .disconnected(let reason) = status, let recovery = reason?.recoverySuggestion {
+                    Text(recovery).foregroundStyle(.secondary)
+                }
             }
             .multilineTextAlignment(.center)
             .frame(maxWidth: 420)
@@ -93,7 +96,14 @@ struct SessionStatusView: View {
                 .accessibilityIdentifier("sessionCancel")
         case .awaitingCredentials, .awaitingTrust:
             EmptyView()
-        case .disconnected:
+        case .disconnected(let reason):
+            if reason?.recoverySuggestion != nil {
+                Button("Open Privacy & Security Settings") {
+                    if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security") {
+                        NSWorkspace.shared.open(url)
+                    }
+                }
+            }
             HStack(spacing: 12) {
                 Button("Close", action: onClose)
                     .keyboardShortcut(.cancelAction)
@@ -131,7 +141,7 @@ struct SessionStatusView: View {
         switch reason {
         case .authenticationFailed: "person.crop.circle.badge.exclamationmark"
         case .certificateRejected: "lock.trianglebadge.exclamationmark"
-        case .hostNotFound, .connectionRefused: "network.slash"
+        case .hostNotFound, .connectionRefused, .localNetworkDenied: "network.slash"
         case .connectionTimedOut: "clock.badge.exclamationmark"
         case .protocolError: "exclamationmark.triangle"
         case .serverEndedSession, .cancelledByUser, nil: "display"
@@ -145,6 +155,7 @@ struct SessionStatusView: View {
         case .hostNotFound: "Computer Not Found"
         case .connectionRefused: "Connection Refused"
         case .connectionTimedOut: "Connection Timed Out"
+        case .localNetworkDenied: "Local Network Access Denied"
         case .protocolError: "Couldn’t Connect"
         case .serverEndedSession, nil: "Session Ended"
         case .cancelledByUser: "Disconnected"
@@ -161,6 +172,8 @@ struct SessionStatusView: View {
             "Remora couldn’t find \(address). Check the host name and your network connection."
         case .connectionRefused:
             "\(address) refused the connection. Check that remote desktop is turned on and the port is correct."
+        case .localNetworkDenied:
+            "macOS reported that Remora cannot access \(address) on the local network."
         case .connectionTimedOut:
             "\(address) didn’t respond. Check that the computer is turned on and reachable."
         case .serverEndedSession(let detail) where !detail.isEmpty:

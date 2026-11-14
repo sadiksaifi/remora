@@ -56,6 +56,8 @@ void rm_vnc_set_input_pending(RMVNC *, bool);
 /* Worker-only; called after authenticated connected state is published. */
 void rm_vnc_enable_input_service(RMVNC *);
 void rm_vnc_free(RMVNC *);
+/* Worker-only, before free. Empty when no failed TCP endpoint was retained. */
+const char *rm_vnc_failure_address(RMVNC *);
 bool rm_vnc_step(RMVNC *);
 RMVNCDiagnostic rm_vnc_diagnostic(RMVNC *);
 RMVNCRuntimeDiagnostic rm_vnc_runtime_diagnostic(RMVNC *);

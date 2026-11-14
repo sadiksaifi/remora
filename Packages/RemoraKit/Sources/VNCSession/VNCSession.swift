@@ -13,6 +13,7 @@ public final class VNCSession: AgentInputSession, @unchecked Sendable {
     public let events: AsyncStream<SessionEvent>
     private let continuation: AsyncStream<SessionEvent>.Continuation
     private let configuration: SessionConfiguration
+    private let failureDiagnosis: ConnectionFailureDiagnosis
     private let frameSink: any FrameSink
     private let inputFeedback: @Sendable (InputSource, SessionInputFeedback) -> Void
     private let certificateStoreURL: URL
@@ -30,8 +31,10 @@ public final class VNCSession: AgentInputSession, @unchecked Sendable {
     public init(
         configuration: SessionConfiguration, frameSink: any FrameSink,
         inputFeedback: @escaping @Sendable (InputSource, SessionInputFeedback) -> Void = { _, _ in },
-        certificateStoreURL: URL = URL.applicationSupportDirectory.appending(path: "Remora/VNC/certificates", directoryHint: .isDirectory)
+        certificateStoreURL: URL = URL.applicationSupportDirectory.appending(path: "Remora/VNC/certificates", directoryHint: .isDirectory),
+        failureDiagnosis: ConnectionFailureDiagnosis = .system
     ) {
+        self.failureDiagnosis = failureDiagnosis
         self.configuration = configuration
         self.frameSink = frameSink
         self.inputFeedback = inputFeedback
@@ -69,7 +72,11 @@ public final class VNCSession: AgentInputSession, @unchecked Sendable {
 
     private func stop(_ reason: DisconnectReason) {
         state.lock.withLock {
-            guard !state.ended, !state.stopping else { return }
+            guard !state.ended else { return }
+            if state.stopping {
+                if reason == .cancelledByUser { state.reason = reason }
+                return
+            }
             state.stopping = true
             state.reason = reason
             state.cancelChallenge?()
@@ -332,11 +339,14 @@ public final class VNCSession: AgentInputSession, @unchecked Sendable {
                     state.connected = false
                     state.handle = nil
                 }
+                var failureAddress = configuration.host
                 if let handle {
+                    let address = String(cString: rm_vnc_failure_address(handle))
+                    if !address.isEmpty { failureAddress = address }
                     logRuntimeFailure(handle)
                     rm_vnc_free(handle)
                 }
-                finish()
+                finish(failureAddress: failureAddress)
             }
             do {
                 let pinURL = certificateStoreURL.appendingPathComponent(
@@ -494,7 +504,15 @@ public final class VNCSession: AgentInputSession, @unchecked Sendable {
         }
     }
 
-    private func finish() {
+    private func finish(failureAddress: String) {
+        let original = state.lock.withLock {
+            state.networkDeadline = nil
+            state.watchdog?.cancel()
+            return state.reason
+        }
+        let reason = failureDiagnosis.diagnose(
+            original, host: failureAddress, port: configuration.port,
+            isCancelled: { self.state.lock.withLock { self.state.reason == .cancelledByUser } })
         state.lock.withLock {
             guard !state.ended else { return }
             state.ended = true
@@ -511,7 +529,7 @@ public final class VNCSession: AgentInputSession, @unchecked Sendable {
             for receipt in state.receipts { receipt.resolve(.sessionEnded) }
             state.receipts.removeAll()
             state.commands.removeAll()
-            continuation.yield(.stateChanged(.disconnected(state.reason)))
+            continuation.yield(.stateChanged(.disconnected(state.reason == .cancelledByUser ? .cancelledByUser : reason)))
             continuation.finish()
         }
         inputFeedback(.human, .release)
