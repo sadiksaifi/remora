@@ -402,6 +402,7 @@ public final class VNCSession: AgentInputSession, @unchecked Sendable {
                     let reason: DisconnectReason =
                         switch rm_vnc_error(created) {
                         case 1: .hostNotFound
+                        case 13: .localNetworkDenied
                         case 2: .connectionRefused
                         case 3: .connectionTimedOut
                         case 4: .authenticationFailed

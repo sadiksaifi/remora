@@ -40,8 +40,11 @@ diagnostic connection on completion, cancellation, or its two-second deadline.
 Successful sessions, authentication failures, certificate rejections, missing
 hosts, and refused connections do not run this check.
 
-Only `NWPath.UnsatisfiedReason.localNetworkDenied` changes the failure to Local
-Network Access Denied. A ready diagnostic connection does not prove that the
+`NWPath.UnsatisfiedReason.localNetworkDenied` changes a transport failure to Local
+Network Access Denied. VNC also preserves `kDNSServiceErr_PolicyDenied` from
+DNS-SD setup, callbacks, and result processing as a confirmed denial during name
+resolution. Genuine missing-host errors keep their existing classification. A ready
+diagnostic connection does not prove that the
 original socket was allowed, and an inconclusive diagnostic leaves the original
 failure intact. The diagnostic state and path are logged under the
 `NetworkAccess` category with a unique attempt identifier.
@@ -101,8 +104,11 @@ incident and was not repeated during this verification.
 
 ## Verification limits
 
-Automated checks cover conservative classification, cancellation, and closing the
-diagnostic socket without sending protocol data. Reproducing the saved
+Automated checks cover conservative classification, cancellation, retaining the
+numeric endpoint, and closing the diagnostic socket without sending protocol
+data. A child-process DNS-SD fixture verifies that explicit resolver denials reach
+the public VNC session event stream while genuine missing-host errors stay intact.
+Reproducing the saved
 permission/policy disagreement requires macOS state that is not controlled by the
 test suite. Do not infer that this check repairs that state or guarantees that a
 future app update cannot encounter it.
