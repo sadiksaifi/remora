@@ -186,7 +186,10 @@ final class MarkerFrames: FrameSink, @unchecked Sendable {
                 peer.process.waitUntilExit()
             }, certificateStoreURL: pins)
         owner.withLock { $0 = session }
-        defer { session.disconnect() }
+        defer {
+            session.disconnect()
+            owner.withLock { $0 = nil }  // The feedback callback holds `owner`, which holds the session.
+        }
         let fallback = Task {
             do {
                 try await Task.sleep(for: .seconds(3))
