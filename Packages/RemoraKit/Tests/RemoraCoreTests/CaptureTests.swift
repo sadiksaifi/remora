@@ -322,7 +322,8 @@ private func movieMediaDuration(_ data: Data, range: Range<Int>? = nil) -> Doubl
     let rawPNG = try media.png(frames.snapshot())
     let startedAt = ProcessInfo.processInfo.systemUptime
     let movie = try media.movie(at: url, source: frames)
-    try await Task.sleep(for: .milliseconds(30))
+    // The pill appears after the encoder's warm-up, which held the second frame back 0.5 s on the CI runner.
+    try await Task.sleep(for: .seconds(1))
     let pillAt = ProcessInfo.processInfo.systemUptime - startedAt
     overlays.receive(.human, .key(scancode: 0x0F, down: true))
     // There are no frame observers or additional decoded frames. Only overlay invalidations wake the movie.
@@ -345,7 +346,7 @@ private func movieMediaDuration(_ data: Data, range: Range<Int>? = nil) -> Doubl
         let time = CMSampleBufferGetPresentationTimeStamp(sample).seconds
         if first == nil && time > pillAt + 0.05 { first = CMSampleBufferGetImageBuffer(sample) }
         if time > pillAt + 1.49 && time < pillAt + 1.7 { faded = CMSampleBufferGetImageBuffer(sample) }
-        if time > 1.75 { disabled = CMSampleBufferGetImageBuffer(sample) }
+        if time > pillAt + 1.75 { disabled = CMSampleBufferGetImageBuffer(sample) }
         times.append(time)
     }
     func rgb(_ buffer: CVPixelBuffer, x: Int, y: Int) -> [Int] {
@@ -365,15 +366,16 @@ private func movieMediaDuration(_ data: Data, range: Range<Int>? = nil) -> Doubl
     #expect(rgb(initial, x: 320, y: 255).allSatisfy { $0 > 120 })
     #expect(try rgb(#require(faded), x: 320, y: 255).allSatisfy { abs($0 - 80) < 8 })
     #expect(try rgb(#require(disabled), x: 98, y: 96).allSatisfy { abs($0 - 80) < 8 })
-    #expect(animatesThroughout(times.filter { $0 > pillAt && $0 < pillAt + 1.5 }))
+    #expect(animatesThroughout(times, from: pillAt, to: pillAt + 1.5))
 }
 
 /// Overlay invalidations alone keep a movie's frames coming. Without them, a movie holds one frame until the
 /// next state change, a gap of a second or more here. A slow encoder spaces frames further apart, but by much
-/// less than this bound, so the check does not depend on the frame rate. Callers leave out the encoder's
-/// warm-up after the first frame, which took 0.5 s on the CI runner.
-private func animatesThroughout(_ times: [Double]) -> Bool {
-    times.count > 3 && zip(times, times.dropFirst()).allSatisfy { $1 - $0 < 0.4 }
+/// less than this bound, so the check does not depend on the frame rate. The window counts its own ends, so
+/// frames that start late or stop early fail too. Callers start the window after the encoder's warm-up.
+private func animatesThroughout(_ times: [Double], from start: Double, to end: Double) -> Bool {
+    let edges = [start] + times.filter { $0 > start && $0 < end } + [end]
+    return edges.count > 5 && zip(edges, edges.dropFirst()).allSatisfy { $1 - $0 < 0.4 }
 }
 
 @Test(arguments: [1.0, 2.0]) func recordingAgentCursorMovesAndPressesWithoutAScreenObserver(unit: Double) async throws {
@@ -422,7 +424,7 @@ private func animatesThroughout(_ times: [Double]) -> Bool {
     reader.add(output)
     #expect(reader.startReading())
     var resting: CVPixelBuffer?
-    var pressed: [CVPixelBuffer] = []
+    var pressed: [(time: Double, buffer: CVPixelBuffer)] = []
     var human: [CVPixelBuffer] = []
     var centers: [Double] = []
     var times: [Double] = []
@@ -454,12 +456,15 @@ private func animatesThroughout(_ times: [Double]) -> Bool {
             CVPixelBufferUnlockBaseAddress(buffer, .readOnly)
         }
         if time > moveAt + arrival + 0.2 && time < pressAt { resting = buffer }
-        if time > pressAt + 0.08 && time < pressAt + 0.45 { pressed.append(buffer) }
+        if time > pressAt + 0.08 && time < pressAt + 0.45 { pressed.append((time - pressAt, buffer)) }
         if time > humanAt + 0.03 && time < humanAt + 0.5 { human.append(buffer) }
     }
-    #expect(animatesThroughout(times.filter { $0 > moveAt }))
-    // A frame during the move shows the cursor between its resting centers near x 86-102 and 509-514.
-    #expect(centers.contains { (120...480).contains($0) })
+    #expect(animatesThroughout(times, from: moveAt, to: humanAt))
+    // The cursor travels from its resting center near x 86-102 toward 509-514. At least two frames show it
+    // between them, at separate positions in travel order.
+    let between = centers.filter { (120...480).contains($0) }
+    #expect(between.count >= 2 && between == between.sorted() && between.last! - between.first! > 20)
+    #expect((centers.max() ?? 0) - (centers.min() ?? 0) > 200)
     let rest = try #require(resting)
     // The stroke covers the target tip. The fill is the specified premultiplied slate mixture.
     #expect(rgb(rest, 500, 140).allSatisfy { $0 > 145 })
@@ -469,9 +474,10 @@ private func animatesThroughout(_ times: [Double]) -> Bool {
     let halo = rgb(rest, 500 + Int(15 * unit), 140 + Int(4 * unit))
     for (actual, expected) in zip(halo, [68, 79, 90]) { #expect(abs(actual - expected) < 12) }
     // No agent click ring at radius 14; pressing shrinks the glyph about the same target tip. A ring would
-    // stay brighter than this bound for 0.2 s, so every pressed frame is checked.
-    #expect(!pressed.isEmpty)
-    for press in pressed {
+    // stay brighter than this bound for about 0.19 s, so at least one pressed frame falls in that time, and
+    // every pressed frame is checked.
+    #expect(pressed.contains { $0.time < 0.19 })
+    for (_, press) in pressed {
         #expect(rgb(press, 500 + Int(14 * unit), 140)[2] < 135)
         #expect(rgb(press, 500, 140).allSatisfy { $0 > 125 })
     }
