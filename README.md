@@ -13,11 +13,9 @@
   <a href="https://github.com/sadiksaifi/remora/releases/latest"><img alt="Download for macOS" src="https://img.shields.io/badge/Download-macOS-10B981?style=for-the-badge&labelColor=1F2937&logo=apple&logoColor=white"></a>
 </p>
 
-<!-- SCREENSHOT: paste the GitHub user-attachments URL into src below, then remove these comment markers.
 <p align="center">
-  <img src="https://github.com/user-attachments/assets/REPLACE-ME" width="90%" alt="Remora screenshot">
+  <img src="assets/demo.gif" width="100%" alt="Remora switching between macOS, Debian and Windows sessions in one window">
 </p>
--->
 
 ## Highlights
 
