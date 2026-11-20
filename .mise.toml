@@ -105,12 +105,13 @@ usage = 'arg "<bump>" help="SemVer part to bump" { choices "major" "minor" "patc
 run = "tagsmith tag --channel stable --bump {{usage.bump}} --dry-run --json"
 
 [tasks."release:tag"]
-description = "Create a release tag at HEAD and push it to origin. HEAD must be the commit at origin/main."
+description = "Create a release tag at HEAD and push it to origin. HEAD must be the commit at main on origin."
 usage = 'arg "<version>" help="Version that release:preview printed, for example 1.2.3"'
 # Tagsmith tags any commit, so this keeps an unmerged local commit from becoming a release.
 run = [
-    "git fetch --quiet origin main",
-    '[ "$(git rev-parse HEAD)" = "$(git rev-parse origin/main)" ] || { echo "HEAD is not origin/main. Release only the commit at origin/main: run git switch main and git pull --ff-only, and land local commits through a pull request." >&2; exit 1; }',
+    # FETCH_HEAD is the main branch on origin as of this fetch, whatever the local refs or refspecs say.
+    "git fetch --quiet origin refs/heads/main",
+    '[ "$(git rev-parse --verify HEAD)" = "$(git rev-parse --verify FETCH_HEAD)" ] || { echo "HEAD is not main on origin. Release only that commit: run git switch main and git pull --ff-only, and land local commits through a pull request." >&2; exit 1; }',
     "tagsmith tag --channel stable --version {{usage.version | quote}} --push --json",
 ]
 
@@ -258,7 +259,8 @@ run = '''
 # A caller's exported SHELLOPTS can turn on xtrace, which would print every value.
 set +x
 set -euo pipefail
-repo=sadiksaifi/remora
+# The host is part of the repository, so GH_HOST cannot send the secrets to another host.
+repo=github.com/sadiksaifi/remora
 secrets=(
     "DEVELOPER_ID_P12_BASE64|op://Remora/Developer ID Application/developer-id.p12|base64"
     "DEVELOPER_ID_P12_PASSWORD|op://Remora/Developer ID Application/password|text"
@@ -277,7 +279,7 @@ if [[ ${usage_dry_run:-false} == true ]]; then
 fi
 command -v op >/dev/null || { echo "The 1Password CLI, op, is not installed. Install it with: brew install 1password-cli" >&2; exit 1; }
 command -v gh >/dev/null || { echo "The GitHub CLI, gh, is not installed. Install it with: brew install gh" >&2; exit 1; }
-gh auth status --hostname github.com >/dev/null || { echo "gh is not signed in to github.com. Run: gh auth login" >&2; exit 1; }
+gh auth status --hostname "${repo%%/*}" >/dev/null || { echo "gh is not signed in to ${repo%%/*}. Run: gh auth login --hostname ${repo%%/*}" >&2; exit 1; }
 op vault get Remora >/dev/null || { echo "op cannot open the Remora vault. Sign in to the 1Password CLI and check that the vault exists." >&2; exit 1; }
 # Every value is read before any secret changes, so a missing reference changes nothing.
 values=()
