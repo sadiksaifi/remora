@@ -29,13 +29,16 @@
 
 Download the DMG from the [latest release](https://github.com/sadiksaifi/remora/releases/latest), open it, and drag Remora to Applications.
 
-> [!NOTE]
 > Remora supports only Apple silicon Macs with macOS 26 or later.
 
-To give your AI agents Remora, open Settings > Command Line:
+## AI agents
+
+Your AI agents can see, click and type on your remote desktops through the `remora` command-line tool. To set it up, open Settings > Command Line in Remora:
 
 - **Command-line tool**: Install puts `remora` in `~/.local/bin`, and offers PATH setup if your shell does not find it.
 - **Agent skill**: Install links the skill into `~/.claude/skills` for Claude Code, and into `~/.agents/skills` for Codex, OpenCode, Cursor and other agents.
+
+Then ask your agent to do something on one of your remote machines.
 
 ## License
 
