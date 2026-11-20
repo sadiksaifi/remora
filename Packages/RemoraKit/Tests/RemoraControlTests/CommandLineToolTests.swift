@@ -63,7 +63,7 @@ private func temporaryFolder() -> URL { FileManager.default.temporaryDirectory.a
         #expect(tool.state == .otherLink)
         #expect(throws: CommandLineTool.Failure.self) { try tool.install() }
         #expect(throws: CommandLineTool.Failure.self) { try tool.uninstall() }
-        #expect(tool.destination?.path == foreign.resolvingSymlinksInPath().path)
+        #expect(tool.destination == CommandLineTool.resolved(foreign.path))
     }
     try tool.install(replacingOtherLink: true)
     #expect(tool.state == .installed)
@@ -92,7 +92,7 @@ private func temporaryFolder() -> URL { FileManager.default.temporaryDirectory.a
     let copy = root.appending(path: "Remora copy.app")
     try manager.createSymbolicLink(at: tool.link, withDestinationURL: try file(in: copy, at: helper, bundleIdentifier: "com.peblon.remora"))
     #expect(tool.state == .otherCopy)
-    #expect(tool.linkedApp?.path == copy.resolvingSymlinksInPath().path)
+    #expect(tool.linkedApp == CommandLineTool.resolved(copy.path))
     try manager.removeItem(at: copy.appending(path: helper))
     #expect(tool.state == .broken)
     try tool.install()
@@ -124,6 +124,16 @@ private func temporaryFolder() -> URL { FileManager.default.temporaryDirectory.a
     #expect(throws: CommandLineTool.Failure.self) { try tool.install() }
     try manager.removeItem(at: foreign)
     #expect(tool.state == .otherLink)
+
+    // `..` after a linked folder leaves the folder the link points to, so the foreign app still owns this dangling link.
+    try manager.removeItem(at: tool.link)
+    try manager.createSymbolicLink(at: root.appending(path: "deep/bin/alias"), withDestinationURL: root.appending(path: "deep/bin/nested/inner"))
+    try manager.createDirectory(at: root.appending(path: "deep/bin/nested/inner"), withIntermediateDirectories: true)
+    _ = try file(in: root.appending(path: "deep/bin/nested/Foreign.app"), at: helper, bundleIdentifier: "com.example.foreign")
+    try manager.removeItem(at: root.appending(path: "deep/bin/nested/Foreign.app/\(helper)"))
+    try manager.createSymbolicLink(atPath: tool.link.path, withDestinationPath: "alias/../Foreign.app/\(helper)")
+    #expect(tool.state == .otherLink)
+    #expect(throws: CommandLineTool.Failure.self) { try tool.install() }
 
     // A link through an alias of this app is this copy's.
     try manager.removeItem(at: tool.link)

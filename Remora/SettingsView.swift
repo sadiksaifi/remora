@@ -190,15 +190,11 @@ private struct LinkStatus: View {
     let state: CommandLineTool.State?
 
     var body: some View {
-        let name = AppIdentity.current.name
-        let pointsTo = "\(link.displayPath) points to \(link.displayDestination)"
         switch state {
-        case .notInstalled, nil: Text("Not installed")
-        case .installed: StatusLabel(text: "Installed", ok: true).help(link.displayPath)
-        case .otherCopy: StatusLabel(text: "Points to another copy of \(name)", ok: false).help(pointsTo)
-        case .broken: StatusLabel(text: "\(name) was moved or deleted", ok: false).help(pointsTo)
-        case .otherLink: StatusLabel(text: "Points to another app or tool", ok: false).help(pointsTo)
-        case .conflict: StatusLabel(text: "Another file is in the way", ok: false).help(link.displayPath)
+        case .notInstalled, nil: Text(CommandLineTool.State.notInstalled.summary)
+        case let state?:
+            StatusLabel(text: state.summary, ok: state == .installed)
+                .help([.installed, .conflict].contains(state) ? link.displayPath : "\(link.displayPath) points to \(link.displayDestination)")
         }
     }
 }
@@ -302,11 +298,8 @@ private struct CommandLinePane: View {
             }
         }
         .settingsPane()
-        .onAppear { state = tool.state }
-        // The user may move the file in the way, or the app, while Remora is in the background.
-        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
-            state = tool.state
-        }
+        // The command line, Finder or another app may change the link while the pane is open.
+        .task { repeat { state = tool.state } while (try? await Task.sleep(for: .seconds(1))) != nil }
     }
 
     private func perform(_ action: () throws -> Void) {
@@ -355,9 +348,8 @@ private struct AgentSkillSection: View {
             }
             .accessibilityAction { otherAgentsExpanded.toggle() }
         }
-        .onAppear(perform: refresh)
-        // The user may change a skills folder while Remora is in the background.
-        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in refresh() }
+        // The command line, Finder or another app may change a skills folder while the pane is open.
+        .task { repeat { refresh() } while (try? await Task.sleep(for: .seconds(1))) != nil }
     }
 
     private func refresh() {

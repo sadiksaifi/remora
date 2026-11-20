@@ -18,6 +18,19 @@ public struct CommandLineTool: Sendable {
         case otherLink
         /// A file or folder that isn't a link is at the link's path.
         case conflict
+
+        /// The status line that Settings and the CLI show.
+        public var summary: String {
+            let name = AppIdentity.current.name
+            return switch self {
+            case .notInstalled: "Not installed"
+            case .installed: "Installed"
+            case .otherCopy: "Points to another copy of \(name)"
+            case .broken: "\(name) was moved or deleted"
+            case .otherLink: "Points to another app or tool"
+            case .conflict: "Another file is in the way"
+            }
+        }
     }
 
     public enum Failure: Error, LocalizedError {
@@ -61,12 +74,24 @@ public struct CommandLineTool: Sendable {
     /// The link's path for display, such as ~/.local/bin/remora.
     public var displayPath: String { (link.path as NSString).abbreviatingWithTildeInPath }
 
-    /// Where the link points, or nil when nothing or a file that isn't a symbolic link is at its path. A live link resolves as the
-    /// file system does. A dangling relative link is read from its folder's resolved path, because its folder may itself be a link.
+    /// Where the link points, resolved as the file system resolves it, or nil when nothing or a file that isn't a symbolic link is at its path.
     var destination: URL? {
         guard let path = try? FileManager.default.destinationOfSymbolicLink(atPath: link.path) else { return nil }
-        if FileManager.default.fileExists(atPath: link.path) { return link.resolvingSymlinksInPath() }
-        return URL(fileURLWithPath: path, relativeTo: link.deletingLastPathComponent().resolvingSymlinksInPath()).standardizedFileURL
+        return Self.resolved(path.hasPrefix("/") ? path : link.deletingLastPathComponent().path + "/" + path)
+    }
+
+    /// `path` with its deepest existing ancestor resolved by `realpath`, so `..` after a linked folder leaves the folder the link points to.
+    /// Collapsing `..` first, as URLs do, would read a different folder.
+    static func resolved(_ path: String) -> URL {
+        var (head, tail) = (path, [String]())
+        while true {
+            if let real = realpath(head, nil) {
+                defer { free(real) }
+                return URL(fileURLWithPath: NSString.path(withComponents: [String(cString: real)] + tail)).standardizedFileURL
+            }
+            tail.insert((head as NSString).lastPathComponent, at: 0)
+            head = (head as NSString).deletingLastPathComponent
+        }
     }
 
     /// Where the link points, for display, or an empty string when it isn't a symbolic link.
@@ -88,7 +113,7 @@ public struct CommandLineTool: Sendable {
         guard (try? manager.attributesOfItem(atPath: link.path)) != nil else { return .notInstalled }
         guard let destination else { return .conflict }
         let exists = manager.fileExists(atPath: destination.path)
-        if destination.path == target.resolvingSymlinksInPath().path { return exists ? .installed : .broken }
+        if destination == Self.resolved(target.path) { return exists ? .installed : .broken }
         // A missing app was moved or deleted. An app that is still there belongs to this variant only with its bundle identifier.
         guard let linkedApp else { return .otherLink }
         guard manager.fileExists(atPath: linkedApp.path) else { return .broken }

@@ -51,13 +51,11 @@ struct SettingsCommand: AsyncParsableCommand {
             commandName: "cli", abstract: "Inspect or change the \(AppIdentity.current.commandName) link in ~/.local/bin.",
             subcommands: [Get.self, Repair.self, Uninstall.self])
         @OptionGroup var options: CommonOptions
-        /// This copy's helper by its full path, because the command name on PATH may run another copy or another tool.
-        static var repairCommand: String { "`'\(CommandLineTool().target.path)' settings cli repair" }
 
         struct Get: ParsableCommand {
             static let configuration = CommandConfiguration(
                 abstract: "Report whether \(CommandLineTool().displayPath) is installed and points to this copy of \(AppIdentity.current.name).",
-                discussion: linkStates(fix: "\(AppIdentity.current.commandName) settings cli repair"))
+                discussion: linkStates(fix: "settings cli repair"))
             @OptionGroup var options: CommonOptions
             func run() { Output.write(.success(CommandLineTool().status), json: options.json) }
         }
@@ -66,7 +64,7 @@ struct SettingsCommand: AsyncParsableCommand {
                 abstract: "Point \(CommandLineTool().displayPath) at this copy of \(AppIdentity.current.name), and create it if it's missing.",
                 discussion: """
                     It acts on the copy that contains this helper. When \(CommandLineTool().displayPath) runs another copy or another tool, \
-                    run this copy's helper by its full path: \(CommandLineTool().target.path)
+                    run this copy's helper by its full path: \(helperCommand) settings cli repair
 
                     \(readOnlyDiscussion)
                     """)
@@ -77,8 +75,8 @@ struct SettingsCommand: AsyncParsableCommand {
                     try $0.install(replacingOtherLink: replace)
                 } inUse: { otherLink in
                     otherLink
-                        ? "Ask the user before you replace it. Then run \(repairCommand) --replace`, or choose Replace… in \(AppIdentity.current.name) Settings."
-                        : "After that, run \(repairCommand)`."
+                        ? "Ask the user before you replace it. Then run `\(helperCommand) settings cli repair --replace`, or choose Replace… in \(AppIdentity.current.name) Settings."
+                        : "After that, run `\(helperCommand) settings cli repair`."
                 }
             }
         }
