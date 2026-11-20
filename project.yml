@@ -10,6 +10,9 @@ packages:
   ArgumentParser:
     url: https://github.com/apple/swift-argument-parser
     from: 1.7.0
+  Sparkle:
+    url: https://github.com/sparkle-project/Sparkle
+    from: 2.10.1
 settings:
   base:
     ARCHS: arm64
@@ -29,9 +32,15 @@ settings:
     Debug:
       REMORA_BUNDLE_IDENTIFIER: com.peblon.remora.dev
       REMORA_NAME: Remora Dev
+      # Remora Dev has no update feed, so it never checks for or installs Remora.
+      REMORA_UPDATE_FEED_URL: ""
     Release:
       REMORA_BUNDLE_IDENTIFIER: com.peblon.remora
       REMORA_NAME: Remora
+      # Sparkle reads the appcast that the release workflow attaches to the latest release.
+      REMORA_UPDATE_FEED_URL: https://github.com/sadiksaifi/remora/releases/latest/download/appcast.xml
+      # The EdDSA public key that verifies each update. release:app refuses to ship without it.
+      REMORA_SPARKLE_PUBLIC_KEY: ""
 targets:
   Remora:
     type: application
@@ -57,6 +66,8 @@ targets:
         product: RDPSession
       - package: RemoraKit
         product: VNCSession
+      - package: Sparkle
+        product: Sparkle
     postBuildScripts:
       # A skill's name must match its folder, so Remora Dev bundles the skill as remora-dev and names its own command in it.
       - name: Bundle agent skill
@@ -84,6 +95,8 @@ targets:
         DEVELOPMENT_TEAM: LZ3V3WUPWR
         ENABLE_APP_SANDBOX: NO
         GENERATE_INFOPLIST_FILE: YES
+        # Holds the Sparkle keys, which have no INFOPLIST_KEY_ setting.
+        INFOPLIST_FILE: Remora/Info.plist
         INFOPLIST_KEY_CFBundleDisplayName: $(REMORA_NAME)
         INFOPLIST_KEY_NSLocalNetworkUsageDescription: Remora connects to remote computers on your local network.
         INFOPLIST_KEY_LSApplicationCategoryType: public.app-category.utilities

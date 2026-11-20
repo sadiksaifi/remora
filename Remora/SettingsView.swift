@@ -32,9 +32,12 @@ extension NSApplication {
 
 /// The Settings scene's content. It holds only settings that change existing behavior.
 struct SettingsView: View {
+    /// False in a build without updates, such as Remora Dev.
+    let showsUpdates: Bool
+
     var body: some View {
         TabView {
-            Tab("General", systemImage: "gearshape") { GeneralPane() }
+            Tab("General", systemImage: "gearshape") { GeneralPane(showsUpdates: showsUpdates) }
             Tab("Command Line", systemImage: "terminal") { CommandLinePane() }
         }
     }
@@ -67,6 +70,9 @@ private struct StatusLabel: View {
 }
 
 private struct GeneralPane: View {
+    let showsUpdates: Bool
+    @AppStorage(AppUpdater.automaticChecksKey) private var checkForUpdates = false
+    @AppStorage(AppUpdater.automaticDownloadsKey) private var installUpdates = false
     @AppStorage(SystemShortcutCapture.enabledKey) private var captureShortcuts = true
     @AppStorage(AppSettings.showKeyPressesKey) private var showKeyPresses = false
     @AppStorage(AppSettings.keyPressSizeKey) private var keyPressSize = 1.0
@@ -146,6 +152,15 @@ private struct GeneralPane: View {
                 }
                 .accessibilityLabel(Self.pointerTitle)
                 .accessibilityIdentifier("showPointerInRecordings")
+            }
+            if showsUpdates {
+                Section("Updates") {
+                    Toggle("Check for updates automatically", isOn: $checkForUpdates)
+                        .accessibilityIdentifier("checkForUpdates")
+                    Toggle("Download and install updates automatically", isOn: $installUpdates)
+                        .disabled(!checkForUpdates)
+                        .accessibilityIdentifier("installUpdates")
+                }
             }
         }
         .settingsPane()

@@ -122,7 +122,8 @@ run = "tagsmith validate --tag {{usage.tag | quote}} --github-output"
 
 # The release tasks build the signed and notarized DMG in build/release/dist. On CI they run in
 # .github/workflows/release.yml. Locally they need the Developer ID Application certificate in a
-# keychain, and release:notarize needs the same NOTARY_* variables as the workflow.
+# keychain, release:notarize needs the same NOTARY_* variables as the workflow, and
+# release:appcast needs SPARKLE_ED_PRIVATE_KEY.
 
 [tasks."release:app"]
 description = "Archive, sign and verify Remora.app with the Developer ID certificate."
@@ -150,16 +151,25 @@ plutil -insert teamID -string "$team" "$options"
 xcodebuild -exportArchive -archivePath "$out/Remora.xcarchive" -exportOptionsPlist "$options" -exportPath "$out/export" -quiet
 
 app="$out/export/Remora.app"
+# Without the key, Remora could never verify, and so never install, an update.
+key=$(plutil -extract SUPublicEDKey raw -o - "$app/Contents/Info.plist")
+[[ $(base64 --decode <<<"$key" 2>/dev/null | wc -c) -eq 32 ]] || { echo "SUPublicEDKey is not an EdDSA public key. Set REMORA_SPARKLE_PUBLIC_KEY in project.yml." >&2; exit 1; }
 codesign --verify --deep --strict --verbose=2 "$app"
 # A Developer ID Application certificate of the team.
 requirement="anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] and certificate leaf[field.1.2.840.113635.100.6.1.13] and certificate leaf[subject.OU] = \"$team\""
-for code in "$app" "$app/Contents/Helpers/remora"; do
+# Every Mach-O file: the app, its command-line tool, and Sparkle's framework, helpers and XPC services.
+while IFS= read -r -d '' code; do
+    kind=$(file -b "$code")
+    [[ $kind == Mach-O* ]] || continue
     codesign --verify --strict -R="$requirement" "$code"
-    details=$(codesign --display --verbose=2 "$code" 2>&1)
-    [[ $details =~ flags=0x[0-9a-f]+\([^\)]*runtime ]] || { echo "$code lacks the hardened runtime" >&2; exit 1; }
-    entitlements=$(codesign --display --entitlements - --xml "$code" 2>/dev/null)
-    [[ $entitlements != *get-task-allow* ]] || { echo "$code has the get-task-allow entitlement" >&2; exit 1; }
-done
+    if [[ $kind == *executable* ]]; then
+        details=$(codesign --display --verbose=2 "$code" 2>&1)
+        [[ $details =~ flags=0x[0-9a-f]+\([^\)]*runtime ]] || { echo "$code lacks the hardened runtime" >&2; exit 1; }
+        entitlements=$(codesign --display --entitlements - --xml "$code" 2>/dev/null)
+        [[ $entitlements != *get-task-allow* ]] || { echo "$code has the get-task-allow entitlement" >&2; exit 1; }
+    fi
+    echo "Verified ${code#"$app/"}"
+done < <(find "$app" -type f -perm -u+x -print0)
 echo "Signed and verified $app $version"
 '''
 
@@ -220,8 +230,55 @@ spctl --assess --type exec --verbose=2 "$mount/Remora.app"
 cat "$dist/SHA256SUMS"
 '''
 
+[tasks."release:appcast"]
+description = "Sign the notarized DMG for Sparkle and write appcast.xml, the update feed with this release as its one item."
+run = '''
+#!/usr/bin/env bash
+set -euo pipefail
+: "${SPARKLE_ED_PRIVATE_KEY:?Set it to the private EdDSA key that Sparkle generate_keys -x exported}"
+info=build/release/export/Remora.app/Contents/Info.plist
+version=$(plutil -extract CFBundleShortVersionString raw -o - "$info")
+dist=build/release/dist
+dmg="Remora-$version-macos-arm64.dmg"
+releases=https://github.com/sadiksaifi/remora/releases
+bin=build/DerivedData/SourcePackages/artifacts/sparkle/Sparkle/bin
+# The key goes through a pipe, so it is never on disk or in the process list.
+signature=$(printf '%s' "$SPARKLE_ED_PRIVATE_KEY" | "$bin/sign_update" --ed-key-file - -p "$dist/$dmg")
+# The private key must match the public key in the app, or this version could not verify the next update.
+swift -e '
+import CryptoKit
+import Foundation
+let arguments = CommandLine.arguments
+let key = try Curve25519.Signing.PublicKey(rawRepresentation: Data(base64Encoded: arguments[1])!)
+let dmg = try Data(contentsOf: URL(filePath: arguments[3]))
+guard key.isValidSignature(Data(base64Encoded: arguments[2])!, for: dmg) else {
+    FileHandle.standardError.write(Data("The DMG signature does not verify with SUPublicEDKey in the app. Check SPARKLE_ED_PRIVATE_KEY.\n".utf8))
+    exit(1)
+}
+' "$(plutil -extract SUPublicEDKey raw -o - "$info")" "$signature" "$dist/$dmg"
+cat > "$dist/appcast.xml" <<XML
+<?xml version="1.0" encoding="utf-8"?>
+<rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle">
+    <channel>
+        <title>Remora</title>
+        <item>
+            <title>Remora $version</title>
+            <pubDate>$(LC_ALL=C date -u '+%a, %d %b %Y %H:%M:%S +0000')</pubDate>
+            <sparkle:version>$(plutil -extract CFBundleVersion raw -o - "$info")</sparkle:version>
+            <sparkle:shortVersionString>$version</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>$(plutil -extract LSMinimumSystemVersion raw -o - "$info")</sparkle:minimumSystemVersion>
+            <sparkle:releaseNotesLink>$releases/tag/v$version</sparkle:releaseNotesLink>
+            <enclosure url="$releases/download/v$version/$dmg" length="$(stat -f %z "$dist/$dmg")" type="application/octet-stream" sparkle:edSignature="$signature"/>
+        </item>
+    </channel>
+</rss>
+XML
+xmllint --noout "$dist/appcast.xml"
+cat "$dist/appcast.xml"
+'''
+
 [tasks."release:publish"]
-description = "Create the GitHub release for a tag with the DMG and SHA256SUMS in build/release/dist."
+description = "Create the GitHub release for a tag with the DMG, SHA256SUMS and appcast.xml in build/release/dist."
 usage = '''
 arg "<tag>" help="Stable release tag, for example v1.2.3"
 arg "<commit>" help="Commit the tag must point to on origin"
@@ -237,6 +294,7 @@ dmg="Remora-$version-macos-arm64.dmg"
 # SHA256SUMS must list only this DMG, and the DMG must match it.
 [[ $(cut -d ' ' -f 3- "$dist/SHA256SUMS") == "$dmg" ]] || { echo "$dist/SHA256SUMS does not list only $dmg" >&2; exit 1; }
 (cd "$dist" && shasum -a 256 --check SHA256SUMS)
+grep -qF "<enclosure url=\"https://github.com/sadiksaifi/remora/releases/download/$tag/$dmg\"" "$dist/appcast.xml" || { echo "$dist/appcast.xml does not offer $dmg" >&2; exit 1; }
 notes=$(mktemp)
 trap 'rm -f "$notes"' EXIT
 {
@@ -246,7 +304,7 @@ trap 'rm -f "$notes"' EXIT
 } > "$notes"
 remote=$(gh api "repos/{owner}/{repo}/commits/refs/tags/$tag" --jq .sha)
 [[ $remote == "$commit" ]] || { echo "Tag $tag points to $remote on origin, not $commit" >&2; exit 1; }
-gh release create "$tag" --verify-tag --latest --title "Remora $version" --notes-file "$notes" "$dist/$dmg" "$dist/SHA256SUMS"
+gh release create "$tag" --verify-tag --latest --title "Remora $version" --notes-file "$notes" "$dist/$dmg" "$dist/SHA256SUMS" "$dist/appcast.xml"
 '''
 
 [tasks."release:secrets"]

@@ -13,6 +13,7 @@
 		3DD3F2D30298024A67E8AA6A /* RemoraControl in Frameworks */ = {isa = PBXBuildFile; productRef = 60133FC969A2D683DBDC1397 /* RemoraControl */; };
 		443519283476C4C1AC50560F /* VNCSession in Frameworks */ = {isa = PBXBuildFile; productRef = 78B73A027DFFF0DF2A211A18 /* VNCSession */; };
 		7943F21C2B787C5DD67C6E30 /* ScreenCommands.swift in Sources */ = {isa = PBXBuildFile; fileRef = B6681F072D5A435B89C65498 /* ScreenCommands.swift */; };
+		79C8EC8A96F642E22E777B31 /* Sparkle in Frameworks */ = {isa = PBXBuildFile; productRef = 026759D5C5B595F47B021E89 /* Sparkle */; };
 		924B46096561BCA50859EE48 /* AgentName.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA418E92D1E2E401983629E4 /* AgentName.swift */; };
 		A791380DFFB1D7C1FCEFADC2 /* SessionCommands.swift in Sources */ = {isa = PBXBuildFile; fileRef = 774002F2A34E21E2D626D880 /* SessionCommands.swift */; };
 		B1C9787A91AEA39CBD37D6CA /* RemoraCore in Frameworks */ = {isa = PBXBuildFile; productRef = F4412091013E9923095E958D /* RemoraCore */; };
@@ -70,9 +71,22 @@
 		F54EA48F30A2A5C79C170AE7 /* RemoraKit */ = {isa = PBXFileReference; lastKnownFileType = folder; name = RemoraKit; path = Packages/RemoraKit; sourceTree = SOURCE_ROOT; };
 /* End PBXFileReference section */
 
+/* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
+		D350BDD4EF67D0BF9720F0DE /* PBXFileSystemSynchronizedBuildFileExceptionSet */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Info.plist,
+			);
+			target = AC73B08B2CB46BF7B51E6F4F /* Remora */;
+		};
+/* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
+
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		C5CDBF053038F5C0A7637D02 /* Remora */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				D350BDD4EF67D0BF9720F0DE /* PBXFileSystemSynchronizedBuildFileExceptionSet */,
+			);
 			explicitFileTypes = {
 			};
 			explicitFolders = (
@@ -100,6 +114,7 @@
 				B1C9787A91AEA39CBD37D6CA /* RemoraCore in Frameworks */,
 				BF3629BE785DAD332249FF76 /* RDPSession in Frameworks */,
 				443519283476C4C1AC50560F /* VNCSession in Frameworks */,
+				79C8EC8A96F642E22E777B31 /* Sparkle in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -200,6 +215,7 @@
 				F4412091013E9923095E958D /* RemoraCore */,
 				CEE650B072CCF9E151EF611A /* RDPSession */,
 				78B73A027DFFF0DF2A211A18 /* VNCSession */,
+				026759D5C5B595F47B021E89 /* Sparkle */,
 			);
 			productName = Remora;
 			productReference = E3C547F7F1E1AEA0842A1FA7 /* Remora.app */;
@@ -235,6 +251,7 @@
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
 				0A5CA4E4BB60586632112DBA /* XCRemoteSwiftPackageReference "swift-argument-parser" */,
+				F5AFFEB6DD68914EA4DA270A /* XCRemoteSwiftPackageReference "Sparkle" */,
 				4369BF9C695AAE909EA22AC4 /* XCLocalSwiftPackageReference "Packages/RemoraKit" */,
 			);
 			preferredProjectObjectVersion = 77;
@@ -425,6 +442,7 @@
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				REMORA_BUNDLE_IDENTIFIER = com.peblon.remora.dev;
 				REMORA_NAME = "Remora Dev";
+				REMORA_UPDATE_FEED_URL = "";
 				SDKROOT = macosx;
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
 				SWIFT_DEFAULT_ACTOR_ISOLATION = nonisolated;
@@ -445,6 +463,7 @@
 				DEVELOPMENT_TEAM = LZ3V3WUPWR;
 				ENABLE_APP_SANDBOX = NO;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = Remora/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = "$(REMORA_NAME)";
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.utilities";
 				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "Remora connects to remote computers on your local network.";
@@ -472,6 +491,7 @@
 				DEVELOPMENT_TEAM = LZ3V3WUPWR;
 				ENABLE_APP_SANDBOX = NO;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = Remora/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = "$(REMORA_NAME)";
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.utilities";
 				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "Remora connects to remote computers on your local network.";
@@ -545,6 +565,8 @@
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				REMORA_BUNDLE_IDENTIFIER = com.peblon.remora;
 				REMORA_NAME = Remora;
+				REMORA_SPARKLE_PUBLIC_KEY = "";
+				REMORA_UPDATE_FEED_URL = "https://github.com/sadiksaifi/remora/releases/latest/download/appcast.xml";
 				SDKROOT = macosx;
 				SWIFT_COMPILATION_MODE = wholemodule;
 				SWIFT_DEFAULT_ACTOR_ISOLATION = nonisolated;
@@ -625,9 +647,22 @@
 				minimumVersion = 1.7.0;
 			};
 		};
+		F5AFFEB6DD68914EA4DA270A /* XCRemoteSwiftPackageReference "Sparkle" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/sparkle-project/Sparkle";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 2.10.1;
+			};
+		};
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
+		026759D5C5B595F47B021E89 /* Sparkle */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = F5AFFEB6DD68914EA4DA270A /* XCRemoteSwiftPackageReference "Sparkle" */;
+			productName = Sparkle;
+		};
 		3F0067FBBEC140EDB05ACBCB /* ArgumentParser */ = {
 			isa = XCSwiftPackageProductDependency;
 			package = 0A5CA4E4BB60586632112DBA /* XCRemoteSwiftPackageReference "swift-argument-parser" */;

@@ -2,8 +2,8 @@ name: Release
 
 # A pushed v* tag builds, signs, notarizes and publishes that release.
 # A manual run on main is a rehearsal: it builds, signs and notarizes version 0.0.0 and uploads
-# the DMG as a workflow artifact without creating a release. Tagsmith starts counting at 0.0.0,
-# so no release tag can have that version.
+# the DMG and its appcast as a workflow artifact without creating a release. Tagsmith starts
+# counting at 0.0.0, so no release tag can have that version.
 on:
   push:
     tags: ["v*"]
@@ -101,6 +101,9 @@ jobs:
           NOTARY_KEY_P8_BASE64: ${{ secrets.NOTARY_KEY_P8_BASE64 }}
           NOTARY_KEY_ID: ${{ secrets.NOTARY_KEY_ID }}
           NOTARY_ISSUER_ID: ${{ secrets.NOTARY_ISSUER_ID }}
+      - run: mise run release:appcast
+        env:
+          SPARKLE_ED_PRIVATE_KEY: ${{ secrets.SPARKLE_ED_PRIVATE_KEY }}
       - uses: actions/upload-artifact@v7
         with:
           name: Remora-${{ env.VERSION }}

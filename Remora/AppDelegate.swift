@@ -7,7 +7,8 @@ import os
 @main @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var mainWindowController: MainWindowController?
-    private let settings = NSHostingSceneRepresentation { Settings { SettingsView() } }
+    private let updater = AppUpdater()
+    private lazy var settings = NSHostingSceneRepresentation { [updater] in Settings { SettingsView(showsUpdates: updater.isAvailable) } }
     private var statusMenu: StatusMenu?
     private var sessionTabs: SessionTabs?
     private var commandLineController: CommandLineController?
@@ -54,6 +55,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             statusMenu = StatusMenu(
                 sessionTabs: sessionTabs,
                 windowController: windowController,
+                updater: updater,
                 onOpen: { [weak self] in self?.showMainWindow() },
                 onShowTab: { [weak self] id in
                     self?.showMainWindow()
@@ -228,6 +230,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let mainMenu = NSMenu()
         let appMenu = addMenu(AppIdentity.current.name, to: mainMenu)
         appMenu.addItem(withTitle: "About \(AppIdentity.current.name)", action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)), keyEquivalent: "")
+        if let checkForUpdates = updater.makeMenuItem() { appMenu.addItem(checkForUpdates) }
         appMenu.addItem(.separator())
         appMenu.addItem(withTitle: "Settings…", action: #selector(showSettings(_:)), keyEquivalent: ",").target = self
         appMenu.addItem(.separator())

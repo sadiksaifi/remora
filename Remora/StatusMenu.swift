@@ -9,6 +9,7 @@ final class StatusMenu: NSObject, NSMenuDelegate {
     private let sessionTabs: SessionTabs
     /// Owns the agent control actions and their validation, which work while its window is closed.
     private let windowController: MainWindowController
+    private let updater: AppUpdater
     private let onOpen: () -> Void
     private let onShowTab: (UUID) -> Void
     private let onShowSettings: () -> Void
@@ -17,12 +18,14 @@ final class StatusMenu: NSObject, NSMenuDelegate {
     init(
         sessionTabs: SessionTabs,
         windowController: MainWindowController,
+        updater: AppUpdater,
         onOpen: @escaping () -> Void,
         onShowTab: @escaping (UUID) -> Void,
         onShowSettings: @escaping () -> Void
     ) {
         self.sessionTabs = sessionTabs
         self.windowController = windowController
+        self.updater = updater
         self.onOpen = onOpen
         self.onShowTab = onShowTab
         self.onShowSettings = onShowSettings
@@ -46,6 +49,7 @@ final class StatusMenu: NSObject, NSMenuDelegate {
         ).target = windowController
         menu.addItem(.separator())
         addItem("Settings…", #selector(showSettings(_:)), key: ",", to: menu)
+        if let checkForUpdates = updater.makeMenuItem() { menu.addItem(checkForUpdates) }
         menu.addItem(.separator())
         menu.addItem(withTitle: "Quit \(AppIdentity.current.name)", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
             .target = NSApplication.shared
