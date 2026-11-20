@@ -1,0 +1,13 @@
+// The Remora website: the static files in public/, served at remora.peblon.com.
+// worker.js answers only the requests that match no file, which is how /download reaches it.
+// Cloudflare Workers Builds deploys it from main and gives each pull request a preview URL.
+{
+  "name": "remora-site",
+  "compatibility_date": "2026-11-01",
+  "main": "worker.js",
+  "assets": { "directory": "./public" },
+  // peblon.com is a zone on the same Cloudflare account, so the deploy creates the DNS record and certificate.
+  "routes": [{ "pattern": "remora.peblon.com", "custom_domain": true }],
+  "workers_dev": false,
+  "preview_urls": true
+}

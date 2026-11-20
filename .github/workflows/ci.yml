@@ -1,13 +1,13 @@
 name: CI
 
 # Every pull request runs CI, because the main branch ruleset requires its checks. A pull request that
-# changes only docs skips the jobs, and GitHub counts a skipped job as passed.
+# changes only docs or the website in site/ skips the jobs, and GitHub counts a skipped job as passed.
 # A push to main only refreshes the engine cache, since pull requests can restore only caches saved on main.
 on:
   pull_request:
   push:
     branches: [main]
-    paths-ignore: ["*.md", LICENSE, assets/**, docs/**]
+    paths-ignore: ["*.md", LICENSE, assets/**, docs/**, site/**]
 
 # A new push to a pull request cancels its older run. Each push to main runs to completion.
 concurrency:
@@ -40,6 +40,7 @@ jobs:
               - "!LICENSE"
               - "!assets/**"
               - "!docs/**"
+              - "!site/**"
 
   workflows:
     name: Lint workflows
