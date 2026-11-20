@@ -32,7 +32,9 @@ usage = 'flag "--filter <pattern>" help="Run only the tests that match this patt
 depends = ["engine"]
 # The VNC session tests time handshakes, so they wait for a build in the same run.
 wait_for = ["build"]
-run = 'swift test --package-path Packages/RemoraKit ${usage_filter:+--filter "$usage_filter"}'
+# The tests measure elapsed time. Run in parallel on a GitHub runner's few cores, they starve each other
+# and miss their deadlines, so CI, where GitHub sets CI, runs them one at a time.
+run = 'swift test --package-path Packages/RemoraKit ${CI:+--no-parallel} ${usage_filter:+--filter "$usage_filter"}'
 
 [tasks.format]
 description = "Format the Swift sources in place."
