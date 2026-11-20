@@ -105,9 +105,14 @@ usage = 'arg "<bump>" help="SemVer part to bump" { choices "major" "minor" "patc
 run = "tagsmith tag --channel stable --bump {{usage.bump}} --dry-run --json"
 
 [tasks."release:tag"]
-description = "Create a release tag at HEAD and push it to origin."
+description = "Create a release tag at HEAD and push it to origin. HEAD must be the commit at origin/main."
 usage = 'arg "<version>" help="Version that release:preview printed, for example 1.2.3"'
-run = "tagsmith tag --channel stable --version {{usage.version | quote}} --push --json"
+# Tagsmith tags any commit, so this keeps an unmerged local commit from becoming a release.
+run = [
+    "git fetch --quiet origin main",
+    '[ "$(git rev-parse HEAD)" = "$(git rev-parse origin/main)" ] || { echo "HEAD is not origin/main. Release only the commit at origin/main: run git switch main and git pull --ff-only, and land local commits through a pull request." >&2; exit 1; }',
+    "tagsmith tag --channel stable --version {{usage.version | quote}} --push --json",
+]
 
 [tasks."release:validate"]
 description = "Validate a release tag on origin and write its facts to $GITHUB_OUTPUT."
@@ -250,6 +255,8 @@ usage = 'flag "--dry-run" help="List each secret and its 1Password reference wit
 # terminal. File attachments go to GitHub as base64, as the release workflow decodes them.
 run = '''
 #!/usr/bin/env bash
+# A caller's exported SHELLOPTS can turn on xtrace, which would print every value.
+set +x
 set -euo pipefail
 repo=sadiksaifi/remora
 secrets=(
@@ -284,7 +291,15 @@ for secret in "${secrets[@]}"; do
     [[ -n $value ]] || { echo "$ref for $name is empty." >&2; exit 1; }
     values+=("$value")
 done
+# GitHub sets each secret on its own, so a failure leaves the earlier ones already changed.
+written=()
 for i in "${!secrets[@]}"; do
-    printf '%s' "${values[i]}" | gh secret set "${secrets[i]%%|*}" --env release --repo "$repo"
+    name=${secrets[i]%%|*}
+    printf '%s' "${values[i]}" | gh secret set "$name" --env release --repo "$repo" || {
+        echo "Setting $name failed. Already changed: ${written[*]:-none}." >&2
+        echo "Run mise run release:secrets again until it succeeds before you release or rehearse." >&2
+        exit 1
+    }
+    written+=("$name")
 done
 '''
