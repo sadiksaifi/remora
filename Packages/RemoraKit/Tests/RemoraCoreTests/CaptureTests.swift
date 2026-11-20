@@ -340,13 +340,13 @@ private func movieMediaDuration(_ data: Data, range: Range<Int>? = nil) -> Doubl
     var first: CVPixelBuffer?
     var faded: CVPixelBuffer?
     var disabled: CVPixelBuffer?
-    var count = 0
+    var times: [Double] = []
     while let sample = output.copyNextSampleBuffer() {
         let time = CMSampleBufferGetPresentationTimeStamp(sample).seconds
         if first == nil && time > pillAt + 0.05 { first = CMSampleBufferGetImageBuffer(sample) }
         if time > pillAt + 1.49 && time < pillAt + 1.7 { faded = CMSampleBufferGetImageBuffer(sample) }
         if time > 1.75 { disabled = CMSampleBufferGetImageBuffer(sample) }
-        count += 1
+        times.append(time)
     }
     func rgb(_ buffer: CVPixelBuffer, x: Int, y: Int) -> [Int] {
         CVPixelBufferLockBaseAddress(buffer, .readOnly)
@@ -365,7 +365,15 @@ private func movieMediaDuration(_ data: Data, range: Range<Int>? = nil) -> Doubl
     #expect(rgb(initial, x: 320, y: 255).allSatisfy { $0 > 120 })
     #expect(try rgb(#require(faded), x: 320, y: 255).allSatisfy { abs($0 - 80) < 8 })
     #expect(try rgb(#require(disabled), x: 98, y: 96).allSatisfy { abs($0 - 80) < 8 })
-    #expect(count > 30)
+    #expect(animatesThroughout(times.filter { $0 > pillAt && $0 < pillAt + 1.5 }))
+}
+
+/// Overlay invalidations alone keep a movie's frames coming. Without them, a movie holds one frame until the
+/// next state change, a gap of a second or more here. A slow encoder spaces frames further apart, but by much
+/// less than this bound, so the check does not depend on the frame rate. Callers leave out the encoder's
+/// warm-up after the first frame, which took 0.5 s on the CI runner.
+private func animatesThroughout(_ times: [Double]) -> Bool {
+    times.count > 3 && zip(times, times.dropFirst()).allSatisfy { $1 - $0 < 0.4 }
 }
 
 @Test(arguments: [1.0, 2.0]) func recordingAgentCursorMovesAndPressesWithoutAScreenObserver(unit: Double) async throws {
@@ -386,14 +394,16 @@ private func movieMediaDuration(_ data: Data, range: Range<Int>? = nil) -> Doubl
     let png = try media.png(frames.snapshot())
     let started = ProcessInfo.processInfo.systemUptime
     let movie = try media.movie(at: url, source: frames)
-    try await Task.sleep(for: .milliseconds(350))
+    // The move starts after the encoder's warm-up, which held the second frame back 0.5 s on the CI runner.
+    try await Task.sleep(for: .seconds(1))
     let moveAt = ProcessInfo.processInfo.systemUptime - started
     let arrival = state.moveAgentCursor(to: CGPoint(x: 500, y: 140), animated: true)
-    try await Task.sleep(for: .seconds(arrival + 0.4))
+    // Each state holds for several frame intervals of a slow encoder, so the movie records it at any frame rate.
+    try await Task.sleep(for: .seconds(arrival + 0.6))
     let pressAt = ProcessInfo.processInfo.systemUptime - started
     state.pressAgentCursor(depth: CursorTuning.clickDepth, animated: true)
     state.receive(.agent, .pointer(.init(x: 500, y: 140), .left))
-    try await Task.sleep(for: .milliseconds(130))
+    try await Task.sleep(for: .milliseconds(450))
     state.releaseAgentCursor()
     try await Task.sleep(for: .milliseconds(450))
     let humanAt = ProcessInfo.processInfo.systemUptime - started
@@ -412,10 +422,10 @@ private func movieMediaDuration(_ data: Data, range: Range<Int>? = nil) -> Doubl
     reader.add(output)
     #expect(reader.startReading())
     var resting: CVPixelBuffer?
-    var pressed: CVPixelBuffer?
-    var human: CVPixelBuffer?
+    var pressed: [CVPixelBuffer] = []
+    var human: [CVPixelBuffer] = []
     var centers: [Double] = []
-    var count = 0
+    var times: [Double] = []
     func rgb(_ buffer: CVPixelBuffer, _ x: Int, _ y: Int) -> [Int] {
         CVPixelBufferLockBaseAddress(buffer, .readOnly)
         defer { CVPixelBufferUnlockBaseAddress(buffer, .readOnly) }
@@ -427,7 +437,7 @@ private func movieMediaDuration(_ data: Data, range: Range<Int>? = nil) -> Doubl
     while let sample = output.copyNextSampleBuffer() {
         let time = CMSampleBufferGetPresentationTimeStamp(sample).seconds
         let buffer = try #require(CMSampleBufferGetImageBuffer(sample))
-        count += 1
+        times.append(time)
         if time > moveAt + 0.02 && time < moveAt + arrival {
             CVPixelBufferLockBaseAddress(buffer, .readOnly)
             let bytes = CVPixelBufferGetBaseAddress(buffer)!.assumingMemoryBound(to: UInt8.self)
@@ -444,14 +454,13 @@ private func movieMediaDuration(_ data: Data, range: Range<Int>? = nil) -> Doubl
             CVPixelBufferUnlockBaseAddress(buffer, .readOnly)
         }
         if time > moveAt + arrival + 0.2 && time < pressAt { resting = buffer }
-        if time > pressAt + 0.08 && time < pressAt + 0.13 { pressed = buffer }
-        if time > humanAt + 0.03 { human = buffer }
+        if time > pressAt + 0.08 && time < pressAt + 0.45 { pressed.append(buffer) }
+        if time > humanAt + 0.03 && time < humanAt + 0.5 { human.append(buffer) }
     }
-    #expect(count > 30)
-    #expect(centers.count > 5)
-    #expect((centers.max() ?? 0) - (centers.min() ?? 0) > 200)
+    #expect(animatesThroughout(times.filter { $0 > moveAt }))
+    // A frame during the move shows the cursor between its resting centers near x 86-102 and 509-514.
+    #expect(centers.contains { (120...480).contains($0) })
     let rest = try #require(resting)
-    let press = try #require(pressed)
     // The stroke covers the target tip. The fill is the specified premultiplied slate mixture.
     #expect(rgb(rest, 500, 140).allSatisfy { $0 > 145 })
     let fill = rgb(rest, 500 + Int(6 * unit), 140 + Int(6 * unit))
@@ -459,9 +468,13 @@ private func movieMediaDuration(_ data: Data, range: Range<Int>? = nil) -> Doubl
     // Halo at 12 points right of its center: F over gray, followed by the white lift.
     let halo = rgb(rest, 500 + Int(15 * unit), 140 + Int(4 * unit))
     for (actual, expected) in zip(halo, [68, 79, 90]) { #expect(abs(actual - expected) < 12) }
-    // No agent click ring at radius 14; pressing shrinks the glyph about the same target tip.
-    #expect(rgb(press, 500 + Int(14 * unit), 140)[2] < 135)
-    #expect(rgb(press, 500, 140).allSatisfy { $0 > 125 })
-    // The user's ring still appears, away from the agent sprite.
-    #expect(try rgb(#require(human), 200 + Int(14 * unit), 100)[2] > 150)
+    // No agent click ring at radius 14; pressing shrinks the glyph about the same target tip. A ring would
+    // stay brighter than this bound for 0.2 s, so every pressed frame is checked.
+    #expect(!pressed.isEmpty)
+    for press in pressed {
+        #expect(rgb(press, 500 + Int(14 * unit), 140)[2] < 135)
+        #expect(rgb(press, 500, 140).allSatisfy { $0 > 125 })
+    }
+    // The user's ring still appears, away from the agent sprite. It fades from its first frames.
+    #expect(human.contains { rgb($0, 200 + Int(14 * unit), 100)[2] > 150 })
 }
