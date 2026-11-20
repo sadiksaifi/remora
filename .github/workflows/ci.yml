@@ -1,0 +1,74 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+# A new push to a pull request cancels its older run. Each push to main runs to completion.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  workflows:
+    name: Lint workflows
+    runs-on: ubuntu-slim
+    timeout-minutes: 5
+    env:
+      # mise would otherwise install every tool in .mise.toml before the task runs.
+      MISE_TASK_RUN_AUTO_INSTALL: false
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: jdx/mise-action@v5
+        with:
+          install_args: jactionlint zizmor shellcheck
+      - run: mise run lint:workflows
+        env:
+          # Lets zizmor run its online audits, such as known-vulnerable-actions.
+          GH_TOKEN: ${{ github.token }}
+
+  check:
+    name: Check
+    runs-on: xcode-27
+    timeout-minutes: 30
+    env:
+      # project.yml requires Xcode 27.2; the image's default Xcode is older.
+      DEVELOPER_DIR: /Applications/Xcode_27.2.app/Contents/Developer
+      # The runner has no Apple certificate.
+      REMORA_AD_HOC_SIGNING: 1
+    steps:
+      - name: Check Xcode
+        id: xcode
+        run: |
+          test -d "$DEVELOPER_DIR" || { echo "::error::Xcode 27.2 is not on this runner image: $DEVELOPER_DIR"; exit 1; }
+          xcodebuild -version
+          echo "build=$(xcodebuild -version | awk '/Build version/ { print $3 }')" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: jdx/mise-action@v5
+      # The engine script rebuilds any stage whose recipe or toolchain changed, so an older cache is a safe start.
+      - id: engine
+        uses: actions/cache/restore@v6
+        with:
+          path: |
+            Vendor/build
+            Vendor/src
+          key: engine-${{ runner.os }}-${{ runner.arch }}-${{ steps.xcode.outputs.build }}-${{ hashFiles('Vendor/build-engine.sh', 'Vendor/build-vnc.sh', 'Vendor/patches/**', 'Vendor/apple-mvs/**', '.mise.toml') }}
+          restore-keys: engine-${{ runner.os }}-${{ runner.arch }}-
+      - run: mise run engine
+      # Saved before the check, so a failing test does not discard the engine build.
+      - if: steps.engine.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: |
+            Vendor/build
+            Vendor/src
+          key: ${{ steps.engine.outputs.cache-primary-key }}
+      - run: mise run check

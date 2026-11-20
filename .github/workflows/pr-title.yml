@@ -1,0 +1,38 @@
+name: PR title
+
+# The squash commit takes the PR title, so the title must be a Conventional Commit.
+# This runs apart from CI so that editing a title does not cancel or repeat the build.
+on:
+  pull_request:
+    types: [opened, edited, reopened, synchronize]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  title:
+    name: Lint PR title
+    runs-on: ubuntu-slim
+    timeout-minutes: 5
+    env:
+      # mise would otherwise install every tool in .mise.toml before the task runs.
+      MISE_TASK_RUN_AUTO_INSTALL: false
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: jdx/mise-action@v5
+        with:
+          install_args: cocogitto
+      - run: |
+          # cog 7.0.0 panics without a Git identity, even when it only verifies a message.
+          git config user.name "PR title check"
+          git config user.email pr-title-check@localhost
+          printf '%s\n' "$TITLE" > "$RUNNER_TEMP/title"
+          mise run lint:commit "$RUNNER_TEMP/title"
+        env:
+          TITLE: ${{ github.event.pull_request.title }}

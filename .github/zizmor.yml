@@ -1,0 +1,6 @@
+rules:
+  unpinned-uses:
+    config:
+      policies:
+        # The owner pins each action to its major version tag, and Dependabot moves the tag.
+        "*": ref-pin
