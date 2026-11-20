@@ -1,6 +1,12 @@
 [tools]
 cmake = "4.4.5"
 xcodegen = "2.46.0"
+cocogitto = "7.0.0"
+lefthook = "2.2.2"
+git-cliff = "2.14.2"
+node = "26.13.1"
+# aube refuses packages under 1000 weekly downloads; Tagsmith is published by the Remora owner.
+"npm:tagsmith" = { version = "1.2.1", allow_low_downloads = true }
 
 [tasks.engine]
 description = "Build the RDP and VNC engines into Vendor/build. Completed stages are skipped."
@@ -44,3 +50,39 @@ run = "set -o pipefail; git ls-files -z --cached --others --exclude-standard '*.
 description = "Lint, build and test, and check that the committed Remora.xcodeproj matches project.yml. Run it before pushing or opening a PR."
 depends = ["lint", "build", "test"]
 run = "git diff --exit-code --stat -- Remora.xcodeproj || { echo 'Remora.xcodeproj did not match project.yml. It is regenerated now; commit it.' >&2; exit 1; }"
+
+[tasks."setup:hooks"]
+description = "Install the Git hooks in lefthook.yml."
+run = "lefthook install --reset-hooks-path"
+
+[tasks."lint:commit"]
+description = "Check that a commit message file is a Conventional Commit."
+usage = 'arg "<file>" help="File that holds the commit message or PR title"'
+run = "cog verify --ignore-merge-commits --file {{usage.file | quote}}"
+
+[tasks."release:notes"]
+description = "Print the release notes for unreleased changes."
+run = "git-cliff --unreleased --offline --strip all"
+
+[tasks."release:notes:current"]
+description = "Print the release notes for the release tag at HEAD."
+run = "git-cliff --current --offline --strip all"
+
+[tasks."release:targets"]
+description = "Check the Tagsmith release configuration."
+run = "tagsmith targets --json"
+
+[tasks."release:preview"]
+description = "Preview the next release tag without creating it."
+usage = 'arg "<bump>" help="SemVer part to bump" { choices "major" "minor" "patch"; }'
+run = "tagsmith tag --channel stable --bump {{usage.bump}} --dry-run --json"
+
+[tasks."release:tag"]
+description = "Create the next release tag at HEAD and push it to origin."
+usage = 'arg "<bump>" help="SemVer part to bump" { choices "major" "minor" "patch"; }'
+run = "tagsmith tag --channel stable --bump {{usage.bump}} --json --push"
+
+[tasks."release:validate"]
+description = "Validate a release tag on origin and write its facts to $GITHUB_OUTPUT."
+usage = 'arg "<tag>" help="Release tag, for example v1.2.3"'
+run = "tagsmith validate --tag {{usage.tag | quote}} --github-output"
