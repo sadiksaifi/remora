@@ -473,10 +473,21 @@ private func animatesThroughout(_ times: [Double], from start: Double, to end: D
     // Halo at 12 points right of its center: F over gray, followed by the white lift.
     let halo = rgb(rest, 500 + Int(15 * unit), 140 + Int(4 * unit))
     for (actual, expected) in zip(halo, [68, 79, 90]) { #expect(abs(actual - expected) < 12) }
+    // Pixels of the glyph, which differ from the gray desktop by more than the faint halo does.
+    func glyphArea(_ buffer: CVPixelBuffer) -> Int {
+        var area = 0
+        for y in (140 - Int(10 * unit))..<(140 + Int(40 * unit)) {
+            for x in (500 - Int(10 * unit))..<(500 + Int(40 * unit)) where rgb(buffer, x, y).contains(where: { abs($0 - 80) > 30 }) {
+                area += 1
+            }
+        }
+        return area
+    }
+    let restingArea = glyphArea(rest)
     // No agent click ring at radius 14; pressing shrinks the glyph about the same target tip. A ring would
-    // stay brighter than this bound for about 0.19 s, so at least one pressed frame falls in that time, and
-    // every pressed frame is checked.
-    #expect(pressed.contains { $0.time < 0.19 })
+    // stay brighter than this bound for about 0.19 s, so a frame in that time must show the pressed glyph,
+    // and every pressed frame is checked.
+    #expect(pressed.contains { $0.time < 0.19 && Double(glyphArea($0.buffer)) < 0.85 * Double(restingArea) })
     for (_, press) in pressed {
         #expect(rgb(press, 500 + Int(14 * unit), 140)[2] < 135)
         #expect(rgb(press, 500, 140).allSatisfy { $0 > 125 })
