@@ -26,7 +26,7 @@ final class StatusMenu: NSObject, NSMenuDelegate {
         self.onShowTab = onShowTab
         self.onShowSettings = onShowSettings
         super.init()
-        statusItem.button?.image = NSImage(systemSymbolName: "terminal", accessibilityDescription: "Remora")
+        statusItem.button?.image = Self.barIcon()
         let menu = NSMenu()
         menu.delegate = self
         statusItem.menu = menu
@@ -76,6 +76,33 @@ final class StatusMenu: NSObject, NSMenuDelegate {
         }
         item.submenu = submenu
         return item
+    }
+
+    /// The menu bar icon: the display symbol with the pointer over its lower right corner, as in the app icon.
+    /// No system symbol pairs the two, so both are drawn into one template image.
+    private static func barIcon() -> NSImage? {
+        func symbol(_ name: String, _ pointSize: CGFloat, _ colors: [NSColor]) -> NSImage? {
+            NSImage(systemSymbolName: name, accessibilityDescription: nil)?
+                .withSymbolConfiguration(.init(pointSize: pointSize, weight: .medium).applying(.init(paletteColors: colors)))
+        }
+        // The clear second color empties the screen, which the display symbol otherwise fills.
+        guard let display = symbol("display", 13, [.black, .clear]), let pointer = symbol("pointer.arrow", 8, [.black]) else { return nil }
+        let gap: CGFloat = 1
+        let pointerRect = NSRect(origin: CGPoint(x: 10.5, y: gap), size: pointer.size)
+        let displayRect = NSRect(origin: CGPoint(x: 0, y: pointerRect.maxY + 6 - display.size.height), size: display.size)
+        let image = NSImage(size: displayRect.union(pointerRect.insetBy(dx: -gap, dy: -gap)).size, flipped: false) { _ in
+            display.draw(in: displayRect)
+            // Erase a ring around the pointer so it stays apart from the display at menu bar size.
+            for step in 0..<8 {
+                let angle = CGFloat(step) * .pi / 4
+                pointer.draw(in: pointerRect.offsetBy(dx: gap * cos(angle), dy: gap * sin(angle)), from: .zero, operation: .destinationOut, fraction: 1)
+            }
+            pointer.draw(in: pointerRect)
+            return true
+        }
+        image.isTemplate = true
+        image.accessibilityDescription = "Remora"
+        return image
     }
 
     private static let activeAgentTag = 1
