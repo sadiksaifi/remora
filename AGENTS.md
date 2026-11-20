@@ -14,6 +14,7 @@ A native macOS desktop client for RDP and VNC.
 - Run tasks with `mise run`. `.mise.toml` defines them, and `mise tasks` lists them. Before a commit, run only the checks for what changed, such as `mise run test --filter <name>`. Before pushing or opening a PR, run `mise run check`.
 - Commit messages and PR titles are Conventional Commits, since PRs are squash-merged. `mise run lint:commit <file>` checks one, and `mise run setup:hooks` installs a hook that checks each commit.
 - CI runs `mise run check` on the GitHub `xcode-27` runner with `REMORA_AD_HOC_SIGNING=1`, `mise run lint:workflows`, and `mise run lint:commit` on the PR title. After changing `.github/`, run `mise run lint:workflows`.
+- `docs/releasing.md` covers releases, the signing credentials in 1Password, and `mise run release:secrets`.
 
 ## Agent interface
 
