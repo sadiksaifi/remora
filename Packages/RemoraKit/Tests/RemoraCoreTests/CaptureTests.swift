@@ -399,9 +399,18 @@ private func animatesThroughout(_ times: [Double], from start: Double, to end: D
     // The move starts after the encoder's warm-up, which held the second frame back 0.5 s on the CI runner.
     try await Task.sleep(for: .seconds(1))
     let moveAt = ProcessInfo.processInfo.systemUptime - started
-    let arrival = state.moveAgentCursor(to: CGPoint(x: 500, y: 140), animated: true)
+    // Three legs, out, back and out again, each starting as the last one settles. One move spends only
+    // about 0.25 s between the resting positions, which a slow encoder samples once or twice.
+    var legs: [(start: Double, arrival: Double, outbound: Bool)] = []
+    for (index, x) in [500.0, 80, 500].enumerated() {
+        let start = ProcessInfo.processInfo.systemUptime - started
+        let arrival = state.moveAgentCursor(to: CGPoint(x: x, y: index == 1 ? 180 : 140), animated: true)
+        legs.append((start, arrival, index != 1))
+        try await Task.sleep(for: .seconds(arrival + 0.05))
+    }
+    let arrivedAt = ProcessInfo.processInfo.systemUptime - started
     // Each state holds for several frame intervals of a slow encoder, so the movie records it at any frame rate.
-    try await Task.sleep(for: .seconds(arrival + 0.6))
+    try await Task.sleep(for: .seconds(0.55))
     let pressAt = ProcessInfo.processInfo.systemUptime - started
     state.pressAgentCursor(depth: CursorTuning.clickDepth, animated: true)
     state.receive(.agent, .pointer(.init(x: 500, y: 140), .left))
@@ -426,7 +435,7 @@ private func animatesThroughout(_ times: [Double], from start: Double, to end: D
     var resting: CVPixelBuffer?
     var pressed: [(time: Double, buffer: CVPixelBuffer)] = []
     var human: [CVPixelBuffer] = []
-    var centers: [Double] = []
+    var centers: [[Double]] = legs.map { _ in [] }
     var times: [Double] = []
     func rgb(_ buffer: CVPixelBuffer, _ x: Int, _ y: Int) -> [Int] {
         CVPixelBufferLockBaseAddress(buffer, .readOnly)
@@ -440,7 +449,7 @@ private func animatesThroughout(_ times: [Double], from start: Double, to end: D
         let time = CMSampleBufferGetPresentationTimeStamp(sample).seconds
         let buffer = try #require(CMSampleBufferGetImageBuffer(sample))
         times.append(time)
-        if time > moveAt + 0.02 && time < moveAt + arrival {
+        if let leg = legs.firstIndex(where: { time > $0.start + 0.02 && time < $0.start + $0.arrival }) {
             CVPixelBufferLockBaseAddress(buffer, .readOnly)
             let bytes = CVPixelBufferGetBaseAddress(buffer)!.assumingMemoryBound(to: UInt8.self)
             let stride = CVPixelBufferGetBytesPerRow(buffer)
@@ -452,19 +461,24 @@ private func animatesThroughout(_ times: [Double], from start: Double, to end: D
                     pixels += 1
                 }
             }
-            if pixels > 0 { centers.append(sum / pixels) }
+            if pixels > 0 { centers[leg].append(sum / pixels) }
             CVPixelBufferUnlockBaseAddress(buffer, .readOnly)
         }
-        if time > moveAt + arrival + 0.2 && time < pressAt { resting = buffer }
+        if time > arrivedAt + 0.15 && time < pressAt { resting = buffer }
         if time > pressAt + 0.08 && time < pressAt + 0.45 { pressed.append((time - pressAt, buffer)) }
         if time > humanAt + 0.03 && time < humanAt + 0.5 { human.append(buffer) }
     }
     #expect(animatesThroughout(times, from: moveAt, to: humanAt))
-    // The cursor travels from its resting center near x 86-102 toward 509-514. At least two frames show it
-    // between them, at separate positions in travel order.
-    let between = centers.filter { (120...480).contains($0) }
-    #expect(between.count >= 2 && between == between.sorted() && between.last! - between.first! > 20)
-    #expect((centers.max() ?? 0) - (centers.min() ?? 0) > 200)
+    // The cursor travels between resting centers near x 84-96 and 504-514. Frames between them are in each
+    // leg's travel order. In at least one leg, two of them are more than 20 px apart and the leg covers 200 px.
+    let between = zip(legs, centers).map { leg, centers in
+        let inside = centers.filter { (105...500).contains($0) }
+        return leg.outbound ? inside : inside.reversed()
+    }
+    let travel = "centers by leg: \(centers.map { $0.map(Int.init) })"
+    #expect(between.allSatisfy { $0 == $0.sorted() }, "\(travel)")
+    #expect(between.contains { ($0.last ?? 0) - ($0.first ?? 0) > 20 }, "\(travel)")
+    #expect(centers.contains { ($0.max() ?? 0) - ($0.min() ?? 0) > 200 }, "\(travel)")
     let rest = try #require(resting)
     // The stroke covers the target tip. The fill is the specified premultiplied slate mixture.
     #expect(rgb(rest, 500, 140).allSatisfy { $0 > 145 })
