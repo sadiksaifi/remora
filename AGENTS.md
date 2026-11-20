@@ -12,6 +12,7 @@ A native macOS desktop client for RDP and VNC.
 ## Development
 
 - Run tasks with `mise run`. `.mise.toml` defines them, and `mise tasks` lists them. Before a commit, run only the checks for what changed, such as `mise run test --filter <name>`. Before pushing or opening a PR, run `mise run check`.
+- Commit messages and PR titles are Conventional Commits, since PRs are squash-merged. `mise run lint:commit <file>` checks one, and `mise run setup:hooks` installs a hook that checks each commit.
 
 ## Agent interface
 

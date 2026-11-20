@@ -1,0 +1,7 @@
+# Installed by `mise run setup:hooks`. The hook runs the pinned tools through mise.
+# Lefthook substitutes {1}, the commit message file, unquoted.
+commit-msg:
+  skip: merge
+  jobs:
+    - name: conventional commit
+      run: mise run lint:commit "{1}"
