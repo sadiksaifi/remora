@@ -4,19 +4,8 @@ import RemoraControl
 /// Launch Services owns app identity and startup. Only read-only probes are retried.
 @MainActor
 struct ApplicationClient {
-    nonisolated static var bundleURL: URL {
-        (Bundle.main.executableURL ?? URL(fileURLWithPath: CommandLine.arguments[0])).resolvingSymlinksInPath()
-            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
-    }
-
     private var running: Bool {
-        let developmentSocket = ProcessInfo.processInfo.environment["REMORA_SOCKET"] != nil
-        return NSWorkspace.shared.runningApplications.contains {
-            !$0.isTerminated
-                && (developmentSocket
-                    ? $0.bundleURL?.resolvingSymlinksInPath() == Self.bundleURL
-                    : $0.bundleIdentifier == "dev.sadiksaifi.Remora")
-        }
+        NSWorkspace.shared.runningApplications.contains { !$0.isTerminated && $0.bundleIdentifier == AppIdentity.current.bundleIdentifier }
     }
 
     func request(_ request: ControlRequest, launch: Bool, timeout: Double) async throws -> ControlResponse {
@@ -47,23 +36,21 @@ struct ApplicationClient {
     }
 
     private func openApplication() throws {
-        guard Bundle(url: Self.bundleURL)?.bundleIdentifier == "dev.sadiksaifi.Remora" else {
-            throw ControlFailure(.appUnavailable, "The helper could not find its containing Remora.app.")
+        // The build gives the helper its app's bundle identifier plus .cli, so a helper outside its own app never launches another.
+        guard Bundle.main.bundleIdentifier == AppIdentity.current.bundleIdentifier + ".cli" else {
+            throw ControlFailure(.appUnavailable, "The helper could not find its containing Remora app.")
         }
         let configuration = NSWorkspace.OpenConfiguration()
         configuration.activates = false
         configuration.promptsUserIfNeeded = false
         configuration.allowsRunningApplicationSubstitution = false
-        if let socket = ProcessInfo.processInfo.environment["REMORA_SOCKET"] {
-            configuration.environment = ["REMORA_SOCKET": socket]
-        }
         configuration.arguments = ["--cli-background"]
         // A second simultaneous CLI launch must not send a window-opening reopen event.
         configuration.appleEvent = NSAppleEventDescriptor(
             eventClass: AEEventClass(kCoreEventClass),
             eventID: AEEventID(kAEOpenApplication), targetDescriptor: nil,
             returnID: AEReturnID(kAutoGenerateReturnID), transactionID: AETransactionID(kAnyTransactionID))
-        NSWorkspace.shared.openApplication(at: Self.bundleURL, configuration: configuration, completionHandler: nil)
+        NSWorkspace.shared.openApplication(at: AppIdentity.current.app, configuration: configuration, completionHandler: nil)
     }
 
     private func waitForReadiness(_ client: ControlClient) async throws {
@@ -81,6 +68,6 @@ struct ApplicationClient {
             } catch { throw ControlFailure(.cancelled, "The command was interrupted.") }
             delay = min(delay * 2, 0.25)
         }
-        throw ControlFailure(.appUnavailable, "Remora did not start its control listener within 10 seconds.")
+        throw ControlFailure(.appUnavailable, "\(AppIdentity.current.name) did not start its control listener within 10 seconds.")
     }
 }

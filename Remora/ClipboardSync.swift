@@ -2,7 +2,7 @@ import AppKit
 import RemoraCore
 import os
 
-private let clipboardLog = Logger(subsystem: "dev.sadiksaifi.Remora", category: "Clipboard")
+private let clipboardLog = Logger(subsystem: "com.peblon.remora", category: "Clipboard")
 
 /// One instance per session attempt. The window forwards focus and session events.
 @MainActor

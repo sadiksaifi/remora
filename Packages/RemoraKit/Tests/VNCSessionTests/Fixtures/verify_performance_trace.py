@@ -103,7 +103,7 @@ def main():
     out = Path(sys.argv[1]).resolve()
     out.mkdir(parents=True, exist_ok=True, mode=0o700)
     options = out/'recording-options.json'
-    options.write_text(json.dumps({'os_signpost': {'dynamicTracingEnabledSubsystems': ['dev.sadiksaifi.Remora'], 'recordAllProcessesInSingleProcessMode': False}}))
+    options.write_text(json.dumps({'os_signpost': {'dynamicTracingEnabledSubsystems': ['com.peblon.remora'], 'recordAllProcessesInSingleProcessMode': False}}))
     developer = Path(subprocess.check_output(['xcode-select', '-p'], text=True).strip())
     swift = Path(subprocess.check_output(['xcrun', '--find', 'swift'], text=True).strip())
     helper = swift.parent.parent/'libexec/swift/pm/swiftpm-testing-helper'
@@ -128,7 +128,7 @@ def main():
             notifier = capture = None
             try:
                 pid = ready.get(timeout=10)
-                notification = 'dev.sadiksaifi.Remora.trace-test.'+uuid.uuid4().hex
+                notification = 'com.peblon.remora.trace-test.'+uuid.uuid4().hex
                 notifier = subprocess.Popen(['/usr/bin/notifyutil', '-1', notification], stdout=log, stderr=subprocess.STDOUT)
                 capture = subprocess.Popen(command + ['--attach', str(pid), '--notify-tracing-started', notification], stdout=log, stderr=subprocess.STDOUT)
                 assert notifier.wait(timeout=10) == 0, 'Tracing-start notification failed'

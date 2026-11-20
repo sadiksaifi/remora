@@ -35,10 +35,12 @@ private final class SelectedFrames: FrameSink, @unchecked Sendable {
     while let byte = try output.fileHandleForReading.read(upToCount: 1), !byte.isEmpty, byte != Data([10]) { line.append(byte) }
     let port = try #require((JSONSerialization.jsonObject(with: line) as? [String: Int])?["loopback_port"])
     let frames = SelectedFrames()
+    let pins = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: pins) }
     let session = VNCSession(
         configuration: .init(
             host: "127.0.0.1", port: UInt16(port), username: "fixture-user", password: "fixture-password",
-            desktopSize: .init(width: 16, height: 8), vncMode: mode), frameSink: frames)
+            desktopSize: .init(width: 16, height: 8), vncMode: mode), frameSink: frames, certificateStoreURL: pins)
     let deadline = Task {
         try? await Task.sleep(for: .seconds(timeout ? 15 : 5))
         session.disconnect()

@@ -1,11 +1,11 @@
 # Bounded VNC performance capture
 
-VNC performance signposts use subsystem `dev.sadiksaifi.Remora` and category `DynamicTracing`. The SDK disables this category unless a recording tool enables it. Disabled reads do not collect performance clocks or byte counters. Existing handshake and runtime failure summaries remain in category `VNC` and retain their previous meanings. A client generates its signpost ID lazily at its first enabled event, because the SDK returns a null ID while tracing is disabled. Each valid ID remains local to that client across recording detach and reattach.
+VNC performance signposts use subsystem `com.peblon.remora` and category `DynamicTracing`. The SDK disables this category unless a recording tool enables it. Disabled reads do not collect performance clocks or byte counters. Existing handshake and runtime failure summaries remain in category `VNC` and retain their previous meanings. A client generates its signpost ID lazily at its first enabled event, because the SDK returns a null ID while tracing is disabled. Each valid ID remains local to that client across recording detach and reattach.
 
 Record only the process and time window needed. Create a private options file containing:
 
 ```json
-{"os_signpost":{"dynamicTracingEnabledSubsystems":["dev.sadiksaifi.Remora"],"recordAllProcessesInSingleProcessMode":false}}
+{"os_signpost":{"dynamicTracingEnabledSubsystems":["com.peblon.remora"],"recordAllProcessesInSingleProcessMode":false}}
 ```
 
 Then run:

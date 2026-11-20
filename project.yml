@@ -20,6 +20,18 @@ settings:
     GCC_TREAT_WARNINGS_AS_ERRORS: YES
     MTL_TREAT_WARNINGS_AS_ERRORS: YES
     MACOSX_DEPLOYMENT_TARGET: "26.0"
+    # Notarization requires the hardened runtime.
+    ENABLE_HARDENED_RUNTIME: YES
+    INFOPLIST_KEY_NSHumanReadableCopyright: Copyright © 2026 Peblon
+  # Remora and Remora Dev keep separate data, Keychain items, settings, control sockets and links.
+  # The app derives each of them at runtime from its bundle identifier and name (AppIdentity).
+  configs:
+    Debug:
+      REMORA_BUNDLE_IDENTIFIER: com.peblon.remora.dev
+      REMORA_NAME: Remora Dev
+    Release:
+      REMORA_BUNDLE_IDENTIFIER: com.peblon.remora
+      REMORA_NAME: Remora
 targets:
   Remora:
     type: application
@@ -28,10 +40,6 @@ targets:
       - path: Remora
         type: syncedFolder
       - path: Vendor/licenses
-        type: folder
-        buildPhase: resources
-      # Copied whole to Contents/Resources/skills/remora.
-      - path: skills
         type: folder
         buildPhase: resources
     dependencies:
@@ -49,22 +57,34 @@ targets:
         product: RDPSession
       - package: RemoraKit
         product: VNCSession
-    # Checks the skill, the failure hints and the command descriptions with the embedded, signed CLI, without running a command.
     postBuildScripts:
+      # A skill's name must match its folder, so Remora Dev bundles the skill as remora-dev and names its own command in it.
+      - name: Bundle agent skill
+        script: |
+          sed -e "s/^name: remora$/name: $REMORA_COMMAND/" -e "s/\`remora/\`$REMORA_COMMAND/g" "$SCRIPT_INPUT_FILE_0" > "$SCRIPT_OUTPUT_FILE_0"
+        inputFiles:
+          - $(SRCROOT)/skills/remora/SKILL.md
+        outputFiles:
+          - $(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/skills/$(REMORA_COMMAND)/SKILL.md
+      # Checks the skill, the failure hints and the command descriptions with the embedded, signed CLI, without running a command.
       - name: Check agent help
         script: '"$TARGET_BUILD_DIR/$CONTENTS_FOLDER_PATH/Helpers/remora" __check-help "$SRCROOT/skills/remora/SKILL.md"'
         inputFiles:
           - $(SRCROOT)/skills/remora/SKILL.md
+          - $(TARGET_BUILD_DIR)/$(CONTENTS_FOLDER_PATH)/Helpers/remora
         basedOnDependencyAnalysis: false
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: dev.sadiksaifi.Remora
-        PRODUCT_NAME: Remora
+        PRODUCT_BUNDLE_IDENTIFIER: $(REMORA_BUNDLE_IDENTIFIER)
+        PRODUCT_NAME: $(REMORA_NAME)
+        PRODUCT_MODULE_NAME: Remora
+        # remora or remora-dev, as AppIdentity.commandName derives it at runtime.
+        REMORA_COMMAND: $(PRODUCT_NAME:rfc1034identifier:lower)
         CODE_SIGN_STYLE: Automatic
         DEVELOPMENT_TEAM: LZ3V3WUPWR
         ENABLE_APP_SANDBOX: NO
-        ENABLE_HARDENED_RUNTIME: NO
         GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_KEY_CFBundleDisplayName: $(REMORA_NAME)
         INFOPLIST_KEY_NSLocalNetworkUsageDescription: Remora connects to remote computers on your local network.
         INFOPLIST_KEY_LSApplicationCategoryType: public.app-category.utilities
         INFOPLIST_KEY_NSPrincipalClass: NSApplication
@@ -85,10 +105,16 @@ targets:
       base:
         PRODUCT_NAME: remora
         PRODUCT_MODULE_NAME: RemoraCLI
-        PRODUCT_BUNDLE_IDENTIFIER: dev.sadiksaifi.Remora.cli
+        PRODUCT_BUNDLE_IDENTIFIER: $(REMORA_BUNDLE_IDENTIFIER).cli
         CODE_SIGN_STYLE: Automatic
         DEVELOPMENT_TEAM: LZ3V3WUPWR
         SKIP_INSTALL: YES
+        # A tool requires entitlements by default, so Xcode would add an application identifier that a Developer ID build has no profile for.
+        ENTITLEMENTS_REQUIRED: NO
+        # An Info.plist in the binary lets macOS name the app in privacy and Keychain prompts.
+        GENERATE_INFOPLIST_FILE: YES
+        CREATE_INFOPLIST_SECTION_IN_BINARY: YES
+        INFOPLIST_KEY_CFBundleDisplayName: $(REMORA_NAME)
 schemes:
   Remora:
     build:

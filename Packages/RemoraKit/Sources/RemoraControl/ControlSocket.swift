@@ -5,10 +5,14 @@ import Network
 public struct ControlEndpoint: Sendable {
     public let path: String
 
-    public init(environment: [String: String] = ProcessInfo.processInfo.environment) throws {
-        path = environment["REMORA_SOCKET"] ?? "/tmp/remora-\(getuid())/control.sock"
-        guard path.hasPrefix("/"), !path.utf8.contains(0), path.utf8.count < 104 else {
-            throw ControlFailure(.invalidArgument, "The control socket needs an absolute path shorter than 104 UTF-8 bytes.")
+    /// The socket sits in the app's own Application Support folder, which only this user can write,
+    /// so the CLI reaches only the app that contains it, never the other variant or another account's socket.
+    public init() throws {
+        path = AppIdentity.current.supportDirectory.appending(path: "control.sock").path
+        guard path.utf8.count < 104 else {
+            throw ControlFailure(
+                .unsupported, "The control socket path \(path) is \(path.utf8.count) bytes, and macOS allows at most 103.",
+                hint: "Use \(AppIdentity.current.name) from a user account whose home folder path is shorter.")
         }
     }
 }
@@ -121,12 +125,8 @@ public actor ControlServer {
     public func start() async throws {
         guard listener == nil else { return }
         let directory = URL(fileURLWithPath: endpoint.path).deletingLastPathComponent()
-        if endpoint.path == "/tmp/remora-\(getuid())/control.sock" {
-            try FileManager.default.createDirectory(
-                at: directory, withIntermediateDirectories: true,
-                attributes: [.posixPermissions: 0o700])
-            try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: directory.path)
-        }
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: directory.path)
         if FileManager.default.fileExists(atPath: endpoint.path) {
             let probe = NWConnection(to: .unix(path: endpoint.path), using: .tcp)
             defer { probe.cancel() }
@@ -213,7 +213,7 @@ public actor ControlServer {
     }
 }
 
-private let socketQueue = DispatchQueue(label: "dev.sadiksaifi.Remora.control", qos: .userInitiated)
+private let socketQueue = DispatchQueue(label: "com.peblon.remora.control", qos: .userInitiated)
 private let maximumLineSize = 1_048_576
 
 private func remaining(_ deadline: ContinuousClock.Instant) -> Double {

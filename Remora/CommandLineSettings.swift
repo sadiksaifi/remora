@@ -22,12 +22,12 @@ extension CommandLineController {
             return .object(["accessibility": .string(SystemShortcutCapture.isTrusted ? "allowed" : "notAllowed"), "opened": .bool(open)])
         case "settings.cli.get", "settings.cli.repair", "settings.cli.uninstall":
             try request.validateArguments([])
-            let tool = CommandLineTool(target: Bundle.main.bundleURL.appending(path: "Contents/Helpers/remora"))
+            let tool = CommandLineTool()
             do {
                 if request.command == "settings.cli.repair" { try tool.repair() }
                 if request.command == "settings.cli.uninstall" { try tool.uninstall() }
             } catch let failure as CommandLineTool.Failure {
-                throw ControlFailure(.invalidArgument, failure.localizedDescription)
+                throw ControlFailure(.invalidArgument, failure.localizedDescription, hint: failure.recoverySuggestion)
             } catch { throw ControlFailure(.ioFailed, error.localizedDescription) }
             return tool.status
         default: throw ControlFailure(.unknownCommand, "Unknown settings command.")

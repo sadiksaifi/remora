@@ -57,7 +57,7 @@ static double now(void) { struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t);
 static os_log_t performance_log(void) {
     static os_log_t log;
     static dispatch_once_t once;
-    dispatch_once(&once, ^{ log = os_log_create("dev.sadiksaifi.Remora", OS_LOG_CATEGORY_DYNAMIC_TRACING); });
+    dispatch_once(&once, ^{ log = os_log_create("com.peblon.remora", OS_LOG_CATEGORY_DYNAMIC_TRACING); });
     return log;
 }
 /* A DynamicTracing ID generated before attachment is NULL. Generate lazily

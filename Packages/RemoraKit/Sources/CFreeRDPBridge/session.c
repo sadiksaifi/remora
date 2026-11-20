@@ -78,7 +78,7 @@ static BOOL log_message(const wLogMessage *message) {
 }
 
 static void configure_logging(void) {
-    engine_log = os_log_create("dev.sadiksaifi.Remora", "FreeRDP");
+    engine_log = os_log_create("com.peblon.remora", "FreeRDP");
     wLog *root = WLog_GetRoot();
     (void)WLog_SetLogLevel(root, WLOG_WARN);
     /* The backend reports the selected hw device and any software fallback. */

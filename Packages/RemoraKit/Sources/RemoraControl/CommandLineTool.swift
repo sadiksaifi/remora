@@ -1,6 +1,7 @@
 import Foundation
 
 /// A link Remora owns: the `remora` command on the user's PATH, or the `remora` folder in an agent's skills folder.
+/// Remora Dev's links are named `remora-dev`.
 /// Remora creates, replaces and removes only its own links, so it never overwrites or deletes a file it didn't create.
 public struct CommandLineTool: Sendable {
     public enum State: String, Sendable {
@@ -14,12 +15,20 @@ public struct CommandLineTool: Sendable {
     public enum Failure: Error, LocalizedError {
         case conflict(String)
         case notInstalled
+        /// The app runs from a disk image or from App Translocation's temporary copy, so a link to it would soon break.
+        case readOnlyApp
 
         public var errorDescription: String? {
             switch self {
             case .conflict(let path): "Another file is already at \(path). Move or rename it, then come back to install."
             case .notInstalled: "The command-line tool is not installed."
+            case .readOnlyApp: "\(AppIdentity.current.name) is running from a disk image or a temporary location, so a link to it would stop working."
             }
+        }
+
+        public var recoverySuggestion: String? {
+            guard case .readOnlyApp = self else { return nil }
+            return "Move \(AppIdentity.current.name) to the Applications folder, open it from there, then install again."
         }
     }
 
@@ -30,10 +39,11 @@ public struct CommandLineTool: Sendable {
     public let target: URL
     private let adoptsOtherCopies: Bool
 
-    /// `target` is the file the link points to, such as the bundled executable, `Remora.app/Contents/Helpers/remora`.
-    /// With `adoptsOtherCopies`, a link to a Remora helper in another copy of Remora also counts as Remora's.
+    /// `target` is the file the link points to, by default this app's bundled executable, `Remora.app/Contents/Helpers/remora`.
+    /// With `adoptsOtherCopies`, a link to the helper in another copy of the same app, such as a moved `Remora.app`, also counts as this app's.
     public init(
-        target: URL, link: URL = FileManager.default.homeDirectoryForCurrentUser.appending(path: ".local/bin/remora"),
+        target: URL = AppIdentity.current.app.appending(path: "Contents/Helpers/remora"),
+        link: URL = FileManager.default.homeDirectoryForCurrentUser.appending(path: ".local/bin/\(AppIdentity.current.commandName)"),
         adoptsOtherCopies: Bool = true
     ) {
         self.target = target
@@ -53,6 +63,7 @@ public struct CommandLineTool: Sendable {
 
     /// Creates the link. It fails rather than replace anything already at the path.
     public func install() throws {
+        try requireWritableTarget()
         switch state {
         case .notInstalled:
             try FileManager.default.createDirectory(at: link.deletingLastPathComponent(), withIntermediateDirectories: true)
@@ -64,6 +75,7 @@ public struct CommandLineTool: Sendable {
 
     /// Points Remora's link at this copy of Remora.
     public func repair() throws {
+        try requireWritableTarget()
         try uninstall()
         try FileManager.default.createSymbolicLink(at: link, withDestinationURL: target)
     }
@@ -84,7 +96,7 @@ public struct CommandLineTool: Sendable {
         let output = Pipe()
         process.executableURL = URL(fileURLWithPath: shell)
         // Record separators mark the answer, because shell config can print escapes on the same line.
-        process.arguments = ["-l", "-i", "-c", #"printf '\036%s\036' "$(command -v remora)""#]
+        process.arguments = ["-l", "-i", "-c", #"printf '\036%s\036' "$(command -v "# + link.lastPathComponent + #")""#]
         process.environment = ["HOME": FileManager.default.homeDirectoryForCurrentUser.path, "USER": NSUserName(), "SHELL": shell, "TERM": "dumb"]
         (process.standardInput, process.standardOutput, process.standardError) = (FileHandle.nullDevice, output, FileHandle.nullDevice)
         return await withCheckedContinuation { continuation in
@@ -109,11 +121,22 @@ public struct CommandLineTool: Sendable {
         return parts.count >= 3 ? parts[parts.count - 2] : nil
     }
 
-    /// A symbolic link to the target, or with `adoptsOtherCopies` to a Remora helper in a moved or deleted copy of Remora.
+    /// Gatekeeper's App Translocation and a mounted disk image both serve the app from a read-only volume.
+    private func requireWritableTarget() throws {
+        if (try? target.resourceValues(forKeys: [.volumeIsReadOnlyKey]))?.volumeIsReadOnly == true { throw Failure.readOnlyApp }
+    }
+
+    /// A symbolic link to the target. With `adoptsOtherCopies`, also a link to the helper in another copy of the same app, decided by its
+    /// bundle identifier, or a dangling link to any app's helper: the link's name is this app's own, so a moved or renamed copy made it.
     private var isOwned: Bool {
         guard let destination = try? FileManager.default.destinationOfSymbolicLink(atPath: link.path) else { return false }
         let found = URL(fileURLWithPath: destination, relativeTo: link.deletingLastPathComponent()).standardizedFileURL
-        return found == target.standardizedFileURL
-            || adoptsOtherCopies && found.path.hasSuffix("/Remora.app/Contents/Helpers/remora")
+        guard found != target.standardizedFileURL else { return true }
+        guard adoptsOtherCopies, found.path.hasSuffix(".app/Contents/Helpers/remora") else { return false }
+        guard FileManager.default.fileExists(atPath: found.path) else { return true }
+        func bundleIdentifier(_ helper: URL) -> String? {
+            Bundle(url: helper.deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent())?.bundleIdentifier
+        }
+        return bundleIdentifier(found).map { $0 == bundleIdentifier(target) } ?? false
     }
 }

@@ -190,7 +190,7 @@ private struct CommandLinePane: View {
     @State private var showsPathAdvice = false
     @State private var isOnPath: Bool?
     @State private var opensPathAdvice = false
-    private let tool = CommandLineTool(target: Bundle.main.bundleURL.appending(path: "Contents/Helpers/remora"))
+    private let tool = CommandLineTool()
     private static let pointerTitle = "Show pointer while the command line controls a session"
 
     var body: some View {
@@ -230,7 +230,9 @@ private struct CommandLinePane: View {
                         // One subtitle view, so the warning has the same style as the status line.
                         VStack(alignment: .leading, spacing: 2) {
                             StatusLabel(text: "Installed at \(tool.displayPath)", ok: true)
-                            if isOnPath == false { StatusLabel(text: "~/.local/bin isn't on your PATH, so remora won't run in Terminal.", ok: false) }
+                            if isOnPath == false {
+                                StatusLabel(text: "~/.local/bin isn't on your PATH, so \(tool.link.lastPathComponent) won't run in Terminal.", ok: false)
+                            }
                         }
                     case .broken:
                         StatusLabel(text: "The link at \(tool.displayPath) points to a copy of Remora that was moved or deleted.", ok: false)
@@ -276,14 +278,14 @@ private struct CommandLinePane: View {
 private struct AgentSkillSection: View {
     @State private var states: [AgentSkill.Folder: CommandLineTool.State] = [:]
     @State private var otherAgentsExpanded = false
-    private let skill = AgentSkill(app: Bundle.main.bundleURL)
+    private let skill = AgentSkill()
 
     var body: some View {
         Section {
             LabeledContent {
             } label: {
                 Text("Agent skill")
-                Text("Teaches AI agents to use the remora command.")
+                Text("Teaches AI agents to use the \(AppIdentity.current.commandName) command.")
             }
             ForEach(AgentSkill.Folder.allCases, id: \.self) { folder in
                 let link = skill.link(in: folder)

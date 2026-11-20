@@ -3,7 +3,7 @@ import Foundation
 import RemoraCore
 import os
 
-private let rdpLog = Logger(subsystem: "dev.sadiksaifi.Remora", category: "RDP")
+private let rdpLog = Logger(subsystem: "com.peblon.remora", category: "RDP")
 
 /// Owns one single-use RDP connection.
 /// Invariant: stored properties are immutable except for the lock-protected StateBox.
@@ -19,13 +19,17 @@ public final class RDPSession: AgentInputSession, @unchecked Sendable {
     private let isoKeyboard: Bool
     let inputFeedback: @Sendable (InputSource, SessionInputFeedback) -> Void
     private let state = StateBox()
+    /// FreeRDP's configuration folder, which holds the certificates the user accepted.
+    private let configurationDirectory: URL
 
     @MainActor
     public init(
         configuration: SessionConfiguration, frameSink: any FrameSink,
         inputFeedback: @escaping @Sendable (InputSource, SessionInputFeedback) -> Void = { _, _ in },
+        configurationDirectory: URL,
         failureDiagnosis: ConnectionFailureDiagnosis = .system
     ) {
+        self.configurationDirectory = configurationDirectory
         self.failureDiagnosis = failureDiagnosis
         self.inputFeedback = inputFeedback
         self.configuration = configuration
@@ -179,10 +183,8 @@ public final class RDPSession: AgentInputSession, @unchecked Sendable {
                 return
             }
             do {
-                let path = FileManager.default.homeDirectoryForCurrentUser
-                    .appendingPathComponent("Library/Application Support/Remora/FreeRDP")
-                try FileManager.default.createDirectory(at: path, withIntermediateDirectories: true)
-                guard let handle = createHandle(configPath: path.path) else {
+                try FileManager.default.createDirectory(at: configurationDirectory, withIntermediateDirectories: true)
+                guard let handle = createHandle(configPath: configurationDirectory.path) else {
                     finish(.protocolError("Invalid session configuration or FreeRDP allocation failed."))
                     return
                 }

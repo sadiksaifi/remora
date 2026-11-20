@@ -18,17 +18,17 @@ description = "Regenerate Remora.xcodeproj from project.yml."
 run = "xcodegen generate --quiet"
 
 [tasks.build]
-description = "Build the Debug app and verify its Apple-issued signature."
+description = "Build the Debug app, Remora Dev, and verify its Apple-issued signature."
 depends = ["engine", "xcodeproj"]
 run = [
     "xcodebuild -project Remora.xcodeproj -scheme Remora -configuration Debug -derivedDataPath build/DerivedData -quiet build",
-    "codesign --verify --deep --strict -R='anchor apple generic' build/DerivedData/Build/Products/Debug/Remora.app",
+    "codesign --verify --deep --strict -R='anchor apple generic' 'build/DerivedData/Build/Products/Debug/Remora Dev.app'",
 ]
 
 [tasks.launch]
-description = "Build the Debug app and launch a new instance of it."
+description = "Build the Debug app, Remora Dev, and launch a new instance of it."
 depends = ["build"]
-run = "open -n build/DerivedData/Build/Products/Debug/Remora.app"
+run = "open -n 'build/DerivedData/Build/Products/Debug/Remora Dev.app'"
 
 [tasks.test]
 description = "Run the RemoraKit tests."

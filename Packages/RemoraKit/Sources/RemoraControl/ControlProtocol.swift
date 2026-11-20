@@ -155,7 +155,7 @@ public struct ControlFailure: Error, Codable, Sendable, Equatable, LocalizedErro
             case .timeout: "Inspect the current state before retrying. A command that changes state may have taken effect."
             case .invalidArgument: "Read the command's --help."
             case .unknownCommand: "Run `remora --help`."
-            case .appUnavailable: "Open Remora and inspect its launch error."
+            case .appUnavailable: "Open \(AppIdentity.current.name) and inspect its launch error."
             case .notFound: "List the valid names with `remora connection list`, `remora session list` or `remora prompt list`."
             case .ambiguousTarget: "Use the UUID instead of the name."
             case .unsupported: "The remote server cannot do this. Reach the goal another way."
@@ -167,7 +167,7 @@ public struct ControlFailure: Error, Codable, Sendable, Equatable, LocalizedErro
             case .promptRequired:
                 "Show it with `remora prompt list`. Answer with `remora prompt respond P connect` or `remora prompt respond P cancel`, where P is its prompt value."
             case .userActive: "Run `remora wait --for resumed`, again after each timeout, then take a new screenshot."
-            case .agentStopped: "End the task and leave the session open. Only the user can resume agent control, from Remora."
+            case .agentStopped: "End the task and leave the session open. Only the user can resume agent control, from \(AppIdentity.current.name)."
             case .inputBusy: "Send the command again once the running input or control handover finishes."
             case .observationRequired, .imageExpired: "Take a new screenshot with `remora screenshot`, then use its image value."
             case .connectionDeleted: "Create a new connection explicitly."

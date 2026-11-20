@@ -5,7 +5,7 @@ import RemoraCore
 import Synchronization
 import os
 
-private let renderLog = OSLog(subsystem: "dev.sadiksaifi.Remora", category: "Render")
+private let renderLog = OSLog(subsystem: "com.peblon.remora", category: "Render")
 
 /// Copies only damaged bytes into one pending staging slot. Three semaphore-owned
 /// slots overlap CPU copies with GPU reads; a slot stays immutable until completion.

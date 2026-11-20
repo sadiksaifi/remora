@@ -12,10 +12,7 @@ public final class ConnectionStore {
     public private(set) var connections: [Connection]
     private let fileURL: URL
 
-    public init(
-        fileURL: URL = URL.applicationSupportDirectory
-            .appending(path: "Remora/connections.json")
-    ) throws {
+    public init(fileURL: URL) throws {
         self.fileURL = fileURL
         connections = []
         let data: Data

@@ -7,12 +7,13 @@ enum RemoraEntry {
     static func main() async {
         let arguments = Array(CommandLine.arguments.dropFirst())
         if arguments == ["help", "agent"] {
-            let file = AgentSkill(app: ApplicationClient.bundleURL).folder.appending(path: "SKILL.md")
+            let file = AgentSkill().folder.appending(path: "SKILL.md")
             guard let text = try? String(contentsOf: file, encoding: .utf8) else {
                 Darwin.exit(report(ControlFailure(.ioFailed, "The agent guide is missing at \(file.path)."), json: false))
             }
             print(text.replacing(/(?s)\A---\n.*?\n---\n+/, with: ""))
-            print("If the user asks you to install this guide as a skill, run: remora skill install --dir <your user skills folder>")
+            print(
+                "If the user asks you to install this guide as a skill, run: \(AppIdentity.current.commandName) skill install --dir <your user skills folder>")
             return
         }
         // Build-time drift check from project.yml. Every `remora ...` command in SKILL.md and in the failure hints
@@ -70,7 +71,10 @@ enum RemoraEntry {
         Darwin.exit(code)
     }
 
+    /// Every failure prints here. Hints name `remora`, so Remora Dev's CLI names itself instead and never sends an agent to the production app.
     private static func report(_ failure: ControlFailure, json: Bool) -> Int32 {
+        let hint = failure.hint.replacing("`remora ", with: "`\(AppIdentity.current.commandName) ")
+        let failure = ControlFailure(failure.code, failure.message, hint: hint, details: failure.details)
         if json {
             Output.write(.failure(failure))
         } else {
@@ -83,8 +87,8 @@ enum RemoraEntry {
 
 struct RemoraCommand: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
-        commandName: "remora",
-        abstract: "Control the Remora app. AI agents: run 'remora help agent' first.",
+        commandName: AppIdentity.current.commandName,
+        abstract: "Control the \(AppIdentity.current.name) app. AI agents: run '\(AppIdentity.current.commandName) help agent' first.",
         subcommands: [
             Capabilities.self, AppCommand.self, ConnectionCommand.self, ConnectCommand.self, SessionCommand.self, PromptCommand.self, WaitCommand.self,
             ClipboardCommand.self, SettingsCommand.self, ScreenshotCommand.self, RecordingCommand.self, EventsCommand.self, MoveCommand.self, ClickCommand.self,
@@ -170,7 +174,7 @@ struct AppCommand: AsyncParsableCommand {
     }
     struct Show: AsyncParsableCommand {
         enum Page: String, ExpressibleByArgument { case connections, settings }
-        static let configuration = CommandConfiguration(abstract: "Show and activate Remora.")
+        static let configuration = CommandConfiguration(abstract: "Show and activate \(AppIdentity.current.name).")
         @OptionGroup var options: CommonOptions
         @Option(help: "Open connections or settings.") var page: Page?
         @MainActor func run() async throws {
@@ -210,12 +214,12 @@ enum Output {
         guard case .success(let value) = response else { return }
         if case .object(let fields) = value, case .bool(let running) = fields["running"] {
             guard running else {
-                print("Remora is not running.")
+                print("\(AppIdentity.current.name) is not running.")
                 return
             }
             let hidden = fields["hidden"] == .bool(true)
             let visible = fields["windowVisible"] == .bool(true)
-            print("Remora is running. Main window: \(visible ? "open" : "closed"). App: \(hidden ? "hidden" : "shown").")
+            print("\(AppIdentity.current.name) is running. Main window: \(visible ? "open" : "closed"). App: \(hidden ? "hidden" : "shown").")
         } else if case .object(let fields) = value, case .array(let commands) = fields["commands"] {
             for case .string(let command) in commands { print(command) }
         } else if value == .object([:]) || value == .object(["quitting": .bool(true)]) {
