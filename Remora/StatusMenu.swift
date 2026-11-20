@@ -1,4 +1,5 @@
 import AppKit
+import RemoraControl
 
 /// The menu bar icon and its menu, present while Remora runs. The menu lists the open tabs, then the app items.
 /// It is built each time it opens, so it costs nothing while closed.
@@ -38,7 +39,7 @@ final class StatusMenu: NSObject, NSMenuDelegate {
         if tabs.isEmpty { menu.addItem(withTitle: "No Sessions", action: nil, keyEquivalent: "") }
         for tab in tabs { menu.addItem(sessionItem(for: tab)) }
         menu.addItem(.separator())
-        addItem("Open Remora", #selector(open(_:)), to: menu)
+        addItem("Open \(AppIdentity.current.name)", #selector(open(_:)), to: menu)
         menu.addItem(
             withTitle: "Stop All Agent Control", action: #selector(MainWindowController.stopAllAgentControl(_:)),
             keyEquivalent: ""
@@ -46,7 +47,7 @@ final class StatusMenu: NSObject, NSMenuDelegate {
         menu.addItem(.separator())
         addItem("Settings…", #selector(showSettings(_:)), key: ",", to: menu)
         menu.addItem(.separator())
-        menu.addItem(withTitle: "Quit Remora", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+        menu.addItem(withTitle: "Quit \(AppIdentity.current.name)", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
             .target = NSApplication.shared
     }
 
@@ -101,7 +102,7 @@ final class StatusMenu: NSObject, NSMenuDelegate {
             return true
         }
         image.isTemplate = true
-        image.accessibilityDescription = "Remora"
+        image.accessibilityDescription = AppIdentity.current.name
         return image
     }
 

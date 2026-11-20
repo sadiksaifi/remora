@@ -137,7 +137,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let live = sessionTabs.liveCount
         guard live > 0 else { return true }
         let alert = NSAlert()
-        alert.messageText = "Quit Remora and disconnect \(live) \(live == 1 ? "session" : "sessions")?"
+        alert.messageText = "Quit \(AppIdentity.current.name) and disconnect \(live) \(live == 1 ? "session" : "sessions")?"
         if sessionTabs.isRecording { alert.informativeText = "Recordings in progress are saved." }
         alert.addButton(withTitle: "Quit")
         alert.addButton(withTitle: "Cancel")
@@ -175,7 +175,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func showHelp(_ sender: Any?) {
         let alert = NSAlert()
-        alert.messageText = "Remora Help"
+        alert.messageText = "\(AppIdentity.current.name) Help"
         alert.informativeText = """
             Double-click a connection to open it in a tab. Each connection has at most one tab.
 
@@ -226,8 +226,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func configureMenu() {
         let mainMenu = NSMenu()
-        let appMenu = addMenu("Remora", to: mainMenu)
-        appMenu.addItem(withTitle: "About Remora", action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)), keyEquivalent: "")
+        let appMenu = addMenu(AppIdentity.current.name, to: mainMenu)
+        appMenu.addItem(withTitle: "About \(AppIdentity.current.name)", action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)), keyEquivalent: "")
         appMenu.addItem(.separator())
         appMenu.addItem(withTitle: "Settings…", action: #selector(showSettings(_:)), keyEquivalent: ",").target = self
         appMenu.addItem(.separator())
@@ -236,12 +236,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         servicesItem.submenu = services
         NSApplication.shared.servicesMenu = services
         appMenu.addItem(.separator())
-        appMenu.addItem(withTitle: "Hide Remora", action: #selector(NSApplication.hide(_:)), keyEquivalent: "h")
+        appMenu.addItem(withTitle: "Hide \(AppIdentity.current.name)", action: #selector(NSApplication.hide(_:)), keyEquivalent: "h")
         let hideOthers = appMenu.addItem(withTitle: "Hide Others", action: #selector(NSApplication.hideOtherApplications(_:)), keyEquivalent: "h")
         hideOthers.keyEquivalentModifierMask = [.command, .option]
         appMenu.addItem(withTitle: "Show All", action: #selector(NSApplication.unhideAllApplications(_:)), keyEquivalent: "")
         appMenu.addItem(.separator())
-        appMenu.addItem(withTitle: "Quit Remora", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+        appMenu.addItem(withTitle: "Quit \(AppIdentity.current.name)", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
 
         let fileMenu = addMenu("File", to: mainMenu)
         fileMenu.addItem(withTitle: "New Connection", action: #selector(newConnection(_:)), keyEquivalent: "n").target = self
@@ -321,7 +321,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApplication.shared.windowsMenu = windowMenu
 
         let helpMenu = addMenu("Help", to: mainMenu)
-        helpMenu.addItem(withTitle: "Remora Help", action: #selector(showHelp(_:)), keyEquivalent: "?").target = self
+        helpMenu.addItem(withTitle: "\(AppIdentity.current.name) Help", action: #selector(showHelp(_:)), keyEquivalent: "?").target = self
         NSApplication.shared.helpMenu = helpMenu
         NSApplication.shared.mainMenu = mainMenu
     }

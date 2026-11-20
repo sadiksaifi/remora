@@ -71,7 +71,10 @@ enum RemoraEntry {
         Darwin.exit(code)
     }
 
+    /// Every failure prints here. Hints name `remora`, so Remora Dev's CLI names itself instead and never sends an agent to the production app.
     private static func report(_ failure: ControlFailure, json: Bool) -> Int32 {
+        let hint = failure.hint.replacing("`remora ", with: "`\(AppIdentity.current.commandName) ")
+        let failure = ControlFailure(failure.code, failure.message, hint: hint, details: failure.details)
         if json {
             Output.write(.failure(failure))
         } else {
