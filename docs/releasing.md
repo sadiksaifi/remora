@@ -1,6 +1,6 @@
 # Releasing Remora
 
-A release is a pushed `vX.Y.Z` tag. The tag push runs [the release workflow](../.github/workflows/release.yml), which builds, signs, notarizes and publishes the DMG as a GitHub release. The signing credentials live in the `Remora` vault in 1Password, and `mise run release:secrets` copies them to GitHub.
+A release is a pushed `vX.Y.Z` tag. The tag push runs [the release workflow](../.github/workflows/release.yml), which builds, signs, notarizes and publishes the DMG and its Sparkle update feed as a GitHub release. The signing credentials live in the `Remora` vault in 1Password, and `mise run release:secrets` copies them to GitHub.
 
 ## Make a release
 
@@ -13,10 +13,10 @@ A release is a pushed `vX.Y.Z` tag. The tag push runs [the release workflow](../
 The workflow has three jobs:
 
 - `validate` checks the tag with Tagsmith against [.tagsmith.jsonc](../.tagsmith.jsonc).
-- `build` builds the RDP and VNC engines from scratch, signs the app with the Developer ID certificate, and builds and signs the DMG. It then notarizes and staples the DMG, assesses it with Gatekeeper and writes `SHA256SUMS`.
+- `build` first runs `mise run release:keys --private`, which stops the run unless both Sparkle keys are set. It builds the RDP and VNC engines from scratch, signs the app with the Developer ID certificate, and builds and signs the DMG. It then notarizes and staples the DMG, assesses it with Gatekeeper and writes `SHA256SUMS`. Last, `release:appcast` runs Sparkle's `generate_appcast` on the notarized DMG, embeds the release notes, and keeps `appcast.xml` only if its signature verifies with the public key in the app inside the DMG.
 - `publish` creates the GitHub release.
 
-The release appears at `https://github.com/sadiksaifi/remora/releases/tag/v0.2.0` with the title `Remora 0.2.0`. It holds `Remora-0.2.0-macos-arm64.dmg` and `SHA256SUMS`. The notes start with a download badge, followed by the notes from `mise run release:notes:tag v0.2.0`. The release is marked latest, so `https://github.com/sadiksaifi/remora/releases/latest` serves it.
+The release appears at `https://github.com/sadiksaifi/remora/releases/tag/v0.2.0` with the title `Remora 0.2.0`. It holds `Remora-0.2.0-macos-arm64.dmg`, `SHA256SUMS` and `appcast.xml`. The notes start with a download badge, followed by the notes from `mise run release:notes:tag v0.2.0`. The release is marked latest, so `https://github.com/sadiksaifi/remora/releases/latest` serves it. Installed copies of Remora read their feed from `https://github.com/sadiksaifi/remora/releases/latest/download/appcast.xml`, so they see the new version as soon as the release is published.
 
 If the tag push fails, `release:tag` keeps the local tag and refuses to create it again. Push it with `git push origin refs/tags/v0.2.0`.
 
@@ -34,7 +34,7 @@ The same commands rewrite the notes of any release.
 
 ## Rehearse before the first release
 
-A manual run on `main` builds, signs and notarizes version `0.0.0` without creating a release. Run it after the secrets are first set, and again after any credential changes.
+A manual run on `main` builds, signs and notarizes version `0.0.0` and writes its appcast without creating a release. Run it after the secrets and the Sparkle public key are first set, and again after any credential changes. Until both Sparkle keys are set, it stops at `release:keys`.
 
 ```sh
 run=$(gh api --hostname github.com --method POST repos/sadiksaifi/remora/actions/workflows/release.yml/dispatches -f ref=main --jq .workflow_run_id)
@@ -45,7 +45,7 @@ spctl --assess --type open --context context:primary-signature --verbose=2 build
 
 The dispatch API returns the ID of the run it started, so the commands follow that run and no other. `--exit-status` makes `gh run watch` fail when the run fails.
 
-The DMG stays on the run as an artifact for 14 days. A rehearsal skips the `validate` and `publish` jobs, so it does not test the release notes or `gh release create`.
+The DMG and its `appcast.xml` stay on the run as an artifact for 14 days. A rehearsal skips the `validate` and `publish` jobs, so it does not test the release notes or `gh release create`.
 
 ## Fix a broken release
 
@@ -119,7 +119,7 @@ The App Store Connect API key lets `notarytool` notarize the DMG.
 
 ### Sparkle EdDSA key
 
-The EdDSA key signs each update for Sparkle. Installed copies of Remora check each update against the public key built into them. The Sparkle PR adds `REMORA_SPARKLE_PUBLIC_KEY` and the workflow step that signs updates with `SPARKLE_ED_PRIVATE_KEY`. Until it lands, no workflow reads that secret.
+The EdDSA key signs each update for Sparkle. Installed copies of Remora check each update against the public key built into them, before they open the DMG. The public key is `REMORA_SPARKLE_PUBLIC_KEY` in the Release configuration of [project.yml](../project.yml). The release workflow signs each update with `SPARKLE_ED_PRIVATE_KEY`, and only `generate_appcast` reads it, on standard input.
 
 1. Take `generate_keys` from the `bin` folder of the Sparkle release that the app uses.
 2. Run `./generate_keys --account remora`. It stores the private key in the login keychain as `Private key for signing Sparkle updates` and prints the public key. The `remora` account keeps it apart from other apps' Sparkle keys. If the command prints a key without creating one, a key for that account already exists.
@@ -145,6 +145,7 @@ The EdDSA key signs each update for Sparkle. Installed copies of Remora check ea
 
 6. After it prints `match`, delete the export with `rm -r "$dir"`.
 7. Delete the private key from the login keychain. In Keychain Access, find `Private key for signing Sparkle updates` with the account `remora`, and delete it.
+8. Put the public key in `REMORA_SPARKLE_PUBLIC_KEY` in [project.yml](../project.yml), replacing `""` in the Release configuration, and merge it through a pull request. `mise run release:keys` checks that it is a 44-character standard Base64 key. Then run `mise run release:secrets` and rehearse.
 
 Deleting the keychain copy leaves 1Password and the write-only GitHub secret as the only copies. The release workflow signs every update, so a copy on this Mac adds exposure and no capability the release needs. The trade-off is that signing an update by hand needs the key back first, with `./generate_keys --account remora -f <file>`.
 
@@ -187,7 +188,7 @@ If the .p8 leaked, revoke the key at once, as [Revoking API Keys](https://develo
 
 #### Sparkle EdDSA key
 
-Never rotate the Sparkle key casually. Installed copies accept a new key only through [Sparkle's rotation path](https://sparkle-project.org/documentation/#rotating-signing-keys). An app signed with Developer ID that also ships an EdDSA public key accepts an update that changes either the Developer ID certificate or the EdDSA key, but not both. Remora meets this, and its updates are Developer ID signed DMGs, which the path also requires.
+Never rotate the Sparkle key casually. Installed copies accept a new key only through [Sparkle's rotation path](https://sparkle-project.org/documentation/#rotating-signing-keys). An app signed with Developer ID that also ships an EdDSA public key accepts an update that changes either the Developer ID certificate or the EdDSA key, but not both. Remora meets this, and its updates are Developer ID signed DMGs, which the path also requires. Remora sets `SUVerifyUpdateBeforeExtraction`, so after a key change an installed copy accepts the DMG by its Developer ID signature only when the team matches its own.
 
 Use the same path when the private key leaked or was lost:
 
