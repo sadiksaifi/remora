@@ -550,16 +550,18 @@ def serve_once(offer_mode, outcome, port):
                             compressed = synthetic_zrle(dimension)
                             report['compressed_bytes'] = len(compressed)
                             send(struct.pack('>BBHHHHHiI', 0, 0, 1, 0, 0, dimension, dimension, 16, len(compressed)))
-                            # 120 separate writes give the client more than the 100 readiness wakeups that the old
-                            # retry count allowed. A fixed count, not a fixed size, keeps the whole delivery inside
-                            # the client's 10 s read deadline where each short sleep takes far longer than 5 ms.
-                            chunk = -(-len(compressed) // 120)
+                            # 160 balanced writes leave the client well over the 100 readiness waits that the old
+                            # retry count allowed, even when a reader pause merges some of them. A fixed count, not a
+                            # fixed size, keeps the delivery inside the client's 10 s read deadline where each short
+                            # sleep takes far longer than 5 ms.
+                            writes = 160
                             began = time.monotonic()
                             report['sent_bytes'] = 0
                             try:
-                                for offset in range(0, len(compressed), chunk):
-                                    send(compressed[offset:offset+chunk])
-                                    report['sent_bytes'] += len(compressed[offset:offset+chunk])
+                                for index in range(writes):
+                                    part = compressed[len(compressed)*index//writes:len(compressed)*(index+1)//writes]
+                                    send(part)
+                                    report['sent_bytes'] += len(part)
                                     time.sleep(0.005)
                             finally:
                                 report['delivery_ms'] = round((time.monotonic() - began) * 1000)
