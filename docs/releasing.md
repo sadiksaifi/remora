@@ -7,8 +7,8 @@ A release is a pushed `vX.Y.Z` tag. The tag push runs [the release workflow](../
 1. Switch to `main` and bring it up to date with `git switch main && git pull --ff-only`. The tag goes on `HEAD`.
 2. Preview the next version with `mise run release:preview minor`. Use `major`, `minor` or `patch`. The JSON output shows the version and the tag.
 3. Read the release notes with `mise run release:notes`. [cliff.toml](../cliff.toml) groups the Conventional Commits since the last release.
-4. Create and push the tag with `mise run release:tag 0.2.0`, using the version that the preview printed. Only a repository admin can create a `v*` tag.
-5. Follow the run with `gh run list --workflow release.yml --limit 1` and `gh run watch <run-id>`.
+4. Create and push the tag with `mise run release:tag 0.2.0`, using the version that the preview printed. The task fetches `origin/main` first and stops unless `HEAD` is that commit, so a local commit that never merged cannot become a release. Only a repository admin can create a `v*` tag.
+5. Find the run with `gh run list --workflow release.yml --branch v0.2.0`, and follow it with `gh run watch <run-id> --exit-status`.
 
 The workflow has three jobs:
 
@@ -38,11 +38,13 @@ A manual run on `main` builds, signs and notarizes version `0.0.0` without creat
 
 ```sh
 gh workflow run release.yml --ref main
-gh run list --workflow release.yml --limit 1
-gh run watch <run-id>
+# It prints the run's URL, .../actions/runs/<run-id>. Watch that run.
+gh run watch <run-id> --exit-status
 gh run download <run-id> --name Remora-0.0.0 --dir build/rehearsal
 spctl --assess --type open --context context:primary-signature --verbose=2 build/rehearsal/Remora-0.0.0-macos-arm64.dmg
 ```
+
+If `gh workflow run` prints no URL, take the run ID from `gh run list --workflow release.yml --event workflow_dispatch --limit 1`, and check that its start time is the time you started it. `--exit-status` makes `gh run watch` fail when the run fails.
 
 The DMG stays on the run as an artifact for 14 days. A rehearsal skips the `validate` and `publish` jobs, so it does not test the release notes or `gh release create`.
 
@@ -95,10 +97,10 @@ The .p12 and .p8 files are attachments, because one item then holds the file tog
 The certificate signs the app and the DMG. Only the Account Holder of team LZ3V3WUPWR can create it.
 
 1. In Xcode, open Settings > Accounts, select the Account Holder's account, and click Manage Certificates.
-2. Click the add button and choose Developer ID Application. Xcode puts the certificate and its private key in the login keychain.
+2. Click the add button and choose Developer ID Application. Xcode puts the certificate and its private key in the login keychain. If you create it on the developer website instead and it asks for a Developer ID Certificate Intermediary, choose G2 Sub-CA, as [Apple's replacement guide](https://developer.apple.com/help/account/certificates/replace-developer-id-certificates) says.
 3. In Keychain Access, open My Certificates in the login keychain and find `Developer ID Application: <name> (LZ3V3WUPWR)`. Check that it holds a private key.
 4. Right-click it, choose Export, and save it as `developer-id.p12`. Protect it with a password that 1Password generates.
-5. In the `Developer ID Application` item, attach `developer-id.p12` and save the password in `password`. Set `expires` to the certificate's expiry date from Keychain Access.
+5. In the `Developer ID Application` item, attach `developer-id.p12` and save the password in `password`. Copy the certificate's Expires date from Keychain Access into `expires`.
 6. Delete the exported `developer-id.p12` from disk.
 
 The certificate can stay in the login keychain. `mise run release:app` needs it there to build a release locally.
@@ -116,16 +118,29 @@ The App Store Connect API key lets `notarytool` notarize the DMG.
 
 ### Sparkle EdDSA key
 
-The EdDSA key signs each update for Sparkle. Installed copies of Remora accept only updates signed with the private key that matches the public key they ship with.
+The EdDSA key signs each update for Sparkle. Installed copies of Remora check each update against the public key built into them. The Sparkle PR adds `REMORA_SPARKLE_PUBLIC_KEY` and the workflow step that signs updates with `SPARKLE_ED_PRIVATE_KEY`. Until it lands, no workflow reads that secret.
 
 1. Take `generate_keys` from the `bin` folder of the Sparkle release that the app uses.
 2. Run `./generate_keys --account remora`. It stores the private key in the login keychain as `Private key for signing Sparkle updates` and prints the public key. The `remora` account keeps it apart from other apps' Sparkle keys. If the command prints a key without creating one, a key for that account already exists.
-3. Run `./generate_keys --account remora -x sparkle-private-key.txt` to export the private key. The file holds one line of base64 text.
-4. In the `Sparkle EdDSA key` item, paste that line into `private key` and the public key into `public key`.
-5. Delete `sparkle-private-key.txt` from disk.
-6. Delete the private key from the login keychain. In Keychain Access, find `Private key for signing Sparkle updates` with the account `remora`, and delete it.
+3. Export the private key into a private folder. `generate_keys -x` writes a file readable by every user unless the umask says otherwise.
 
-Deleting the keychain copy leaves 1Password and the write-only GitHub secret as the only copies. The release workflow signs every update, so a copy on this Mac adds exposure and no capability the release needs. The trade-off is that signing an update by hand needs the key back first, with `./generate_keys --account remora -f <file>`. Before you delete it, check that `private key` holds the whole line from the export.
+   ```sh
+   dir=$(mktemp -d)
+   (umask 077 && ./generate_keys --account remora -x "$dir/private-key")
+   pbcopy < "$dir/private-key"
+   ```
+
+4. In the `Sparkle EdDSA key` item, paste the clipboard into `private key`, and paste the public key into `public key`. Then clear the clipboard with `pbcopy < /dev/null`.
+5. Check that 1Password holds the same value. This prints only `match` or `differ`:
+
+   ```sh
+   [ "$(op read 'op://Remora/Sparkle EdDSA key/private key')" = "$(cat "$dir/private-key")" ] && echo match || echo differ
+   ```
+
+6. After it prints `match`, delete the export with `rm -r "$dir"`.
+7. Delete the private key from the login keychain. In Keychain Access, find `Private key for signing Sparkle updates` with the account `remora`, and delete it.
+
+Deleting the keychain copy leaves 1Password and the write-only GitHub secret as the only copies. The release workflow signs every update, so a copy on this Mac adds exposure and no capability the release needs. The trade-off is that signing an update by hand needs the key back first, with `./generate_keys --account remora -f <file>`.
 
 ### Restore the GitHub secrets
 
@@ -138,21 +153,40 @@ mise run release:secrets
 
 The dry run lists each secret name, its encoding and its reference, and reads nothing from 1Password. The real run reads every value before it changes anything, so a missing item or field stops it with the reference that failed. It then pipes each value into `gh secret set <name> --env release`. No value reaches the disk or the terminal.
 
+GitHub sets each secret on its own. If one fails, the task names it and the secrets it already changed, and the environment holds a mix of old and new values. Run the task again until it succeeds before you release or rehearse.
+
 Run it after you create or rotate a credential, then rehearse.
 
 ### Expiry and rotation
 
 | Credential | Expires | Rotate |
 | --- | --- | --- |
-| Developer ID Application | 5 years after creation | A month before `expires`, or at once if the private key leaked. |
+| Developer ID Application | On the date in its `expires` field | A month before that date, or at once if the private key leaked. |
 | Notary API key | Never | Once a year, and at once if the .p8 leaked or a person who saw it should lose access. |
-| Sparkle EdDSA key | Never | Only if the private key leaked. |
+| Sparkle EdDSA key | Never | Only if the private key leaked or was lost. |
 
-To rotate the Developer ID certificate, create a new one as above, replace the attachment and the password, run `mise run release:secrets`, and rehearse. Copies signed with the old certificate keep launching after it expires, because notarization and the signature's secure timestamp prove it was valid at signing time.
+#### Developer ID Application certificate
 
-To rotate the notary key, create the new key first, replace the attachment and the IDs, run `mise run release:secrets`, and rehearse. Revoke the old key in App Store Connect only after the rehearsal passes, because notarization fails at once with a revoked key.
+A team can hold up to five Developer ID Application certificates at a time, so create and test the replacement before the current one expires. Create a new certificate as above, replace the attachment, the password and `expires`, run `mise run release:secrets`, and rehearse. Copies signed while the old certificate was valid keep launching after it expires, as [Apple's Developer ID page](https://developer.apple.com/help/account/certificates/create-developer-id-certificates) says.
 
-Never rotate the Sparkle key casually. Installed copies trust only the public key built into them, so an update signed with a new key fails on every one of them. A rotation needs one release signed with the old key that ships the new public key. Keep the old key until users have installed that release.
+If the private key leaked, rotate the certificate and release a patch signed with the new one. Then ask Apple to revoke the leaked certificate by email to product-security@apple.com. The developer account cannot revoke a Developer ID certificate, as [Revoking privileges](https://developer.apple.com/help/account/reference/revoking-privileges) says. A revoked certificate stops every copy signed with it from installing or launching, so releasing first lets installed copies update before they stop.
+
+#### Notary API key
+
+For a routine rotation, create the new key first, replace the attachment and the IDs, run `mise run release:secrets`, and rehearse. Then revoke the old key in App Store Connect.
+
+If the .p8 leaked, revoke the key at once, as [Revoking API Keys](https://developer.apple.com/documentation/appstoreconnectapi/revoking-api-keys) says. Notarization fails until the new key is in place, and a revoked key cannot be restored. Then create the new key and continue as above.
+
+#### Sparkle EdDSA key
+
+Never rotate the Sparkle key casually. Installed copies accept a new key only through [Sparkle's rotation path](https://sparkle-project.org/documentation/#rotating-signing-keys). An app signed with Developer ID that also ships an EdDSA public key accepts an update that changes either the Developer ID certificate or the EdDSA key, but not both. Remora meets this, and its updates are Developer ID signed DMGs, which the path also requires.
+
+Use the same path when the private key leaked or was lost:
+
+1. Generate a new key as above and store it in 1Password.
+2. Put the new public key in `REMORA_SPARKLE_PUBLIC_KEY` and run `mise run release:secrets`.
+3. Sign the release with the same Developer ID certificate as the previous release. Do not rotate the certificate in the same release.
+4. Before publishing, install the previous release and check that it updates to the new build.
 
 ## Beta and alpha channels later
 
