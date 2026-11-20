@@ -5,6 +5,24 @@ import RemoraControl
 /// A link to an app on a disk image or in App Translocation's temporary copy would soon break.
 let readOnlyDiscussion = "It refuses while \(AppIdentity.current.name) runs from a disk image or a temporary location. Move the app to Applications first."
 
+/// This copy's helper as one shell word. The command name on PATH may run another copy or another tool.
+let helperCommand = "'" + CommandLineTool().target.path.replacing("'", with: #"'\''"#) + "'"
+
+/// The states of a CLI or skill link, and the command that fixes each one, which `fix` names after the helper.
+func linkStates(fix: String) -> String {
+    let fix = "\(helperCommand) \(fix)"
+    let name = AppIdentity.current.name
+    return """
+        A link's state is one of:
+        installed: the link points to this copy of \(name).
+        notInstalled: nothing is at the path.
+        otherCopy: the link points to another copy of \(name). `\(fix)` points it at this copy.
+        broken: the link points to a copy of \(name) that was moved or deleted. `\(fix)` points it at this copy.
+        otherLink: the link points to another app or tool. `\(fix) --replace` replaces the link. Ask the user first.
+        conflict: a file or folder that isn't a link is at the path. \(name) never replaces it.
+        """
+}
+
 /// Claude Code reads only its own skills folder. The other agents read the shared Agent Skills folder.
 enum SkillAgent: String, CaseIterable, ExpressibleByArgument {
     case agents, codex, opencode, pi, muse, antigravity, cursor, fx
@@ -16,7 +34,7 @@ enum SkillAgent: String, CaseIterable, ExpressibleByArgument {
 struct SkillCommand: ParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "skill", abstract: "Link the bundled agent skill into AI agents' skills folders.",
-        subcommands: [Path.self, Install.self, Uninstall.self])
+        subcommands: [Path.self, Get.self, Install.self, Uninstall.self])
 
     static var skill: AgentSkill { AgentSkill() }
 
@@ -28,18 +46,28 @@ struct SkillCommand: ParsableCommand {
         }
     }
 
+    struct Get: ParsableCommand {
+        static let configuration = CommandConfiguration(
+            abstract: "Report the \(AppIdentity.current.commandName) skill links in ~/.agents/skills and ~/.claude/skills without changing them.",
+            discussion: linkStates(fix: "skill install"))
+        @OptionGroup var targets: Targets
+        func run() throws { try targets.apply(nil) }
+    }
+
     struct Install: ParsableCommand {
         static let configuration = CommandConfiguration(
-            abstract: "Link the skill as \(AppIdentity.current.commandName) in ~/.agents/skills and ~/.claude/skills.",
-            discussion: readOnlyDiscussion)
+            abstract: "Link the skill as \(AppIdentity.current.commandName) in ~/.agents/skills and ~/.claude/skills, or point those links at this copy.",
+            discussion: linkStates(fix: "skill install") + "\n\n" + readOnlyDiscussion)
         @OptionGroup var targets: Targets
-        func run() throws { try targets.apply(install: true) }
+        @Flag(help: "Also replace a link to another app's or tool's skill. A file or folder that isn't a link is never replaced.") var replace = false
+        func run() throws { try targets.apply(.install(replace: replace)) }
     }
 
     struct Uninstall: ParsableCommand {
-        static let configuration = CommandConfiguration(abstract: "Remove the \(AppIdentity.current.commandName) links that point to this app's skill.")
+        static let configuration = CommandConfiguration(
+            abstract: "Remove the \(AppIdentity.current.commandName) links that point to a copy of this app's skill. Other links stay.")
         @OptionGroup var targets: Targets
-        func run() throws { try targets.apply(install: false) }
+        func run() throws { try targets.apply(.uninstall) }
     }
 
     struct Targets: ParsableArguments {
@@ -51,8 +79,13 @@ struct SkillCommand: ParsableCommand {
             if agent != nil, dir != nil { throw ValidationError("Choose --agent or --dir.") }
         }
 
-        /// Never replaces or removes a remora skill that is not this app's link.
-        func apply(install: Bool) throws {
+        enum Change {
+            case install(replace: Bool)
+            case uninstall
+        }
+
+        /// Reports each link after `change`, if any. Replaces another app's or tool's link only with `replace`, and never removes one.
+        func apply(_ change: Change?) throws {
             let links: [(name: String, link: CommandLineTool)]
             if let dir {
                 links = [("Folder", skill.link(in: URL(fileURLWithPath: (dir as NSString).expandingTildeInPath)))]
@@ -62,25 +95,29 @@ struct SkillCommand: ParsableCommand {
             var results: [ControlValue] = []
             for (name, link) in links {
                 do {
-                    if link.state != .conflict {
-                        if install { try link.install() } else if link.state != .notInstalled { try link.uninstall() }
+                    switch (change, link.state) {
+                    case (nil, _), (_, .conflict), (.install(replace: false), .otherLink), (.uninstall, .otherLink), (.uninstall, .notInstalled): break
+                    case (.install(let replace), _): try link.install(replacingOtherLink: replace)
+                    case (.uninstall, _): try link.uninstall()
                     }
                 } catch {
                     throw ControlFailure(.ioFailed, error.localizedDescription, hint: (error as? CommandLineTool.Failure)?.recoverySuggestion)
                 }
                 results.append(.object(["agent": .string(name), "path": .string(link.link.path), "state": .string(link.state.rawValue)]))
-                if !options.json {
-                    print(
-                        "\(name): \(link.state == .conflict ? "in use by another skill" : link.state == .notInstalled ? "not installed" : "installed") at \(link.displayPath)"
-                    )
-                }
+                if !options.json { print("\(name) (\(link.displayPath)): \(link.state.summary)") }
             }
-            let inUse = links.filter { $0.link.state == .conflict }.map(\.link.displayPath)
-            guard inUse.isEmpty else {
-                throw ControlFailure(
-                    .destinationExists, "Another skill is in use at \(inUse.joined(separator: ", ")). Remora left it unchanged.",
-                    hint: "Move or rename the other skill, or pass --dir with another skills folder.",
-                    details: .array(results))
+            if case .install = change {
+                let inUse = links.filter { [.otherLink, .conflict].contains($0.link.state) }
+                guard inUse.isEmpty else {
+                    let replaceable = inUse.contains { $0.link.state == .otherLink }
+                    throw ControlFailure(
+                        .destinationExists,
+                        "Another skill is in use at \(inUse.map(\.link.displayPath).joined(separator: ", ")). \(AppIdentity.current.name) left it unchanged.",
+                        hint: replaceable
+                            ? "If the user agrees, run the same command with --replace to replace the links. A folder that isn't a link stays: move or rename it, or pass --dir with another skills folder."
+                            : "Move or rename the other skill, or pass --dir with another skills folder.",
+                        details: .array(results))
+                }
             }
             if options.json { Output.write(.success(.array(results))) }
         }

@@ -44,29 +44,69 @@ struct SettingsCommand: AsyncParsableCommand {
             try await options.execute(.init(command: "settings.permission", arguments: ["open": .bool(open)]))
         }
     }
-    struct CLI: AsyncParsableCommand {
+    /// Reads and changes the link in this process, so ownership and the read-only refusal apply to the copy that holds this helper,
+    /// not to whichever copy of the app is running.
+    struct CLI: ParsableCommand {
         static let configuration = CommandConfiguration(
             commandName: "cli", abstract: "Inspect or change the \(AppIdentity.current.commandName) link in ~/.local/bin.",
             subcommands: [Get.self, Repair.self, Uninstall.self])
         @OptionGroup var options: CommonOptions
-        struct Get: AsyncParsableCommand {
+
+        struct Get: ParsableCommand {
             static let configuration = CommandConfiguration(
-                abstract: "Report whether \(CommandLineTool().displayPath) is installed and points to this copy of \(AppIdentity.current.name).")
+                abstract: "Report whether \(CommandLineTool().displayPath) is installed and points to this copy of \(AppIdentity.current.name).",
+                discussion: linkStates(fix: "settings cli repair"))
             @OptionGroup var options: CommonOptions
-            @MainActor func run() async throws {
-                Output.write(.success(CommandLineTool().status), json: options.json)
+            func run() { Output.write(.success(CommandLineTool().status), json: options.json) }
+        }
+        struct Repair: ParsableCommand {
+            static let configuration = CommandConfiguration(
+                abstract: "Point \(CommandLineTool().displayPath) at this copy of \(AppIdentity.current.name), and create it if it's missing.",
+                discussion: """
+                    It acts on the copy that contains this helper. When \(CommandLineTool().displayPath) runs another copy or another tool, \
+                    run this copy's helper by its full path: \(helperCommand) settings cli repair
+
+                    \(readOnlyDiscussion)
+                    """)
+            @OptionGroup var options: CommonOptions
+            @Flag(help: "Also replace a link to another app or tool. Ask the user first. A file that isn't a link is never replaced.") var replace = false
+            func run() throws {
+                try CLI.change(json: options.json) {
+                    try $0.install(replacingOtherLink: replace)
+                } inUse: { otherLink in
+                    otherLink
+                        ? "Ask the user before you replace it. Then run `\(helperCommand) settings cli repair --replace`, or choose Replace… in \(AppIdentity.current.name) Settings."
+                        : "After that, run `\(helperCommand) settings cli repair`."
+                }
             }
         }
-        struct Repair: AsyncParsableCommand {
+        struct Uninstall: ParsableCommand {
             static let configuration = CommandConfiguration(
-                abstract: "Point \(CommandLineTool().displayPath) at this copy of \(AppIdentity.current.name).", discussion: readOnlyDiscussion)
+                abstract: "Remove \(CommandLineTool().displayPath) when it points to a copy of \(AppIdentity.current.name).")
             @OptionGroup var options: CommonOptions
-            @MainActor func run() async throws { try await options.execute(.init(command: "settings.cli.repair")) }
+            func run() throws {
+                try CLI.change(json: options.json) {
+                    try $0.uninstall()
+                } inUse: { _ in
+                    "It isn't \(AppIdentity.current.name)'s link, so there is nothing to uninstall. Leave it unless the user asks to remove it."
+                }
+            }
         }
-        struct Uninstall: AsyncParsableCommand {
-            static let configuration = CommandConfiguration(abstract: "Remove \(CommandLineTool().displayPath).")
-            @OptionGroup var options: CommonOptions
-            @MainActor func run() async throws { try await options.execute(.init(command: "settings.cli.uninstall")) }
+
+        /// Runs `action` on this copy's link and prints the link's status. `inUse` gives the hint for another app's link (true) or a file
+        /// (false) at the path.
+        static func change(json: Bool, _ action: (CommandLineTool) throws -> Void, inUse: (Bool) -> String) throws {
+            let tool = CommandLineTool()
+            do {
+                try action(tool)
+            } catch let failure as CommandLineTool.Failure {
+                switch failure {
+                case .otherLink: throw ControlFailure(.destinationExists, failure.localizedDescription, hint: inUse(true))
+                case .conflict: throw ControlFailure(.destinationExists, failure.localizedDescription, hint: inUse(false))
+                case .notInstalled, .readOnlyApp: throw ControlFailure(.invalidArgument, failure.localizedDescription, hint: failure.recoverySuggestion)
+                }
+            } catch { throw ControlFailure(.ioFailed, error.localizedDescription) }
+            Output.write(.success(tool.status), json: json)
         }
     }
 }

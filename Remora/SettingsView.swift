@@ -184,6 +184,53 @@ private struct CopyableText: View {
     }
 }
 
+/// A link's status in one short line. The help tag holds the paths.
+private struct LinkStatus: View {
+    let link: CommandLineTool
+    let state: CommandLineTool.State?
+
+    var body: some View {
+        switch state {
+        case .notInstalled, nil: Text(CommandLineTool.State.notInstalled.summary)
+        case let state?:
+            StatusLabel(text: state.summary, ok: state == .installed)
+                .help([.installed, .conflict].contains(state) ? link.displayPath : "\(link.displayPath) points to \(link.displayDestination)")
+        }
+    }
+}
+
+/// The one button that resolves a link that isn't this copy's. Replacing another app's or tool's link takes confirmation.
+private struct LinkFixButton: View {
+    let link: CommandLineTool
+    let state: CommandLineTool.State
+    let perform: (() throws -> Void) -> Void
+    @State private var confirmsReplace = false
+    @State private var shownDestination = ""
+
+    var body: some View {
+        switch state {
+        case .otherCopy: Button("Update") { perform { try link.install() } }
+        case .broken: Button("Repair") { perform { try link.install() } }
+        case .otherLink:
+            Button("Replace…") {
+                shownDestination = link.displayDestination
+                confirmsReplace = true
+            }
+            .alert("Replace the link at \(link.displayPath)?", isPresented: $confirmsReplace) {
+                Button("Replace", role: .destructive) {
+                    // If the link changed while the alert was open, the row only shows its new state.
+                    perform { if link.displayDestination == shownDestination { try link.install(replacingOtherLink: true) } }
+                }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("It points to \(shownDestination), which belongs to another app or tool. That file stays unchanged.")
+            }
+        case .conflict: Button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting([link.link]) }
+        case .notInstalled, .installed: EmptyView()
+        }
+    }
+}
+
 private struct CommandLinePane: View {
     @AppStorage(AppSettings.showAgentPointerKey) private var showAgentPointer = true
     @State private var state: CommandLineTool.State?
@@ -200,7 +247,7 @@ private struct CommandLinePane: View {
                     switch state {
                     case .notInstalled:
                         Button("Install") {
-                            perform(tool.install)
+                            perform { try tool.install() }
                             opensPathAdvice = state == .installed
                         }
                     case .installed:
@@ -217,28 +264,18 @@ private struct CommandLinePane: View {
                                     }
                                     .padding()
                                 }
-                            Button("Uninstall") { perform(tool.uninstall) }
+                            Button("Uninstall") { perform { try tool.uninstall() } }
                         }
-                    case .broken: Button("Repair") { perform(tool.repair) }
-                    case .conflict: Button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting([tool.link]) }
+                    case let state?: LinkFixButton(link: tool, state: state, perform: perform)
                     case nil: EmptyView()
                     }
                 } label: {
                     Text("Command-line tool")
-                    switch state {
-                    case .installed:
-                        // One subtitle view, so the warning has the same style as the status line.
-                        VStack(alignment: .leading, spacing: 2) {
-                            StatusLabel(text: "Installed at \(tool.displayPath)", ok: true)
-                            if isOnPath == false {
-                                StatusLabel(text: "~/.local/bin isn't on your PATH, so \(tool.link.lastPathComponent) won't run in Terminal.", ok: false)
-                            }
-                        }
-                    case .broken:
-                        StatusLabel(text: "The link at \(tool.displayPath) points to a copy of Remora that was moved or deleted.", ok: false)
-                    case .conflict:
-                        StatusLabel(text: CommandLineTool.Failure.conflict(tool.displayPath).localizedDescription, ok: false)
-                    case .notInstalled, nil: Text("Not installed")
+                    if state == .installed, isOnPath == false {
+                        StatusLabel(text: "Installed, but not on your PATH", ok: false)
+                            .help("~/.local/bin isn't on your PATH, so \(tool.link.lastPathComponent) won't run in Terminal.")
+                    } else {
+                        LinkStatus(link: tool, state: state)
                     }
                 }
                 .accessibilityIdentifier("commandLineTool")
@@ -254,18 +291,15 @@ private struct CommandLinePane: View {
             Section {
                 Toggle(isOn: $showAgentPointer) {
                     Text(Self.pointerTitle)
-                    Text("A cursor glides to each point the command line moves to or clicks. It never appears in screenshots.")
+                    Text("It never appears in screenshots.")
                 }
                 .accessibilityLabel(Self.pointerTitle)
                 .accessibilityIdentifier("showAgentPointer")
             }
         }
         .settingsPane()
-        .onAppear { state = tool.state }
-        // The user may move the file in the way, or the app, while Remora is in the background.
-        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
-            state = tool.state
-        }
+        // The command line, Finder or another app may change the link while the pane is open.
+        .task { repeat { state = tool.state } while (try? await Task.sleep(for: .seconds(1))) != nil }
     }
 
     private func perform(_ action: () throws -> Void) {
@@ -291,22 +325,17 @@ private struct AgentSkillSection: View {
                 let link = skill.link(in: folder)
                 LabeledContent {
                     switch states[folder] {
-                    case .notInstalled: Button("Install") { perform(link.install) }
-                    case .installed, .broken: Button("Remove") { perform(link.uninstall) }
-                    case .conflict: Button("Install") {}.disabled(true)
+                    case .notInstalled: Button("Install") { perform { try link.install() } }
+                    case .installed: Button("Remove") { perform { try link.uninstall() } }
+                    case let state?: LinkFixButton(link: link, state: state, perform: perform)
                     case nil: EmptyView()
                     }
                 } label: {
                     Text(folder.name)
                     // One subtitle view, so the status line has the same style in both rows.
                     VStack(alignment: .leading, spacing: 2) {
-                        if folder == .agents { Text("The shared folder that Codex, OpenCode, pi, Muse, Antigravity, Cursor, FX and other agents read.") }
-                        let path = (folder.url.path as NSString).abbreviatingWithTildeInPath
-                        switch states[folder] {
-                        case .installed, .broken: StatusLabel(text: "Installed in \(path)", ok: true)
-                        case .conflict: StatusLabel(text: "Another skill is in use at \(link.displayPath).", ok: false)
-                        case .notInstalled, nil: Text("Not installed in \(path)")
-                        }
+                        if folder == .agents { Text("Read by Codex, OpenCode, Cursor and other agents.") }
+                        LinkStatus(link: link, state: states[folder])
                     }
                 }
                 .accessibilityIdentifier("agentSkill-\(folder.rawValue)")
@@ -319,9 +348,8 @@ private struct AgentSkillSection: View {
             }
             .accessibilityAction { otherAgentsExpanded.toggle() }
         }
-        .onAppear(perform: refresh)
-        // The user may change a skills folder while Remora is in the background.
-        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in refresh() }
+        // The command line, Finder or another app may change a skills folder while the pane is open.
+        .task { repeat { refresh() } while (try? await Task.sleep(for: .seconds(1))) != nil }
     }
 
     private func refresh() {
