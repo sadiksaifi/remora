@@ -209,19 +209,26 @@ private struct LinkFixButton: View {
     let state: CommandLineTool.State
     let perform: (() throws -> Void) -> Void
     @State private var confirmsReplace = false
+    @State private var shownDestination = ""
 
     var body: some View {
         switch state {
         case .otherCopy: Button("Update") { perform { try link.install() } }
         case .broken: Button("Repair") { perform { try link.install() } }
         case .otherLink:
-            Button("Replace…") { confirmsReplace = true }
-                .alert("Replace the link at \(link.displayPath)?", isPresented: $confirmsReplace) {
-                    Button("Replace", role: .destructive) { perform { try link.install(replacingOtherLink: true) } }
-                    Button("Cancel", role: .cancel) {}
-                } message: {
-                    Text("It points to \(link.displayDestination), which belongs to another app or tool. That file stays unchanged.")
+            Button("Replace…") {
+                shownDestination = link.displayDestination
+                confirmsReplace = true
+            }
+            .alert("Replace the link at \(link.displayPath)?", isPresented: $confirmsReplace) {
+                Button("Replace", role: .destructive) {
+                    // If the link changed while the alert was open, the row only shows its new state.
+                    perform { if link.displayDestination == shownDestination { try link.install(replacingOtherLink: true) } }
                 }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("It points to \(shownDestination), which belongs to another app or tool. That file stays unchanged.")
+            }
         case .conflict: Button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting([link.link]) }
         case .notInstalled, .installed: EmptyView()
         }

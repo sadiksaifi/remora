@@ -11,7 +11,8 @@ public struct CommandLineTool: Sendable {
         case installed
         /// The link points to another copy of this app, decided by its bundle identifier.
         case otherCopy
-        /// The link points into an app that was moved or deleted. The link has this app's name, so a moved or renamed copy made it.
+        /// The link points into an app that was moved or deleted, or into a copy of this app that lacks the file.
+        /// The link has this app's name, so a moved or renamed copy made it.
         case broken
         /// The link points to another app or tool. Replacing it takes the user's confirmation.
         case otherLink
@@ -60,10 +61,12 @@ public struct CommandLineTool: Sendable {
     /// The link's path for display, such as ~/.local/bin/remora.
     public var displayPath: String { (link.path as NSString).abbreviatingWithTildeInPath }
 
-    /// Where the link points, or nil when nothing or a file that isn't a symbolic link is at its path.
+    /// Where the link points, or nil when nothing or a file that isn't a symbolic link is at its path. A live link resolves as the
+    /// file system does. A dangling relative link is read from its folder's resolved path, because its folder may itself be a link.
     var destination: URL? {
         guard let path = try? FileManager.default.destinationOfSymbolicLink(atPath: link.path) else { return nil }
-        return URL(fileURLWithPath: path, relativeTo: link.deletingLastPathComponent()).standardizedFileURL
+        if FileManager.default.fileExists(atPath: link.path) { return link.resolvingSymlinksInPath() }
+        return URL(fileURLWithPath: path, relativeTo: link.deletingLastPathComponent().resolvingSymlinksInPath()).standardizedFileURL
     }
 
     /// Where the link points, for display, or an empty string when it isn't a symbolic link.
@@ -85,12 +88,14 @@ public struct CommandLineTool: Sendable {
         guard (try? manager.attributesOfItem(atPath: link.path)) != nil else { return .notInstalled }
         guard let destination else { return .conflict }
         let exists = manager.fileExists(atPath: destination.path)
-        if destination == target.standardizedFileURL { return exists ? .installed : .broken }
+        if destination.path == target.resolvingSymlinksInPath().path { return exists ? .installed : .broken }
+        // A missing app was moved or deleted. An app that is still there belongs to this variant only with its bundle identifier.
         guard let linkedApp else { return .otherLink }
-        guard exists else { return .broken }
+        guard manager.fileExists(atPath: linkedApp.path) else { return .broken }
         func bundleIdentifier(_ app: URL?) -> String? { app.flatMap { Bundle(url: $0)?.bundleIdentifier } }
         let identifier = bundleIdentifier(linkedApp)
-        return identifier != nil && identifier == bundleIdentifier(Self.app(containing: target)) ? .otherCopy : .otherLink
+        guard identifier != nil, identifier == bundleIdentifier(Self.app(containing: target)) else { return .otherLink }
+        return exists ? .otherCopy : .broken
     }
 
     /// Points the link at this copy of the app, and creates it if it's missing. It replaces another app's or tool's link only with

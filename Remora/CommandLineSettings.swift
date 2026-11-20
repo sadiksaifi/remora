@@ -20,23 +20,6 @@ extension CommandLineController {
             let open = try request.flag("open")
             if open { SystemShortcutCapture.openAccessibilitySettings() }
             return .object(["accessibility": .string(SystemShortcutCapture.isTrusted ? "allowed" : "notAllowed"), "opened": .bool(open)])
-        case "settings.cli.get", "settings.cli.repair", "settings.cli.uninstall":
-            try request.validateArguments(request.command == "settings.cli.repair" ? ["replace"] : [])
-            let (tool, replace) = (CommandLineTool(), try request.flag("replace"))
-            do {
-                if request.command == "settings.cli.repair" { try tool.install(replacingOtherLink: replace) }
-                if request.command == "settings.cli.uninstall" { try tool.uninstall() }
-            } catch let failure as CommandLineTool.Failure {
-                switch failure {
-                case .otherLink:
-                    throw ControlFailure(
-                        .destinationExists, failure.localizedDescription,
-                        hint: "To point it at this copy of \(AppIdentity.current.name), run `remora settings cli repair --replace`.")
-                case .conflict: throw ControlFailure(.destinationExists, failure.localizedDescription, hint: "After that, run `remora settings cli repair`.")
-                case .notInstalled, .readOnlyApp: throw ControlFailure(.invalidArgument, failure.localizedDescription, hint: failure.recoverySuggestion)
-                }
-            } catch { throw ControlFailure(.ioFailed, error.localizedDescription) }
-            return tool.status
         default: throw ControlFailure(.unknownCommand, "Unknown settings command.")
         }
     }

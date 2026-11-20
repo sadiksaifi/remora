@@ -31,7 +31,7 @@ private func temporaryFolder() -> URL { FileManager.default.temporaryDirectory.a
     #expect(tool.state == .installed)
 
     let moved = CommandLineTool(target: root.appending(path: "Moved.app/Contents/Helpers/remora"), link: tool.link)
-    try FileManager.default.removeItem(at: helper)
+    try FileManager.default.removeItem(at: root.appending(path: "Remora.app"))
     #expect(tool.state == .broken)
     _ = try file(in: root.appending(path: "Moved.app"), at: "Contents/Helpers/remora")
     #expect(moved.state == .broken)
@@ -63,7 +63,7 @@ private func temporaryFolder() -> URL { FileManager.default.temporaryDirectory.a
         #expect(tool.state == .otherLink)
         #expect(throws: CommandLineTool.Failure.self) { try tool.install() }
         #expect(throws: CommandLineTool.Failure.self) { try tool.uninstall() }
-        #expect(tool.destination == foreign.standardizedFileURL)
+        #expect(tool.destination?.path == foreign.resolvingSymlinksInPath().path)
     }
     try tool.install(replacingOtherLink: true)
     #expect(tool.state == .installed)
@@ -82,12 +82,19 @@ private func temporaryFolder() -> URL { FileManager.default.temporaryDirectory.a
     let variant = try file(in: root.appending(path: "Remora Dev.app"), at: helper, bundleIdentifier: "com.peblon.remora.dev")
     try manager.createSymbolicLink(at: tool.link, withDestinationURL: variant)
     #expect(tool.state == .otherLink)
+    // Without its helper, the variant's app still owns the link.
+    try manager.removeItem(at: variant)
+    #expect(tool.state == .otherLink)
+    #expect(throws: CommandLineTool.Failure.self) { try tool.install() }
+    #expect(try manager.destinationOfSymbolicLink(atPath: tool.link.path) == variant.path)
 
     try manager.removeItem(at: tool.link)
     let copy = root.appending(path: "Remora copy.app")
     try manager.createSymbolicLink(at: tool.link, withDestinationURL: try file(in: copy, at: helper, bundleIdentifier: "com.peblon.remora"))
     #expect(tool.state == .otherCopy)
-    #expect(tool.linkedApp?.path == copy.standardizedFileURL.path)
+    #expect(tool.linkedApp?.path == copy.resolvingSymlinksInPath().path)
+    try manager.removeItem(at: copy.appending(path: helper))
+    #expect(tool.state == .broken)
     try tool.install()
     #expect(tool.state == .installed)
 
@@ -96,6 +103,34 @@ private func temporaryFolder() -> URL { FileManager.default.temporaryDirectory.a
     #expect(tool.state == .broken)
     try tool.install()
     #expect(try manager.destinationOfSymbolicLink(atPath: tool.link.path) == tool.target.path)
+}
+
+/// Links resolve as the file system resolves them, even when the link's folder is itself a link.
+@Test func linksResolveThroughLinkedFolders() throws {
+    let manager = FileManager.default
+    let root = temporaryFolder()
+    defer { try? manager.removeItem(at: root) }
+    let helper = "Contents/Helpers/remora"
+    let real = root.appending(path: "deep/bin")
+    try manager.createDirectory(at: real, withIntermediateDirectories: true)
+    try manager.createSymbolicLink(at: root.appending(path: "bin"), withDestinationURL: real)
+    let app = root.appending(path: "deep/Remora.app")
+    let tool = CommandLineTool(target: try file(in: app, at: helper, bundleIdentifier: "com.peblon.remora"), link: root.appending(path: "bin/remora"))
+
+    // ../Foreign.app is deep/Foreign.app, next to the real folder, not next to the bin link.
+    let foreign = try file(in: root.appending(path: "deep/Foreign.app"), at: helper, bundleIdentifier: "com.example.foreign")
+    try manager.createSymbolicLink(atPath: tool.link.path, withDestinationPath: "../Foreign.app/\(helper)")
+    #expect(tool.state == .otherLink)
+    #expect(throws: CommandLineTool.Failure.self) { try tool.install() }
+    try manager.removeItem(at: foreign)
+    #expect(tool.state == .otherLink)
+
+    // A link through an alias of this app is this copy's.
+    try manager.removeItem(at: tool.link)
+    let alias = root.appending(path: "Alias.app")
+    try manager.createSymbolicLink(at: alias, withDestinationURL: app)
+    try manager.createSymbolicLink(at: tool.link, withDestinationURL: alias.appending(path: helper))
+    #expect(tool.state == .installed)
 }
 
 @Test func skillLinkToAnotherCopyCanBeUpdated() throws {
