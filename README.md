@@ -25,13 +25,13 @@
   - RDP runs on FreeRDP.
   - VNC runs on LibVNCClient and works with Apple Screen Sharing on a Mac.
   - The experimental Apple mode uses Apple Screen Sharing's faster, lossy encoding.
-- **Fast and sharp**: A Metal renderer and H.264 decoded by VideoToolbox keep the remote desktop sharp and responsive, at full Retina resolution on RDP.
+- **Fast and sharp**: A Metal renderer draws the desktop, and RDP's H.264 uses VideoToolbox hardware decoding when available. Fit to Window asks the server for the window's Retina size.
 - **Menu bar app**: Close the window, and your sessions keep running in the menu bar.
 - **Computer use for AI agents**: Through the `remora` CLI, your agents see, click and type on any remote machine while you watch. You can take over or stop them at any moment.
 - **Screenshots and recordings**: Capture a screenshot or record HEVC video, even from a tab you are not looking at.
-- **Shared clipboard**: Text you copy on the Mac pastes on the remote machine, and the other way around.
-- **Secure**: Passwords stay in your keychain. When a VNC server offers VeNCrypt, Remora requires certificate TLS and never falls back to a weaker method.
-- **CLI**: `remora` can do almost everything the app can. Run `remora --help` to see what it offers.
+- **Shared clipboard**: In RDP and standard VNC, text copied on either side pastes on the other while you control the focused session.
+- **Passwords and encryption**: Passwords stay in your keychain. Standard VNC requires certificate TLS when the server offers VeNCrypt. Apple mode and VNC servers without VeNCrypt send the desktop unencrypted.
+- **CLI**: `remora` opens sessions, captures screens, sends input and manages saved connections. Run `remora --help` for the full list.
 
 ## Install
 
@@ -41,15 +41,16 @@ Download the DMG from the [latest release](https://github.com/sadiksaifi/remora/
 
 To give your AI agents Remora, open Settings > Command Line:
 
-- **Command-line tool**: Install puts `remora` in `~/.local/bin`.
+- **Command-line tool**: Install puts `remora` in `~/.local/bin`, and offers PATH setup if your shell does not find it.
 - **Agent skill**: Install links the skill into `~/.claude/skills` for Claude Code, and into `~/.agents/skills` for Codex, OpenCode, Cursor and other agents.
 
 ## How agents use Remora
 
-- An agent runs `remora` commands. The CLI passes them to the running app over a local socket that only your account can open.
+- An agent runs `remora` commands, and the CLI passes them to the running app over a local socket.
+- Any program running under your macOS account can control Remora this way, without an approval prompt.
 - While an agent controls a session, you see its pointer on the remote desktop.
 - Take Over pauses the agent and gives you the session until you press Resume.
-- Stop Agent Control locks the agent out of the session until you press Resume.
+- Stop Agent Control blocks the agent's input in that tab until you press Resume.
 - Both are in the session's tab menu and in the menu bar.
 
 ## More
