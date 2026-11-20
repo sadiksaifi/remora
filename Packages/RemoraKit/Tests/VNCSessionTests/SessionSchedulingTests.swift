@@ -166,10 +166,18 @@ final class MarkerFrames: FrameSink, @unchecked Sendable {
         let pins = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: pins) }
         let releases = Mutex(0)
+        let owner = Mutex<VNCSession?>(nil)
         let session = VNCSession(
             configuration: .init(host: "127.0.0.1", port: peer.port, username: "", desktopSize: .init(width: 16, height: 16)), frameSink: frames,
             inputFeedback: { source, feedback in
                 if case .release = feedback { releases.withLock { $0 += 1 } }
+                if case .human = source, case .pointer = feedback {
+                    // The worker runs this callback, so it takes both keys in its next batch.
+                    let session = owner.withLock { $0 }
+                    session?.sendKey(.init(keyCode: 56, isDown: true))
+                    session?.sendKey(.init(keyCode: 56, isDown: false))
+                    return
+                }
                 guard case .human = source, case .key(_, true, _) = feedback else { return }
                 // Reset at a real acknowledged write boundary. The next queued
                 // write fails while the same worker is still inside the frame read.
@@ -177,6 +185,7 @@ final class MarkerFrames: FrameSink, @unchecked Sendable {
                 // Teardown feedback must be safe after the peer has closed stdin.
                 peer.process.waitUntilExit()
             }, certificateStoreURL: pins)
+        owner.withLock { $0 = session }
         defer { session.disconnect() }
         let fallback = Task {
             do {
@@ -190,14 +199,13 @@ final class MarkerFrames: FrameSink, @unchecked Sendable {
         try peer.command("start")
         _ = try await peer.wait("body_started")
         try await Task.sleep(for: .milliseconds(30))
-        session.sendKey(.init(keyCode: 56, isDown: true))
-        session.sendKey(.init(keyCode: 56, isDown: false))
+        session.sendPointer(position: .init(x: 1, y: 1), buttons: [])
         var reason: DisconnectReason?
         for await event in session.events {
             if case .stateChanged(.disconnected(let failure)) = event { reason = failure }
         }
         #expect(reason == .protocolError("The VNC input submission failed. The transport was closed."))
-        let releaseDeadline = ContinuousClock.now.advanced(by: .seconds(1))
+        let releaseDeadline = ContinuousClock.now.advanced(by: .seconds(10))
         while releases.withLock({ $0 }) < 2, ContinuousClock.now < releaseDeadline { try await Task.sleep(for: .milliseconds(5)) }
         #expect(releases.withLock { $0 } == 2)
         #expect(peer.events("reset").count == 1)

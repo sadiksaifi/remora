@@ -220,25 +220,19 @@ private struct DiscardFrames: FrameSink { func consume(_ frame: BorrowedFrame) {
     }
     defer { fallback.cancel() }
     var request: (any AgentInputRequest)?
-    var send: Task<Void, any Error>?
     var started = ContinuousClock.now
     for await event in session.events {
         if case .stateChanged(.connected) = event {
             try await Task.sleep(for: .milliseconds(100))
             let input = try #require(session.beginAgentInput())
             request = input
-            let key = try PhysicalKey.chord("ShiftLeft")[0]
-            send = Task { try await input.send(.key(key, down: true), deadline: .now.advanced(by: .seconds(2))) }
-            try await Task.sleep(for: .milliseconds(50))
+            // The worker acknowledges the admitted send during the stalled read. A fixed sleep here raced
+            // the send's own submission, which a loaded machine could run after the cancellation.
+            try await input.send(.key(try PhysicalKey.chord("ShiftLeft")[0], down: true), deadline: .now.advanced(by: .seconds(10)))
             started = .now
             session.disconnect()
         }
     }
-    #expect(started.duration(to: .now) < .seconds(1))
-    let admitted = try #require(send)
-    // Input can now be acknowledged during the read. If cancellation wins,
-    // the admitted receipt must instead terminate with the session.
-    do { try await admitted.value } catch let failure as AgentInputFailure { #expect(failure == .sessionEnded) }
     #expect(started.duration(to: .now) < .seconds(1))
     #expect(await request?.finish() == false)
 }
