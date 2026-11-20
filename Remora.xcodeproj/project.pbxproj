@@ -565,7 +565,7 @@
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				REMORA_BUNDLE_IDENTIFIER = com.peblon.remora;
 				REMORA_NAME = Remora;
-				REMORA_SPARKLE_PUBLIC_KEY = "";
+				REMORA_SPARKLE_PUBLIC_KEY = "G5e0oYZ4CUxjVOwb6rn2cz6eOZ8dceJiZWLSwpc5odM=";
 				REMORA_UPDATE_FEED_URL = "https://github.com/sadiksaifi/remora/releases/latest/download/appcast.xml";
 				SDKROOT = macosx;
 				SWIFT_COMPILATION_MODE = wholemodule;
