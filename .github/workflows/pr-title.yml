@@ -29,6 +29,11 @@ jobs:
         with:
           install_args: cocogitto
       - run: |
+          # A skip directive in the squash commit would skip the CI run on main.
+          if printf '%s\n' "$TITLE" | grep -qiE '\[(skip ci|ci skip|no ci|skip actions|actions skip)\]|skip-checks: *true'; then
+            echo "::error::Remove the skip directive from the PR title. The squash commit takes the title, so it would skip CI on main."
+            exit 1
+          fi
           # cog 7.0.0 panics without a Git identity, even when it only verifies a message.
           git config user.name "PR title check"
           git config user.email pr-title-check@localhost
