@@ -140,12 +140,12 @@ final class MarkerFrames: FrameSink, @unchecked Sendable {
         #expect(peer.events("key").allSatisfy { $0["down"] as? Int == 1 })
         session.releaseHumanInput()
         _ = try await peer.wait("key", count: 2)
-        let key = try await peer.wait("key")
-        let body = try await peer.wait("body_done")
-        let keyMS = try #require(key["ms"] as? Int)
-        let bodyMS = try #require(body["ms"] as? Int)
-        print("Input scheduling mode=\(mode) key_ms=\(keyMS) body_done_ms=\(bodyMS)")
-        if mode != "unpaced" { #expect(keyMS < bodyMS - 200) }
+        // A paced peer holds the second half of its body until `finish`, so both keys reached the wire
+        // while the frame was incomplete. If input waited for the frame, the peer's 5 s backstop would
+        // finish the body first.
+        if mode != "unpaced" { #expect(peer.events("key").allSatisfy { $0["body_finished"] as? Bool == false }) }
+        try peer.command("finish")
+        _ = try await peer.wait("body_done")
         let deadline = ContinuousClock.now.advanced(by: .seconds(1))
         while frames.values.isEmpty, ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(5)) }
         #expect(frames.values.count == 1)

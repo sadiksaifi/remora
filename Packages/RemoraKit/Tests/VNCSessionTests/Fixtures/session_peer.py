@@ -4,7 +4,9 @@ One connection, a one-minute backstop deadline, no external hosts or credentials
 The reader processes input independently of any paced framebuffer writer.
 A paced body goes out in a fixed number of writes, not writes of a fixed size. Where each short
 sleep takes several times longer, as on a virtualized runner, the body then still arrives well
-within the client's 10 s read deadline.
+within the client's 10 s read deadline. In the paced-small and paced-large modes, the body stops
+halfway until the test sends `finish`, so the frame stays incomplete however late the test's
+input comes. A 5 s backstop, below the client's read deadline, then sends the rest anyway.
 """
 import json
 import selectors
@@ -28,6 +30,7 @@ def serve():
     began = None
     intentional_close = threading.Event()
     body_finished = threading.Event()
+    finish_body = threading.Event()
     deadline = time.monotonic() + 60
     with socket.socket() as listener:
         listener.bind(('127.0.0.1', 0))
@@ -200,6 +203,8 @@ def serve():
                                 try:
                                     chunk = len(payload) if mode == 'unpaced' else -(-len(payload) // PACED_WRITES)
                                     for offset in range(0, len(payload), chunk):
+                                        if offset == chunk*(PACED_WRITES//2) and mode.startswith('paced-'):
+                                            finish_body.wait(5)
                                         if offset+chunk >= len(payload): body_finished.set()
                                         send(payload[offset:offset+chunk])
                                         if offset == 0:
@@ -215,6 +220,8 @@ def serve():
                                         report('error', code=type(error).__name__)
                             if mode == 'early-geometry': width = height = dimension+1
                             threading.Thread(target=writer, daemon=True).start()
+                        elif command['action'] == 'finish':
+                            finish_body.set()
                         elif command['action'] == 'stop':
                             return
                         continue
@@ -255,7 +262,7 @@ def serve():
                         if key_event[0] and mode == 'refresh':
                             marker = 2
                             update()
-                        report('key', down=key_event[0], symbol=int.from_bytes(key_event[3:], 'big'), ms=round((time.monotonic()-began)*1000) if began else 0)
+                        report('key', down=key_event[0], symbol=int.from_bytes(key_event[3:], 'big'), body_finished=body_finished.is_set(), ms=round((time.monotonic()-began)*1000) if began else 0)
                     elif kind == 5:
                         pointer = exact(5)
                         report('pointer', x=int.from_bytes(pointer[1:3], 'big'), y=int.from_bytes(pointer[3:5], 'big'), mask=pointer[0])
