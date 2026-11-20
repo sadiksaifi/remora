@@ -1,9 +1,12 @@
 name: CI
 
+# A change to only these files skips CI. `*.md` matches top-level files only, so skills/remora/SKILL.md, which the build checks, still runs CI.
 on:
   pull_request:
+    paths-ignore: ["*.md", LICENSE, assets/**, docs/**]
   push:
     branches: [main]
+    paths-ignore: ["*.md", LICENSE, assets/**, docs/**]
 
 # A new push to a pull request cancels its older run. Each push to main runs to completion.
 concurrency:
