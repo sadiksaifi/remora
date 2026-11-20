@@ -346,7 +346,7 @@ private func movieMediaDuration(_ data: Data, range: Range<Int>? = nil) -> Doubl
         let time = CMSampleBufferGetPresentationTimeStamp(sample).seconds
         if first == nil && time > pillAt + 0.05 { first = CMSampleBufferGetImageBuffer(sample) }
         if time > pillAt + 1.49 && time < pillAt + 1.7 { faded = CMSampleBufferGetImageBuffer(sample) }
-        if time > pillAt + 1.75 { disabled = CMSampleBufferGetImageBuffer(sample) }
+        disabled = CMSampleBufferGetImageBuffer(sample)  // Finish drains the frame rendered after `configure`.
         times.append(time)
     }
     func rgb(_ buffer: CVPixelBuffer, x: Int, y: Int) -> [Int] {
