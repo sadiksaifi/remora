@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+#MISE description="Build the Debug app, Remora Dev, and verify its Apple-issued signature. With REMORA_AD_HOC_SIGNING set, as on CI, sign it ad hoc and verify that signature instead."
+#MISE depends=["engine", "xcodeproj"]
+set -euo pipefail
+xcodebuild -project Remora.xcodeproj -scheme Remora -configuration Debug -derivedDataPath build/DerivedData -quiet build ${REMORA_AD_HOC_SIGNING:+CODE_SIGN_STYLE=Manual CODE_SIGN_IDENTITY=- DEVELOPMENT_TEAM=}
+app='build/DerivedData/Build/Products/Debug/Remora Dev.app'
+if [ -n "${REMORA_AD_HOC_SIGNING:-}" ]; then
+    codesign --verify --deep --strict "$app"
+else
+    codesign --verify --deep --strict -R='anchor apple generic' "$app"
+fi

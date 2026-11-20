@@ -1,0 +1,41 @@
+#!/usr/bin/env bash
+#MISE description="Archive, sign and verify Remora.app with the Developer ID certificate."
+#MISE depends=["engine", "xcodeproj"]
+#USAGE arg "<version>" help="App version, for example 1.2.3"
+set -euo pipefail
+version="$usage_version"
+[[ $version =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]] || { echo "$version is not an X.Y.Z version" >&2; exit 1; }
+team=LZ3V3WUPWR
+out=build/release
+rm -rf "$out/Remora.xcarchive" "$out/export"
+mkdir -p "$out"
+# Sparkle compares CFBundleVersion, so both versions are the release version.
+xcodebuild -project Remora.xcodeproj -scheme Remora -configuration Release -derivedDataPath build/DerivedData \
+    -destination 'generic/platform=macOS' -archivePath "$out/Remora.xcarchive" -quiet archive \
+    CODE_SIGN_STYLE=Manual CODE_SIGN_IDENTITY="Developer ID Application" DEVELOPMENT_TEAM="$team" \
+    MARKETING_VERSION="$version" CURRENT_PROJECT_VERSION="$version"
+options="$out/ExportOptions.plist"
+plutil -create xml1 "$options"
+plutil -insert method -string developer-id "$options"
+plutil -insert signingStyle -string manual "$options"
+plutil -insert teamID -string "$team" "$options"
+xcodebuild -exportArchive -archivePath "$out/Remora.xcarchive" -exportOptionsPlist "$options" -exportPath "$out/export" -quiet
+
+app="$out/export/Remora.app"
+codesign --verify --deep --strict --verbose=2 "$app"
+# A Developer ID Application certificate of the team.
+requirement="anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] and certificate leaf[field.1.2.840.113635.100.6.1.13] and certificate leaf[subject.OU] = \"$team\""
+# Every Mach-O file: the app, its command-line tool, and Sparkle's framework, helpers and XPC services.
+while IFS= read -r -d '' code; do
+    kind=$(file -b "$code")
+    [[ $kind == Mach-O* ]] || continue
+    codesign --verify --strict -R="$requirement" "$code"
+    if [[ $kind == *executable* ]]; then
+        details=$(codesign --display --verbose=2 "$code" 2>&1)
+        [[ $details =~ flags=0x[0-9a-f]+\([^\)]*runtime ]] || { echo "$code lacks the hardened runtime" >&2; exit 1; }
+        entitlements=$(codesign --display --entitlements - --xml "$code" 2>/dev/null)
+        [[ $entitlements != *get-task-allow* ]] || { echo "$code has the get-task-allow entitlement" >&2; exit 1; }
+    fi
+    echo "Verified ${code#"$app/"}"
+done < <(find "$app" -type f -perm -u+x -print0)
+echo "Signed and verified $app $version"

@@ -11,10 +11,7 @@ A native macOS desktop client for RDP and VNC.
 
 ## Development
 
-- Run tasks with `mise run`. `.mise.toml` defines them, and `mise tasks` lists them. Before a commit, run only the checks for what changed, such as `mise run test --filter <name>`. Before pushing or opening a PR, run `mise run check`.
-- Commit messages and PR titles are Conventional Commits, since PRs are squash-merged. `mise run lint:commit <file>` checks one, and `mise run setup:hooks` installs a hook that checks each commit.
-- CI runs `mise run check` on the GitHub `xcode-27` runner with `REMORA_AD_HOC_SIGNING=1`, `mise run lint:workflows`, and `mise run lint:commit` on the PR title. After changing `.github/`, run `mise run lint:workflows`.
-- `docs/releasing.md` covers releases, the signing credentials in 1Password, and `mise run release:secrets`.
+- Run tasks with `mise run`. Before a commit, run only the checks for what changed, such as `mise run test --filter <name>`. Before pushing or opening a PR, run `mise run check`.
 
 ## Agent interface
 
@@ -23,5 +20,5 @@ A native macOS desktop client for RDP and VNC.
 
 ## Verifying in the app
 
-- Verify on the development app, Remora Dev, built and launched with `mise run launch`, with a temporary connection to the local test RDP target. Remora Dev keeps its own data, Keychain items, settings, control socket and links, apart from the installed Remora. Drive it with its own CLI, `build/DerivedData/Build/Products/Debug/Remora Dev.app/Contents/Helpers/remora`. Leave the installed `/Applications/Remora.app`, other running instances, the Penguin connection, saved connections, Keychain entries and the live `connections.json` untouched, and type no passwords.
+- Verify on a development build you launch yourself, with a temporary connection to the local test RDP target. Leave the installed `/Applications/Remora.app`, other running instances, the Penguin connection, saved connections, Keychain entries and the live `connections.json` untouched, and type no passwords.
 - Keep remote captures under `.snap/`, and delete any test capture saved to the system screenshot location.

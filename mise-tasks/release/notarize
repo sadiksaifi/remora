@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+#MISE description="Notarize and staple the DMG, assess it with Gatekeeper, and write SHA256SUMS."
+set -euo pipefail
+# The log lists every issue, including warnings on an accepted submission.
+: "${NOTARY_KEY_P8_BASE64:?Set it to the base64 App Store Connect API key (.p8)}"
+: "${NOTARY_KEY_ID:?Set it to the API key ID}"
+: "${NOTARY_ISSUER_ID:?Set it to the API key issuer ID}"
+dist=build/release/dist
+version=$(plutil -extract CFBundleShortVersionString raw -o - build/release/export/Remora.app/Contents/Info.plist)
+dmg="$dist/Remora-$version-macos-arm64.dmg"
+key=$(mktemp)
+mount=
+cleanup() {
+    rm -f "$key"
+    if [[ -n $mount ]]; then hdiutil detach -quiet "$mount" && rmdir "$mount"; fi
+}
+trap cleanup EXIT
+base64 --decode <<<"$NOTARY_KEY_P8_BASE64" > "$key"
+auth=(--key "$key" --key-id "$NOTARY_KEY_ID" --issuer "$NOTARY_ISSUER_ID")
+
+result=$(xcrun notarytool submit "$dmg" "${auth[@]}" --wait --timeout 1h --output-format json) || true
+id=$(jq -r '.id // empty' <<<"$result" 2>/dev/null || true)
+status=$(jq -r '.status // empty' <<<"$result" 2>/dev/null || true)
+# The log lists every issue, including warnings on an accepted submission.
+if [[ -n $id ]]; then xcrun notarytool log "$id" "${auth[@]}"; fi
+[[ $status == Accepted ]] || { echo "Notarization did not succeed: ${result:-no response}" >&2; exit 1; }
+xcrun stapler staple "$dmg"
+xcrun stapler validate "$dmg"
+
+spctl --assess --type open --context context:primary-signature --verbose=2 "$dmg"
+mount=$(mktemp -d)
+hdiutil attach -quiet -nobrowse -readonly -mountpoint "$mount" "$dmg"
+spctl --assess --type exec --verbose=2 "$mount/Remora.app"
+(cd "$dist" && shasum -a 256 "${dmg##*/}" > SHA256SUMS)
+cat "$dist/SHA256SUMS"

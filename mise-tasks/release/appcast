@@ -1,0 +1,58 @@
+#!/usr/bin/env bash
+#MISE description="Write appcast.xml, the Sparkle update feed for the notarized DMG with the release notes of its tag, and verify its signature."
+set -euo pipefail
+# Only generate_appcast reads the private key, through a pipe. No other process sees it.
+# A name already exported from the environment stays exported on assignment.
+# Only generate_appcast reads the private key, through a pipe. No other process sees it.
+key=${SPARKLE_ED_PRIVATE_KEY:-}
+# A name already exported from the environment stays exported on assignment.
+export -n key
+unset SPARKLE_ED_PRIVATE_KEY
+[[ -n $key ]] || { echo "Set SPARKLE_ED_PRIVATE_KEY to the private key that Sparkle's generate_keys -x exports." >&2; exit 1; }
+version=$(plutil -extract CFBundleShortVersionString raw -o - build/release/export/Remora.app/Contents/Info.plist)
+dist=build/release/dist
+dmg="Remora-$version-macos-arm64.dmg"
+releases=https://github.com/sadiksaifi/remora/releases
+stage=build/release/appcast
+mount=
+cleanup() {
+    rm -rf "$stage"
+    if [[ -n $mount ]]; then hdiutil detach -quiet "$mount" && rmdir "$mount"; fi
+}
+trap cleanup EXIT
+# release:publish attaches whatever feed is in dist, so only a verified one may get there.
+rm -rf "$stage" "$dist/appcast.xml"
+mkdir -p "$stage"
+ln "$dist/$dmg" "$stage/$dmg"
+# generate_appcast embeds the notes beside the DMG in the update window. A rehearsal has no tag, so it shows the unreleased changes.
+if git rev-parse --verify --quiet "refs/tags/v$version" >/dev/null; then
+    mise run release:notes:tag "v$version" > "$stage/${dmg%.dmg}.md"
+else
+    mise run release:notes > "$stage/${dmg%.dmg}.md"
+fi
+printf '%s' "$key" | build/DerivedData/SourcePackages/artifacts/sparkle/Sparkle/bin/generate_appcast --ed-key-file - \
+    --download-url-prefix "$releases/download/v$version/" --full-release-notes-url "$releases/tag/v$version" --embed-release-notes "$stage"
+key=
+feed="$stage/appcast.xml"
+
+# Installed copies verify the download with the key in the app, so check the signature against the app in this DMG.
+mount=$(mktemp -d)
+hdiutil attach -quiet -nobrowse -readonly -mountpoint "$mount" "$dist/$dmg"
+public=$(plutil -extract SUPublicEDKey raw -o - "$mount/Remora.app/Contents/Info.plist")
+enclosure() { xmllint --xpath "string(//item/enclosure/@*[local-name()='$1'])" "$feed"; }
+[[ $(xmllint --xpath 'count(//item)' "$feed") == 1 ]] || { echo "appcast.xml must have one item" >&2; exit 1; }
+[[ $(enclosure url) == "$releases/download/v$version/$dmg" ]] || { echo "appcast.xml does not offer $releases/download/v$version/$dmg" >&2; exit 1; }
+[[ $(enclosure length) == "$(stat -f %z "$dist/$dmg")" ]] || { echo "appcast.xml has the wrong length for $dmg" >&2; exit 1; }
+swift -e '
+import CryptoKit
+import Foundation
+let arguments = CommandLine.arguments
+guard let key = Data(base64Encoded: arguments[1]), let signature = Data(base64Encoded: arguments[2]),
+    try Curve25519.Signing.PublicKey(rawRepresentation: key).isValidSignature(signature, for: Data(contentsOf: URL(filePath: arguments[3])))
+else {
+    FileHandle.standardError.write(Data("The appcast signature does not verify with SUPublicEDKey in the app in the DMG. Check SPARKLE_ED_PRIVATE_KEY.\n".utf8))
+    exit(1)
+}
+' "$public" "$(enclosure edSignature)" "$dist/$dmg"
+mv "$feed" "$dist/appcast.xml"
+cat "$dist/appcast.xml"

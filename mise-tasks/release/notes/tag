@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+#MISE description="Print the release notes for a release tag."
+#USAGE arg "<tag>" help="Stable release tag, for example v1.2.3"
+set -euo pipefail
+# The range starts at the highest lower stable tag reachable from the tag. Counting only the two
+# endpoints keeps any tag between them from splitting the notes. With no lower tag, git-cliff walks
+# all history and prints the first-release line.
+tag="$usage_tag"
+stable='^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'
+printf '%s\n' "$tag" | grep -qE "$stable" || { echo "$tag is not a stable vX.Y.Z tag" >&2; exit 1; }
+commit=$(git rev-parse --verify --quiet "refs/tags/$tag^{commit}") || { echo "Tag $tag does not exist" >&2; exit 1; }
+previous=$(git tag --merged "refs/tags/$tag" --sort=-v:refname | grep -E "$stable" | awk -v t="$tag" 'f { print; exit } $0 == t { f = 1 }')
+git-cliff --offline --strip all --count-tags "^(${previous:+$previous|}$tag)\$" -- "${previous:+$previous..}$commit"
