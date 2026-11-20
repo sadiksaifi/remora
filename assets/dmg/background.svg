@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="660" height="400" viewBox="0 0 660 400">
+  <defs>
+    <linearGradient id="ground" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#fbfbfd"/>
+      <stop offset="1" stop-color="#eceef3"/>
+    </linearGradient>
+  </defs>
+  <rect width="660" height="400" fill="url(#ground)"/>
+  <text x="330" y="74" text-anchor="middle" font-family="SF Pro Display" font-weight="600" font-size="22" letter-spacing="-0.2" fill="#1d1d1f">Install Remora</text>
+  <g fill="none" stroke="#9aa3b2" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M266 190 H388" stroke-dasharray="2 9"/>
+    <path d="M376 179 L391 190 L376 201"/>
+  </g>
+  <text x="330" y="318" text-anchor="middle" font-family="SF Pro Text" font-size="13" fill="#5f6672">Drag Remora to the Applications folder.</text>
+</svg>
