@@ -39,8 +39,8 @@ settings:
       REMORA_NAME: Remora
       # Sparkle reads the appcast that the release workflow attaches to the latest release.
       REMORA_UPDATE_FEED_URL: https://github.com/sadiksaifi/remora/releases/latest/download/appcast.xml
-      # The EdDSA public key that verifies each update. release:app refuses to ship without it.
-      REMORA_SPARKLE_PUBLIC_KEY: ""
+      # The EdDSA public key that verifies each update. release:appcast fails when it does not verify the appcast signature.
+      REMORA_SPARKLE_PUBLIC_KEY: G5e0oYZ4CUxjVOwb6rn2cz6eOZ8dceJiZWLSwpc5odM=
 targets:
   Remora:
     type: application
