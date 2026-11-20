@@ -1,0 +1,127 @@
+name: Release
+
+# A pushed v* tag builds, signs, notarizes and publishes that release.
+# A manual run on main is a rehearsal: it builds, signs and notarizes version 0.0.0 and uploads
+# the DMG as a workflow artifact without creating a release. Tagsmith starts counting at 0.0.0,
+# so no release tag can have that version.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+# Releases run one at a time, in order, and are never cancelled.
+concurrency:
+  group: release
+  cancel-in-progress: false
+  queue: max
+
+permissions: {}
+
+jobs:
+  validate:
+    name: Validate tag
+    if: github.event_name == 'push'
+    runs-on: ubuntu-slim
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    env:
+      # mise would otherwise install every tool in .mise.toml before the task runs.
+      MISE_TASK_RUN_AUTO_INSTALL: false
+    outputs:
+      version: ${{ steps.tag.outputs.version }}
+      commit: ${{ steps.tag.outputs.commit }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          # Tagsmith compares the tag with origin, which needs the token while the repository is private.
+          persist-credentials: true # zizmor: ignore[artipacked]
+      # Release jobs restore no cache that another run wrote.
+      - uses: jdx/mise-action@v5
+        with:
+          install_args: node npm:tagsmith
+          cache: false
+      # Checkout can leave an annotated tag as a lightweight one.
+      - run: git fetch --force --tags origin
+      - id: tag
+        run: mise run release:validate "$GITHUB_REF_NAME"
+
+  build:
+    name: Build, sign and notarize
+    needs: validate
+    # A rehearsal skips the validate job.
+    if: ${{ !failure() && !cancelled() }}
+    runs-on: xcode-27
+    timeout-minutes: 60
+    environment: release
+    permissions:
+      contents: read
+    env:
+      # project.yml requires Xcode 27.2; the image's default Xcode is older.
+      DEVELOPER_DIR: /Applications/Xcode_27.2.app/Contents/Developer
+      # mise would otherwise install every tool in .mise.toml before the task runs.
+      MISE_TASK_RUN_AUTO_INSTALL: false
+      VERSION: ${{ needs.validate.outputs.version || '0.0.0' }}
+    steps:
+      - name: Check Xcode
+        run: |
+          test -d "$DEVELOPER_DIR" || { echo "::error::Xcode 27.2 is not on this runner image: $DEVELOPER_DIR"; exit 1; }
+          xcodebuild -version
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.validate.outputs.commit || github.sha }}
+          persist-credentials: false
+      # This job holds the signing secrets, so it restores no cache that another run wrote.
+      - uses: jdx/mise-action@v5
+        with:
+          install_args: cmake xcodegen
+          cache: false
+      # The engine builds third-party code, so it runs before the certificate is in a keychain.
+      - run: mise run engine
+      - uses: apple-actions/import-codesign-certs@v7
+        with:
+          p12-file-base64: ${{ secrets.DEVELOPER_ID_P12_BASE64 }}
+          p12-password: ${{ secrets.DEVELOPER_ID_P12_PASSWORD }}
+      - run: mise run release:app "$VERSION"
+      - run: mise run release:dmg
+      - run: mise run release:notarize
+        env:
+          NOTARY_KEY_P8_BASE64: ${{ secrets.NOTARY_KEY_P8_BASE64 }}
+          NOTARY_KEY_ID: ${{ secrets.NOTARY_KEY_ID }}
+          NOTARY_ISSUER_ID: ${{ secrets.NOTARY_ISSUER_ID }}
+      - uses: actions/upload-artifact@v7
+        with:
+          name: Remora-${{ env.VERSION }}
+          path: build/release/dist/
+          if-no-files-found: error
+          retention-days: 14
+
+  publish:
+    name: Publish release
+    needs: [validate, build]
+    if: github.event_name == 'push'
+    runs-on: ubuntu-slim
+    timeout-minutes: 10
+    permissions:
+      contents: write # Creates the GitHub release.
+    env:
+      # mise would otherwise install every tool in .mise.toml before the task runs.
+      MISE_TASK_RUN_AUTO_INSTALL: false
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # The release notes cover the commits since the previous release tag.
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: jdx/mise-action@v5
+        with:
+          install_args: git-cliff
+          cache: false
+      - uses: actions/download-artifact@v8
+        with:
+          name: Remora-${{ needs.validate.outputs.version }}
+          path: build/release/dist
+      - run: mise run release:publish "$GITHUB_REF_NAME"
+        env:
+          GH_TOKEN: ${{ github.token }}
