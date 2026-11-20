@@ -149,6 +149,8 @@ build_ffmpeg() {
 build_freerdp() {
     # RDP8 channel dependencies use rdpsnd with sys:fake; no audio device backend.
     rm -rf "$BUILD/freerdp" "$FREERDP_PREFIX"
+    # FreeRDP otherwise takes its version from a git tag on HEAD. Its source sits in the Remora
+    # checkout, so a Remora release tag such as v0.1.0 would make it install as FreeRDP 0.
     "$REMORA_CMAKE" -S "$SOURCES/freerdp-$FREERDP_VERSION" -B "$BUILD/freerdp" \
         -G 'Unix Makefiles' \
         -DCMAKE_MAKE_PROGRAM=/usr/bin/make \
@@ -203,7 +205,7 @@ build_freerdp() {
         -DWITH_TIMEZONE_ICU=OFF -DWITH_LODEPNG=OFF -DWITH_SYSTEMD=OFF \
         -DWINPR_UTILS_IMAGE_PNG=OFF -DWINPR_UTILS_IMAGE_JPEG=OFF -DWINPR_UTILS_IMAGE_WEBP=OFF \
         -DWITH_SSO_MIB=OFF -DWITH_WEBVIEW_AAD_AUTH_HELPER=OFF -DWITH_QT_AAD_AUTH_HELPER=OFF \
-        -DWITH_CCACHE=OFF -DWITH_CLANG_FORMAT=OFF
+        -DWITH_CCACHE=OFF -DWITH_CLANG_FORMAT=OFF -DUSE_VERSION_FROM_GIT_TAG=OFF
     # Fail before compilation if dependency discovery ever escapes our prefixes.
     local entry
     for entry in \
