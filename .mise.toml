@@ -66,12 +66,17 @@ run = "git-cliff --unreleased --offline --strip all"
 
 [tasks."release:notes:tag"]
 description = "Print the release notes for a release tag."
-usage = 'arg "<tag>" help="Release tag, for example v1.2.3"'
-# The range starts after the previous stable tag. With no previous tag, git-cliff walks all history and prints the first-release line.
+usage = 'arg "<tag>" help="Stable release tag, for example v1.2.3"'
+# The range starts at the highest lower stable tag reachable from the tag. Counting only the two
+# endpoints keeps any tag between them from splitting the notes. With no lower tag, git-cliff walks
+# all history and prints the first-release line.
 run = '''
-commit=$(git rev-parse --verify {{usage.tag | quote}}^{commit}) || exit 1
-previous=$(git tag --list 'v*' --merged {{usage.tag | quote}}^ --sort=-v:refname | grep -m 1 -E '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$' || true)
-git-cliff --offline --strip all -- "${previous:+$previous..}$commit"
+tag={{usage.tag | quote}}
+stable='^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'
+printf '%s\n' "$tag" | grep -qE "$stable" || { echo "$tag is not a stable vX.Y.Z tag" >&2; exit 1; }
+commit=$(git rev-parse --verify --quiet "refs/tags/$tag^{commit}") || { echo "Tag $tag does not exist" >&2; exit 1; }
+previous=$(git tag --merged "refs/tags/$tag" --sort=-v:refname | grep -E "$stable" | awk -v t="$tag" 'f { print; exit } $0 == t { f = 1 }')
+git-cliff --offline --strip all --count-tags "^(${previous:+$previous|}$tag)\$" -- "${previous:+$previous..}$commit"
 '''
 
 [tasks."release:targets"]
