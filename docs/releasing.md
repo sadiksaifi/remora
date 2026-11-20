@@ -7,7 +7,7 @@ A release is a pushed `vX.Y.Z` tag. The tag push runs [the release workflow](../
 1. Switch to `main` and bring it up to date with `git switch main && git pull --ff-only`. The tag goes on `HEAD`.
 2. Preview the next version with `mise run release:preview minor`. Use `major`, `minor` or `patch`. The JSON output shows the version and the tag.
 3. Read the release notes with `mise run release:notes`. [cliff.toml](../cliff.toml) groups the Conventional Commits since the last release.
-4. Create and push the tag with `mise run release:tag 0.2.0`, using the version that the preview printed. The task fetches `origin/main` first and stops unless `HEAD` is that commit, so a local commit that never merged cannot become a release. Only a repository admin can create a `v*` tag.
+4. Create and push the tag with `mise run release:tag 0.2.0`, using the version that the preview printed. The task fetches `main` from origin first and stops unless `HEAD` is that exact commit, so a local commit that never merged cannot become a release. Only a repository admin can create a `v*` tag.
 5. Find the run with `gh run list --workflow release.yml --branch v0.2.0`, and follow it with `gh run watch <run-id> --exit-status`.
 
 The workflow has three jobs:
@@ -37,14 +37,13 @@ The same commands rewrite the notes of any release.
 A manual run on `main` builds, signs and notarizes version `0.0.0` without creating a release. Run it after the secrets are first set, and again after any credential changes.
 
 ```sh
-gh workflow run release.yml --ref main
-# It prints the run's URL, .../actions/runs/<run-id>. Watch that run.
-gh run watch <run-id> --exit-status
-gh run download <run-id> --name Remora-0.0.0 --dir build/rehearsal
+run=$(gh api --hostname github.com --method POST repos/sadiksaifi/remora/actions/workflows/release.yml/dispatches -f ref=main --jq .workflow_run_id)
+gh run watch "$run" --repo github.com/sadiksaifi/remora --exit-status
+gh run download "$run" --repo github.com/sadiksaifi/remora --name Remora-0.0.0 --dir build/rehearsal
 spctl --assess --type open --context context:primary-signature --verbose=2 build/rehearsal/Remora-0.0.0-macos-arm64.dmg
 ```
 
-If `gh workflow run` prints no URL, take the run ID from `gh run list --workflow release.yml --event workflow_dispatch --limit 1`, and check that its start time is the time you started it. `--exit-status` makes `gh run watch` fail when the run fails.
+The dispatch API returns the ID of the run it started, so the commands follow that run and no other. `--exit-status` makes `gh run watch` fail when the run fails.
 
 The DMG stays on the run as an artifact for 14 days. A rehearsal skips the `validate` and `publish` jobs, so it does not test the release notes or `gh release create`.
 
@@ -96,12 +95,14 @@ The .p12 and .p8 files are attachments, because one item then holds the file tog
 
 The certificate signs the app and the DMG. Only the Account Holder of team LZ3V3WUPWR can create it.
 
-1. In Xcode, open Settings > Accounts, select the Account Holder's account, and click Manage Certificates.
-2. Click the add button and choose Developer ID Application. Xcode puts the certificate and its private key in the login keychain. If you create it on the developer website instead and it asks for a Developer ID Certificate Intermediary, choose G2 Sub-CA, as [Apple's replacement guide](https://developer.apple.com/help/account/certificates/replace-developer-id-certificates) says.
-3. In Keychain Access, open My Certificates in the login keychain and find `Developer ID Application: <name> (LZ3V3WUPWR)`. Check that it holds a private key.
-4. Right-click it, choose Export, and save it as `developer-id.p12`. Protect it with a password that 1Password generates.
-5. In the `Developer ID Application` item, attach `developer-id.p12` and save the password in `password`. Copy the certificate's Expires date from Keychain Access into `expires`.
-6. Delete the exported `developer-id.p12` from disk.
+1. List the signing identities you already have with `security find-identity -v -p codesigning`.
+2. In Xcode, open Settings > Accounts, select the Account Holder's account, and click Manage Certificates.
+3. Click the add button and choose Developer ID Application. Xcode puts the certificate and its private key in the login keychain. If you create it on the developer website instead and it asks for a Developer ID Certificate Intermediary, choose G2 Sub-CA, as [Apple's replacement guide](https://developer.apple.com/help/account/certificates/replace-developer-id-certificates) says.
+4. Run `security find-identity -v -p codesigning` again. The new `Developer ID Application: <name> (LZ3V3WUPWR)` line is the new certificate, and the 40-character hex value before the name is its SHA-1 fingerprint. Save it in a `sha-1` text field of the `Developer ID Application` item. During a rotation the old and new certificates have the same name, and the fingerprint tells them apart.
+5. In Keychain Access, open My Certificates in the login keychain and find `Developer ID Application: <name> (LZ3V3WUPWR)`. Open Get Info on each match, and pick the one whose SHA-1 fingerprint equals `sha-1`. Check that it holds a private key.
+6. Right-click it, choose Export, and save it as `developer-id.p12`. Protect it with a password that 1Password generates.
+7. In the `Developer ID Application` item, attach `developer-id.p12` and save the password in `password`. Copy the certificate's Expires date from Keychain Access into `expires`.
+8. Delete the exported `developer-id.p12` from disk.
 
 The certificate can stay in the login keychain. `mise run release:app` needs it there to build a release locally.
 
@@ -131,10 +132,15 @@ The EdDSA key signs each update for Sparkle. Installed copies of Remora check ea
    ```
 
 4. In the `Sparkle EdDSA key` item, paste the clipboard into `private key`, and paste the public key into `public key`. Then clear the clipboard with `pbcopy < /dev/null`.
-5. Check that 1Password holds the same value. This prints only `match` or `differ`:
+5. Check that 1Password holds the same value. The comparison turns off xtrace so no value is printed, and it prints `differ` on a missing export or a failed read:
 
    ```sh
-   [ "$(op read 'op://Remora/Sparkle EdDSA key/private key')" = "$(cat "$dir/private-key")" ] && echo match || echo differ
+   (
+       set +x
+       set -o pipefail
+       test -s "$dir/private-key" &&
+           op read --no-newline 'op://Remora/Sparkle EdDSA key/private key' | cmp -s - "$dir/private-key"
+   ) && echo match || echo differ
    ```
 
 6. After it prints `match`, delete the export with `rm -r "$dir"`.
@@ -167,9 +173,11 @@ Run it after you create or rotate a credential, then rehearse.
 
 #### Developer ID Application certificate
 
-A team can hold up to five Developer ID Application certificates at a time, so create and test the replacement before the current one expires. Create a new certificate as above, replace the attachment, the password and `expires`, run `mise run release:secrets`, and rehearse. Copies signed while the old certificate was valid keep launching after it expires, as [Apple's Developer ID page](https://developer.apple.com/help/account/certificates/create-developer-id-certificates) says.
+A team can hold up to five Developer ID Application certificates at a time, so create and test the replacement before the current one expires. Create a new certificate as above, replace the attachment, the password, `sha-1` and `expires`, run `mise run release:secrets`, and rehearse. Copies signed while the old certificate was valid keep launching after it expires, as [Apple's Developer ID page](https://developer.apple.com/help/account/certificates/create-developer-id-certificates) says.
 
-If the private key leaked, rotate the certificate and release a patch signed with the new one. Then ask Apple to revoke the leaked certificate by email to product-security@apple.com. The developer account cannot revoke a Developer ID certificate, as [Revoking privileges](https://developer.apple.com/help/account/reference/revoking-privileges) says. A revoked certificate stops every copy signed with it from installing or launching, so releasing first lets installed copies update before they stop.
+If the private key leaked or may have leaked, email product-security@apple.com at once. Section 5.1 of the [Apple Developer Program License Agreement](https://developer.apple.com/support/terms/apple-developer-program-license-agreement/) requires immediate written notice of a suspected compromise. The developer account cannot revoke a Developer ID certificate, as [Revoking privileges](https://developer.apple.com/help/account/reference/revoking-privileges) says, so agree the revocation time with Apple.
+
+While you wait for Apple, create a new certificate, run `mise run release:secrets`, and prepare a patch release signed with it. A revoked certificate stops every copy signed with it from installing or launching, as [Apple's Developer ID page](https://developer.apple.com/help/account/certificates/create-developer-id-certificates) says. Copies that update before the revocation keep working. A person whose copy no longer launches must download the new DMG directly from `https://github.com/sadiksaifi/remora/releases/latest`.
 
 #### Notary API key
 
@@ -183,10 +191,35 @@ Never rotate the Sparkle key casually. Installed copies accept a new key only th
 
 Use the same path when the private key leaked or was lost:
 
-1. Generate a new key as above and store it in 1Password.
-2. Put the new public key in `REMORA_SPARKLE_PUBLIC_KEY` and run `mise run release:secrets`.
-3. Sign the release with the same Developer ID certificate as the previous release. Do not rotate the certificate in the same release.
-4. Before publishing, install the previous release and check that it updates to the new build.
+1. Generate the new key under a new account name, for example `./generate_keys --account remora-2027`. `generate_keys` returns the existing key for an account it already knows, so reusing `remora` would not make a new key.
+2. Check that the public key it prints differs from the `public key` field.
+3. Export it and save it in the `Sparkle EdDSA key` item as in steps 3 to 6 above, with `--account remora-2027`, replacing `private key` and `public key`. Record the new account name in `source`. Keep its login keychain copy until the upgrade test passes, because `generate_appcast` signs with it.
+4. Put the new public key in `REMORA_SPARKLE_PUBLIC_KEY`. Sign the release with the same Developer ID certificate as the previous release, and do not rotate the certificate in the same release.
+5. Test the upgrade before publishing, as below.
+6. Run `mise run release:secrets` and release. Then delete the new key from the login keychain, as in step 7 above.
+
+To test the upgrade, update a copy of the previous release from a temporary appcast. Use a copy in a test folder, never the installed `/Applications/Remora.app`. `generate_appcast` comes from the `bin` folder of the same Sparkle release as `generate_keys`. Sparkle's command-line updater, `sparkle.app`, is not in the release archive, so [build it from Sparkle's source](https://sparkle-project.org/documentation/sparkle-cli/) at the same version, with `xcodebuild -project Sparkle.xcodeproj -scheme sparkle-cli -configuration Release -derivedDataPath build build` in that checkout.
+
+```sh
+test=$(mktemp -d)
+# Open the previous release's DMG, then copy its app.
+ditto /Volumes/Remora/Remora.app "$test/Remora.app"
+# Build the new version with the new public key. The version must be above the previous release.
+mise run release:app 0.4.0 && mise run release:dmg
+mkdir "$test/feed" && cp build/release/dist/Remora-0.4.0-macos-arm64.dmg "$test/feed/"
+./generate_appcast --account remora-2027 --download-url-prefix http://127.0.0.1:8000/ "$test/feed"
+python3 -m http.server 8000 --bind 127.0.0.1 --directory "$test/feed"
+```
+
+In a second terminal, point the old copy at that feed with the updater from `build/Build/Products/Release` in the Sparkle checkout:
+
+```sh
+# Set test to the same folder as in the first terminal.
+./sparkle.app/Contents/MacOS/sparkle "$test/Remora.app" --feed-url http://127.0.0.1:8000/appcast.xml --check-immediately --verbose
+plutil -extract CFBundleShortVersionString raw "$test/Remora.app/Contents/Info.plist"
+```
+
+The test passes when the update installs and the copy reports the new version. If it fails, do not publish.
 
 ## Beta and alpha channels later
 
