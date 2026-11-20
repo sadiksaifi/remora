@@ -32,7 +32,7 @@ final class CommandLineController {
     }
 
     func start() async throws {
-        let server = ControlServer(endpoint: ControlEndpoint()) { [weak self] request in
+        let server = ControlServer(endpoint: try ControlEndpoint()) { [weak self] request in
             guard let self else { return ControlReply(.failure(ControlFailure(.appUnavailable, "Remora is stopping."))) }
             return await self.handle(request)
         }

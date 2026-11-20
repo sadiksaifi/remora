@@ -31,7 +31,7 @@ struct ScreenshotCommand: AsyncParsableCommand {
             return
         }
         let seconds = try options.seconds(for: request.command)
-        let client = ControlClient(endpoint: ControlEndpoint())
+        let client = ControlClient(endpoint: try ControlEndpoint())
         try await ApplicationClient().prepare(client)
         let bounded = ControlRequest(command: request.command, session: request.session, timeout: seconds, arguments: arguments)
         let (response, png) = try await client.screenshot(bounded, timeout: seconds + 1)
@@ -76,7 +76,7 @@ struct EventsCommand: AsyncParsableCommand {
     @OptionGroup var options: CommonOptions
     @OptionGroup var target: SessionOptions
     @MainActor func run() async throws {
-        let client = ControlClient(endpoint: ControlEndpoint())
+        let client = ControlClient(endpoint: try ControlEndpoint())
         try await ApplicationClient().prepare(client)
         let seconds = try options.timeout.map { try CommandTimeout($0).seconds }
         try await client.events(.init(command: "events", session: target.target, timeout: seconds), timeout: seconds) { event in

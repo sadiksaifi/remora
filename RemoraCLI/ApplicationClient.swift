@@ -9,7 +9,7 @@ struct ApplicationClient {
     }
 
     func request(_ request: ControlRequest, launch: Bool, timeout: Double) async throws -> ControlResponse {
-        let client = ControlClient(endpoint: ControlEndpoint())
+        let client = ControlClient(endpoint: try ControlEndpoint())
         let wasRunning = running
         if !launch {
             do { return try await client.request(request, timeout: timeout, isMutation: false) } catch let failure as ControlFailure

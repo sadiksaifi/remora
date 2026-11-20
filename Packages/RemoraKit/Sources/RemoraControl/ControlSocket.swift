@@ -3,10 +3,18 @@ import Foundation
 import Network
 
 public struct ControlEndpoint: Sendable {
-    /// The folder is named after the app's bundle identifier, so the CLI reaches only the app that contains it,
-    /// never the other variant or an older Remora that used /tmp/remora-<uid>.
-    public let path = "/tmp/\(AppIdentity.current.bundleIdentifier)-\(getuid())/control.sock"
-    public init() {}
+    public let path: String
+
+    /// The socket sits in the app's own Application Support folder, which only this user can write,
+    /// so the CLI reaches only the app that contains it, never the other variant or another account's socket.
+    public init() throws {
+        path = AppIdentity.current.supportDirectory.appending(path: "control.sock").path
+        guard path.utf8.count < 104 else {
+            throw ControlFailure(
+                .unsupported, "The control socket path \(path) is \(path.utf8.count) bytes, and macOS allows at most 103.",
+                hint: "Use \(AppIdentity.current.name) from a user account whose home folder path is shorter.")
+        }
+    }
 }
 
 /// One request per connection. Callers may retry readiness probes, never a submitted mutation.
