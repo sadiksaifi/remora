@@ -1,0 +1,46 @@
+[tools]
+cmake = "4.4.5"
+xcodegen = "2.46.0"
+
+[tasks.engine]
+description = "Build the RDP and VNC engines into Vendor/build. Completed stages are skipped."
+usage = 'flag "--clean" help="Rebuild every engine stage"'
+run = './Vendor/build-engine.sh ${usage_clean:+--clean}'
+
+[tasks.xcodeproj]
+description = "Regenerate Remora.xcodeproj from project.yml."
+run = "xcodegen generate --quiet"
+
+[tasks.build]
+description = "Build the Debug app and verify its Apple-issued signature."
+depends = ["engine", "xcodeproj"]
+run = [
+    "xcodebuild -project Remora.xcodeproj -scheme Remora -configuration Debug -derivedDataPath build/DerivedData -quiet build",
+    "codesign --verify --deep --strict -R='anchor apple generic' build/DerivedData/Build/Products/Debug/Remora.app",
+]
+
+[tasks.launch]
+description = "Build the Debug app and launch a new instance of it."
+depends = ["build"]
+run = "open -n build/DerivedData/Build/Products/Debug/Remora.app"
+
+[tasks.test]
+description = "Run the RemoraKit tests."
+usage = 'flag "--filter <pattern>" help="Run only the tests that match this pattern"'
+depends = ["engine"]
+# The VNC session tests time handshakes, so they wait for a build in the same run.
+wait_for = ["build"]
+run = 'swift test --package-path Packages/RemoraKit ${usage_filter:+--filter "$usage_filter"}'
+
+[tasks.format]
+description = "Format the Swift sources in place."
+run = "set -o pipefail; git ls-files -z --cached --others --exclude-standard '*.swift' | xargs -0 xcrun swift-format format --in-place --parallel"
+
+[tasks.lint]
+description = "Lint the Swift sources."
+run = "set -o pipefail; git ls-files -z --cached --others --exclude-standard '*.swift' | xargs -0 xcrun swift-format lint --strict --parallel"
+
+[tasks.check]
+description = "Lint, build and test, and check that the committed Remora.xcodeproj matches project.yml. Run it before pushing or opening a PR."
+depends = ["lint", "build", "test"]
+run = "git diff --exit-code --stat -- Remora.xcodeproj || { echo 'Remora.xcodeproj did not match project.yml. It is regenerated now; commit it.' >&2; exit 1; }"
