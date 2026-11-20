@@ -184,6 +184,50 @@ private struct CopyableText: View {
     }
 }
 
+/// A link's status in one short line. The help tag holds the paths.
+private struct LinkStatus: View {
+    let link: CommandLineTool
+    let state: CommandLineTool.State?
+
+    var body: some View {
+        let name = AppIdentity.current.name
+        let pointsTo = "\(link.displayPath) points to \(link.displayDestination)"
+        switch state {
+        case .notInstalled, nil: Text("Not installed")
+        case .installed: StatusLabel(text: "Installed", ok: true).help(link.displayPath)
+        case .otherCopy: StatusLabel(text: "Points to another copy of \(name)", ok: false).help(pointsTo)
+        case .broken: StatusLabel(text: "\(name) was moved or deleted", ok: false).help(pointsTo)
+        case .otherLink: StatusLabel(text: "Points to another app or tool", ok: false).help(pointsTo)
+        case .conflict: StatusLabel(text: "Another file is in the way", ok: false).help(link.displayPath)
+        }
+    }
+}
+
+/// The one button that resolves a link that isn't this copy's. Replacing another app's or tool's link takes confirmation.
+private struct LinkFixButton: View {
+    let link: CommandLineTool
+    let state: CommandLineTool.State
+    let perform: (() throws -> Void) -> Void
+    @State private var confirmsReplace = false
+
+    var body: some View {
+        switch state {
+        case .otherCopy: Button("Update") { perform { try link.install() } }
+        case .broken: Button("Repair") { perform { try link.install() } }
+        case .otherLink:
+            Button("Replace…") { confirmsReplace = true }
+                .alert("Replace the link at \(link.displayPath)?", isPresented: $confirmsReplace) {
+                    Button("Replace", role: .destructive) { perform { try link.install(replacingOtherLink: true) } }
+                    Button("Cancel", role: .cancel) {}
+                } message: {
+                    Text("It points to \(link.displayDestination), which belongs to another app or tool. That file stays unchanged.")
+                }
+        case .conflict: Button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting([link.link]) }
+        case .notInstalled, .installed: EmptyView()
+        }
+    }
+}
+
 private struct CommandLinePane: View {
     @AppStorage(AppSettings.showAgentPointerKey) private var showAgentPointer = true
     @State private var state: CommandLineTool.State?
@@ -200,7 +244,7 @@ private struct CommandLinePane: View {
                     switch state {
                     case .notInstalled:
                         Button("Install") {
-                            perform(tool.install)
+                            perform { try tool.install() }
                             opensPathAdvice = state == .installed
                         }
                     case .installed:
@@ -217,28 +261,18 @@ private struct CommandLinePane: View {
                                     }
                                     .padding()
                                 }
-                            Button("Uninstall") { perform(tool.uninstall) }
+                            Button("Uninstall") { perform { try tool.uninstall() } }
                         }
-                    case .broken: Button("Repair") { perform(tool.repair) }
-                    case .conflict: Button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting([tool.link]) }
+                    case let state?: LinkFixButton(link: tool, state: state, perform: perform)
                     case nil: EmptyView()
                     }
                 } label: {
                     Text("Command-line tool")
-                    switch state {
-                    case .installed:
-                        // One subtitle view, so the warning has the same style as the status line.
-                        VStack(alignment: .leading, spacing: 2) {
-                            StatusLabel(text: "Installed at \(tool.displayPath)", ok: true)
-                            if isOnPath == false {
-                                StatusLabel(text: "~/.local/bin isn't on your PATH, so \(tool.link.lastPathComponent) won't run in Terminal.", ok: false)
-                            }
-                        }
-                    case .broken:
-                        StatusLabel(text: "The link at \(tool.displayPath) points to a copy of Remora that was moved or deleted.", ok: false)
-                    case .conflict:
-                        StatusLabel(text: CommandLineTool.Failure.conflict(tool.displayPath).localizedDescription, ok: false)
-                    case .notInstalled, nil: Text("Not installed")
+                    if state == .installed, isOnPath == false {
+                        StatusLabel(text: "Installed, but not on your PATH", ok: false)
+                            .help("~/.local/bin isn't on your PATH, so \(tool.link.lastPathComponent) won't run in Terminal.")
+                    } else {
+                        LinkStatus(link: tool, state: state)
                     }
                 }
                 .accessibilityIdentifier("commandLineTool")
@@ -254,7 +288,7 @@ private struct CommandLinePane: View {
             Section {
                 Toggle(isOn: $showAgentPointer) {
                     Text(Self.pointerTitle)
-                    Text("A cursor glides to each point the command line moves to or clicks. It never appears in screenshots.")
+                    Text("It never appears in screenshots.")
                 }
                 .accessibilityLabel(Self.pointerTitle)
                 .accessibilityIdentifier("showAgentPointer")
@@ -291,22 +325,17 @@ private struct AgentSkillSection: View {
                 let link = skill.link(in: folder)
                 LabeledContent {
                     switch states[folder] {
-                    case .notInstalled: Button("Install") { perform(link.install) }
-                    case .installed, .broken: Button("Remove") { perform(link.uninstall) }
-                    case .conflict: Button("Install") {}.disabled(true)
+                    case .notInstalled: Button("Install") { perform { try link.install() } }
+                    case .installed: Button("Remove") { perform { try link.uninstall() } }
+                    case let state?: LinkFixButton(link: link, state: state, perform: perform)
                     case nil: EmptyView()
                     }
                 } label: {
                     Text(folder.name)
                     // One subtitle view, so the status line has the same style in both rows.
                     VStack(alignment: .leading, spacing: 2) {
-                        if folder == .agents { Text("The shared folder that Codex, OpenCode, pi, Muse, Antigravity, Cursor, FX and other agents read.") }
-                        let path = (folder.url.path as NSString).abbreviatingWithTildeInPath
-                        switch states[folder] {
-                        case .installed, .broken: StatusLabel(text: "Installed in \(path)", ok: true)
-                        case .conflict: StatusLabel(text: "Another skill is in use at \(link.displayPath).", ok: false)
-                        case .notInstalled, nil: Text("Not installed in \(path)")
-                        }
+                        if folder == .agents { Text("Read by Codex, OpenCode, Cursor and other agents.") }
+                        LinkStatus(link: link, state: states[folder])
                     }
                 }
                 .accessibilityIdentifier("agentSkill-\(folder.rawValue)")

@@ -2,25 +2,35 @@ import Foundation
 
 /// A link Remora owns: the `remora` command on the user's PATH, or the `remora` folder in an agent's skills folder.
 /// Remora Dev's links are named `remora-dev`.
-/// Remora creates, replaces and removes only its own links, so it never overwrites or deletes a file it didn't create.
+/// Remora creates, updates and removes only its own links. It replaces another app's or tool's link only when the user confirms,
+/// and it never replaces a file or folder that isn't a link.
 public struct CommandLineTool: Sendable {
     public enum State: String, Sendable {
-        case notInstalled, installed
-        /// Remora's link points to a helper that was moved or deleted.
+        case notInstalled
+        /// The link points to this copy of the app.
+        case installed
+        /// The link points to another copy of this app, decided by its bundle identifier.
+        case otherCopy
+        /// The link points into an app that was moved or deleted. The link has this app's name, so a moved or renamed copy made it.
         case broken
-        /// Another file is at the link's path.
+        /// The link points to another app or tool. Replacing it takes the user's confirmation.
+        case otherLink
+        /// A file or folder that isn't a link is at the link's path.
         case conflict
     }
 
     public enum Failure: Error, LocalizedError {
         case conflict(String)
+        /// The link at the first path points to the second.
+        case otherLink(String, String)
         case notInstalled
         /// The app runs from a disk image or from App Translocation's temporary copy, so a link to it would soon break.
         case readOnlyApp
 
         public var errorDescription: String? {
             switch self {
-            case .conflict(let path): "Another file is already at \(path). Move or rename it, then come back to install."
+            case .conflict(let path): "Another file or folder is already at \(path). Move or rename it, then come back to install."
+            case .otherLink(let path, let destination): "The link at \(path) points to \(destination), which belongs to another app or tool."
             case .notInstalled: "The command-line tool is not installed."
             case .readOnlyApp: "\(AppIdentity.current.name) is running from a disk image or a temporary location, so a link to it would stop working."
             }
@@ -37,56 +47,77 @@ public struct CommandLineTool: Sendable {
 
     public let link: URL
     public let target: URL
-    private let adoptsOtherCopies: Bool
 
     /// `target` is the file the link points to, by default this app's bundled executable, `Remora.app/Contents/Helpers/remora`.
-    /// With `adoptsOtherCopies`, a link to the helper in another copy of the same app, such as a moved `Remora.app`, also counts as this app's.
     public init(
         target: URL = AppIdentity.current.app.appending(path: "Contents/Helpers/remora"),
-        link: URL = FileManager.default.homeDirectoryForCurrentUser.appending(path: ".local/bin/\(AppIdentity.current.commandName)"),
-        adoptsOtherCopies: Bool = true
+        link: URL = FileManager.default.homeDirectoryForCurrentUser.appending(path: ".local/bin/\(AppIdentity.current.commandName)")
     ) {
         self.target = target
         self.link = link
-        self.adoptsOtherCopies = adoptsOtherCopies
     }
 
     /// The link's path for display, such as ~/.local/bin/remora.
     public var displayPath: String { (link.path as NSString).abbreviatingWithTildeInPath }
 
+    /// Where the link points, or nil when nothing or a file that isn't a symbolic link is at its path.
+    var destination: URL? {
+        guard let path = try? FileManager.default.destinationOfSymbolicLink(atPath: link.path) else { return nil }
+        return URL(fileURLWithPath: path, relativeTo: link.deletingLastPathComponent()).standardizedFileURL
+    }
+
+    /// Where the link points, for display, or an empty string when it isn't a symbolic link.
+    public var displayDestination: String { destination.map { ($0.path as NSString).abbreviatingWithTildeInPath } ?? "" }
+
+    /// The app the link points into, when it points to the same file inside an app as the target, such as `Other.app` for
+    /// `Other.app/Contents/Helpers/remora`.
+    var linkedApp: URL? {
+        guard let destination, let app = Self.app(containing: target) else { return nil }
+        let inside = Array(target.standardizedFileURL.pathComponents.dropFirst(app.pathComponents.count))
+        let components = destination.pathComponents
+        guard components.count > inside.count, Array(components.suffix(inside.count)) == inside else { return nil }
+        let linked = URL(fileURLWithPath: NSString.path(withComponents: Array(components.dropLast(inside.count))))
+        return linked.pathExtension == "app" ? linked : nil
+    }
+
     public var state: State {
         let manager = FileManager.default
         guard (try? manager.attributesOfItem(atPath: link.path)) != nil else { return .notInstalled }
-        guard isOwned else { return .conflict }
-        return manager.fileExists(atPath: link.path) ? .installed : .broken
+        guard let destination else { return .conflict }
+        let exists = manager.fileExists(atPath: destination.path)
+        if destination == target.standardizedFileURL { return exists ? .installed : .broken }
+        guard let linkedApp else { return .otherLink }
+        guard exists else { return .broken }
+        func bundleIdentifier(_ app: URL?) -> String? { app.flatMap { Bundle(url: $0)?.bundleIdentifier } }
+        let identifier = bundleIdentifier(linkedApp)
+        return identifier != nil && identifier == bundleIdentifier(Self.app(containing: target)) ? .otherCopy : .otherLink
     }
 
-    /// Creates the link. It fails rather than replace anything already at the path.
-    public func install() throws {
+    /// Points the link at this copy of the app, and creates it if it's missing. It replaces another app's or tool's link only with
+    /// `replacingOtherLink`, and never replaces a file or folder that isn't a link.
+    public func install(replacingOtherLink: Bool = false) throws {
         try requireWritableTarget()
         switch state {
-        case .notInstalled:
-            try FileManager.default.createDirectory(at: link.deletingLastPathComponent(), withIntermediateDirectories: true)
-            try FileManager.default.createSymbolicLink(at: link, withDestinationURL: target)
+        case .installed: return
+        case .notInstalled: try FileManager.default.createDirectory(at: link.deletingLastPathComponent(), withIntermediateDirectories: true)
+        case .otherLink where !replacingOtherLink: throw otherLinkFailure
         case .conflict: throw Failure.conflict(displayPath)
-        case .installed, .broken: try repair()
+        case .otherCopy, .broken, .otherLink: try FileManager.default.removeItem(at: link)
         }
-    }
-
-    /// Points Remora's link at this copy of Remora.
-    public func repair() throws {
-        try requireWritableTarget()
-        try uninstall()
         try FileManager.default.createSymbolicLink(at: link, withDestinationURL: target)
     }
 
+    /// Removes this app's link, including one to another copy of this app or a broken one.
     public func uninstall() throws {
         switch state {
         case .notInstalled: throw Failure.notInstalled
+        case .otherLink: throw otherLinkFailure
         case .conflict: throw Failure.conflict(displayPath)
-        case .installed, .broken: try FileManager.default.removeItem(at: link)
+        case .installed, .otherCopy, .broken: try FileManager.default.removeItem(at: link)
         }
     }
+
+    private var otherLinkFailure: Failure { .otherLink(displayPath, displayDestination) }
 
     /// Whether a new Terminal shell runs `remora` from this link, or nil when the shell fails, takes over 3 seconds or never prints an answer.
     /// A GUI app's PATH lacks what shell config adds, so this asks the user's login shell in a clean environment.
@@ -126,17 +157,13 @@ public struct CommandLineTool: Sendable {
         if (try? target.resourceValues(forKeys: [.volumeIsReadOnlyKey]))?.volumeIsReadOnly == true { throw Failure.readOnlyApp }
     }
 
-    /// A symbolic link to the target. With `adoptsOtherCopies`, also a link to the helper in another copy of the same app, decided by its
-    /// bundle identifier, or a dangling link to any app's helper: the link's name is this app's own, so a moved or renamed copy made it.
-    private var isOwned: Bool {
-        guard let destination = try? FileManager.default.destinationOfSymbolicLink(atPath: link.path) else { return false }
-        let found = URL(fileURLWithPath: destination, relativeTo: link.deletingLastPathComponent()).standardizedFileURL
-        guard found != target.standardizedFileURL else { return true }
-        guard adoptsOtherCopies, found.path.hasSuffix(".app/Contents/Helpers/remora") else { return false }
-        guard FileManager.default.fileExists(atPath: found.path) else { return true }
-        func bundleIdentifier(_ helper: URL) -> String? {
-            Bundle(url: helper.deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent())?.bundleIdentifier
+    /// The innermost app bundle in `url`'s path.
+    private static func app(containing url: URL) -> URL? {
+        var app = url.standardizedFileURL
+        while app.pathComponents.count > 1 {
+            if app.pathExtension == "app" { return app }
+            app.deleteLastPathComponent()
         }
-        return bundleIdentifier(found).map { $0 == bundleIdentifier(target) } ?? false
+        return nil
     }
 }

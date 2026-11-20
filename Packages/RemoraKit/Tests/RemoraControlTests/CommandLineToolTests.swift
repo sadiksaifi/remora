@@ -3,12 +3,27 @@ import Testing
 
 @testable import RemoraControl
 
-@Test func installRepairsAndUninstallsOnlyItsOwnLink() throws {
-    let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+/// Creates an app with `bundleIdentifier` and an empty file at `inside`, and returns that file.
+private func file(in app: URL, at inside: String, bundleIdentifier: String? = nil) throws -> URL {
+    let manager = FileManager.default
+    let contents = app.appending(path: "Contents")
+    try manager.createDirectory(at: contents, withIntermediateDirectories: true)
+    if let bundleIdentifier {
+        try PropertyListSerialization.data(fromPropertyList: ["CFBundleIdentifier": bundleIdentifier], format: .xml, options: 0)
+            .write(to: contents.appending(path: "Info.plist"))
+    }
+    let file = app.appending(path: inside)
+    try manager.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+    try Data().write(to: file)
+    return file
+}
+
+private func temporaryFolder() -> URL { FileManager.default.temporaryDirectory.appending(path: UUID().uuidString) }
+
+@Test func installUpdatesAndUninstallsOnlyItsOwnLink() throws {
+    let root = temporaryFolder()
     defer { try? FileManager.default.removeItem(at: root) }
-    let helper = root.appending(path: "Remora.app/Contents/Helpers/remora")
-    try FileManager.default.createDirectory(at: helper.deletingLastPathComponent(), withIntermediateDirectories: true)
-    try Data().write(to: helper)
+    let helper = try file(in: root.appending(path: "Remora.app"), at: "Contents/Helpers/remora")
     let tool = CommandLineTool(target: helper, link: root.appending(path: "bin/remora"))
 
     #expect(tool.state == .notInstalled)
@@ -18,90 +33,95 @@ import Testing
     let moved = CommandLineTool(target: root.appending(path: "Moved.app/Contents/Helpers/remora"), link: tool.link)
     try FileManager.default.removeItem(at: helper)
     #expect(tool.state == .broken)
-    try FileManager.default.createDirectory(at: moved.target.deletingLastPathComponent(), withIntermediateDirectories: true)
-    try Data().write(to: moved.target)
-    try moved.repair()
+    _ = try file(in: root.appending(path: "Moved.app"), at: "Contents/Helpers/remora")
+    #expect(moved.state == .broken)
+    try moved.install()
     #expect(moved.state == .installed)
     try moved.uninstall()
     #expect(moved.state == .notInstalled)
 
     try Data("someone else's".utf8).write(to: tool.link)
     #expect(tool.state == .conflict)
-    #expect(throws: CommandLineTool.Failure.self) { try tool.install() }
+    #expect(throws: CommandLineTool.Failure.self) { try tool.install(replacingOtherLink: true) }
     #expect(throws: CommandLineTool.Failure.self) { try tool.uninstall() }
     #expect(try String(contentsOf: tool.link, encoding: .utf8) == "someone else's")
 }
 
-@Test func foreignLinksAreNeverReplacedOrRemoved() throws {
+/// Another tool's link is replaced only when the caller confirms, and the file it points to stays.
+@Test func otherLinksAreReplacedOnlyWhenConfirmed() throws {
     let manager = FileManager.default
-    let root = manager.temporaryDirectory.appending(path: UUID().uuidString)
+    let root = temporaryFolder()
     try manager.createDirectory(at: root, withIntermediateDirectories: true)
     defer { try? manager.removeItem(at: root) }
-    let target = root.appending(path: "foreign-tool")
-    let tool = CommandLineTool(
-        target: root.appending(path: "Remora.app/Contents/Helpers/remora"),
-        link: root.appending(path: "remora"))
-    try manager.createSymbolicLink(at: tool.link, withDestinationURL: target)
+    let foreign = root.appending(path: "foreign-tool")
+    let tool = CommandLineTool(target: try file(in: root.appending(path: "Remora.app"), at: "Contents/Helpers/remora"), link: root.appending(path: "remora"))
+    try manager.createSymbolicLink(at: tool.link, withDestinationURL: foreign)
 
-    // Both a dangling foreign link and a link to an existing foreign helper are conflicts.
+    // Both a dangling foreign link and a link to an existing foreign file are other links.
     for exists in [false, true] {
-        if exists {
-            try manager.createDirectory(at: target.deletingLastPathComponent(), withIntermediateDirectories: true)
-            try Data("foreign".utf8).write(to: target)
-        }
-        #expect(tool.state == .conflict)
+        if exists { try Data("foreign".utf8).write(to: foreign) }
+        #expect(tool.state == .otherLink)
         #expect(throws: CommandLineTool.Failure.self) { try tool.install() }
-        #expect(throws: CommandLineTool.Failure.self) { try tool.repair() }
         #expect(throws: CommandLineTool.Failure.self) { try tool.uninstall() }
-        #expect(try manager.destinationOfSymbolicLink(atPath: tool.link.path) == target.path)
-        if exists { #expect(try String(contentsOf: target, encoding: .utf8) == "foreign") }
+        #expect(tool.destination == foreign.standardizedFileURL)
     }
+    try tool.install(replacingOtherLink: true)
+    #expect(tool.state == .installed)
+    #expect(try String(contentsOf: foreign, encoding: .utf8) == "foreign")
 }
 
 /// A helper in another app counts as Remora's only with Remora's bundle identifier. A dangling link to a helper counts, so a renamed copy can repair it.
 @Test func helperLinksAreOwnedByBundleIdentifier() throws {
     let manager = FileManager.default
-    let root = manager.temporaryDirectory.appending(path: UUID().uuidString)
+    let root = temporaryFolder()
     defer { try? manager.removeItem(at: root) }
-    func helper(in app: String, bundleIdentifier: String) throws -> URL {
-        let contents = root.appending(path: "\(app)/Contents")
-        try manager.createDirectory(at: contents.appending(path: "Helpers"), withIntermediateDirectories: true)
-        try PropertyListSerialization.data(fromPropertyList: ["CFBundleIdentifier": bundleIdentifier], format: .xml, options: 0)
-            .write(to: contents.appending(path: "Info.plist"))
-        try Data().write(to: contents.appending(path: "Helpers/remora"))
-        return contents.appending(path: "Helpers/remora")
-    }
-    let tool = CommandLineTool(target: try helper(in: "Remora.app", bundleIdentifier: "com.peblon.remora"), link: root.appending(path: "remora"))
+    let helper = "Contents/Helpers/remora"
+    let tool = CommandLineTool(
+        target: try file(in: root.appending(path: "Remora.app"), at: helper, bundleIdentifier: "com.peblon.remora"), link: root.appending(path: "remora"))
 
-    try manager.createSymbolicLink(at: tool.link, withDestinationURL: try helper(in: "Other.app", bundleIdentifier: "com.example.other"))
-    #expect(tool.state == .conflict)
+    let variant = try file(in: root.appending(path: "Remora Dev.app"), at: helper, bundleIdentifier: "com.peblon.remora.dev")
+    try manager.createSymbolicLink(at: tool.link, withDestinationURL: variant)
+    #expect(tool.state == .otherLink)
 
     try manager.removeItem(at: tool.link)
-    try manager.createSymbolicLink(at: tool.link, withDestinationURL: try helper(in: "Remora copy.app", bundleIdentifier: "com.peblon.remora"))
+    let copy = root.appending(path: "Remora copy.app")
+    try manager.createSymbolicLink(at: tool.link, withDestinationURL: try file(in: copy, at: helper, bundleIdentifier: "com.peblon.remora"))
+    #expect(tool.state == .otherCopy)
+    #expect(tool.linkedApp?.path == copy.standardizedFileURL.path)
+    try tool.install()
     #expect(tool.state == .installed)
 
     try manager.removeItem(at: tool.link)
     try manager.createSymbolicLink(at: tool.link, withDestinationURL: root.appending(path: "Renamed.app/Contents/Helpers/remora"))
     #expect(tool.state == .broken)
-    try tool.repair()
+    try tool.install()
     #expect(try manager.destinationOfSymbolicLink(atPath: tool.link.path) == tool.target.path)
 }
 
-@Test func skillLinkBelongsOnlyToItsOwnCopyOfRemora() throws {
+@Test func skillLinkToAnotherCopyCanBeUpdated() throws {
     let manager = FileManager.default
-    let root = manager.temporaryDirectory.appending(path: UUID().uuidString)
+    let root = temporaryFolder()
     defer { try? manager.removeItem(at: root) }
-    let skill = AgentSkill(app: root.appending(path: "Remora.app"), name: "remora")
-    try manager.createDirectory(at: skill.folder, withIntermediateDirectories: true)
-    let link = skill.link(in: root.appending(path: "skills"))
+    let skills = root.appending(path: "skills")
+    let inside = "Contents/Resources/skills/remora"
+    for app in ["Remora.app", "Other/Remora.app"] { _ = try file(in: root.appending(path: app), at: inside, bundleIdentifier: "com.peblon.remora") }
+    _ = try file(in: root.appending(path: "Tool.app"), at: inside, bundleIdentifier: "com.example.tool")
+    let link = AgentSkill(app: root.appending(path: "Remora.app"), name: "remora").link(in: skills)
+    let other = AgentSkill(app: root.appending(path: "Other/Remora.app"), name: "remora").link(in: skills)
+    let tool = AgentSkill(app: root.appending(path: "Tool.app"), name: "remora").link(in: skills)
 
     try link.install()
     #expect(link.state == .installed)
-    let other = AgentSkill(app: root.appending(path: "Other/Remora.app"), name: "remora").link(in: root.appending(path: "skills"))
-    #expect(other.state == .conflict)
-    #expect(throws: CommandLineTool.Failure.self) { try other.uninstall() }
-    #expect(link.state == .installed)
-    try link.uninstall()
+    #expect(other.state == .otherCopy)
+    try other.install()
+    #expect(other.state == .installed)
+    #expect(link.state == .otherCopy)
+
+    try tool.install(replacingOtherLink: true)
+    #expect(link.state == .otherLink)
+    #expect(throws: CommandLineTool.Failure.self) { try link.uninstall() }
+    #expect(tool.state == .installed)
+    try tool.uninstall()
     #expect(link.state == .notInstalled)
 }
 

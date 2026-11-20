@@ -51,7 +51,8 @@ struct SettingsCommand: AsyncParsableCommand {
         @OptionGroup var options: CommonOptions
         struct Get: AsyncParsableCommand {
             static let configuration = CommandConfiguration(
-                abstract: "Report whether \(CommandLineTool().displayPath) is installed and points to this copy of \(AppIdentity.current.name).")
+                abstract: "Report whether \(CommandLineTool().displayPath) is installed and points to this copy of \(AppIdentity.current.name).",
+                discussion: linkStates(fix: "\(AppIdentity.current.commandName) settings cli repair"))
             @OptionGroup var options: CommonOptions
             @MainActor func run() async throws {
                 Output.write(.success(CommandLineTool().status), json: options.json)
@@ -59,12 +60,17 @@ struct SettingsCommand: AsyncParsableCommand {
         }
         struct Repair: AsyncParsableCommand {
             static let configuration = CommandConfiguration(
-                abstract: "Point \(CommandLineTool().displayPath) at this copy of \(AppIdentity.current.name).", discussion: readOnlyDiscussion)
+                abstract: "Point \(CommandLineTool().displayPath) at this copy of \(AppIdentity.current.name), and create it if it's missing.",
+                discussion: readOnlyDiscussion)
             @OptionGroup var options: CommonOptions
-            @MainActor func run() async throws { try await options.execute(.init(command: "settings.cli.repair")) }
+            @Flag(help: "Also replace a link to another app or tool. A file that isn't a link is never replaced.") var replace = false
+            @MainActor func run() async throws {
+                try await options.execute(.init(command: "settings.cli.repair", arguments: ["replace": .bool(replace)]))
+            }
         }
         struct Uninstall: AsyncParsableCommand {
-            static let configuration = CommandConfiguration(abstract: "Remove \(CommandLineTool().displayPath).")
+            static let configuration = CommandConfiguration(
+                abstract: "Remove \(CommandLineTool().displayPath) when it points to a copy of \(AppIdentity.current.name).")
             @OptionGroup var options: CommonOptions
             @MainActor func run() async throws { try await options.execute(.init(command: "settings.cli.uninstall")) }
         }
