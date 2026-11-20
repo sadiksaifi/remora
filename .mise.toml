@@ -242,3 +242,49 @@ remote=$(gh api "repos/{owner}/{repo}/commits/refs/tags/$tag" --jq .sha)
 [[ $remote == "$commit" ]] || { echo "Tag $tag points to $remote on origin, not $commit" >&2; exit 1; }
 gh release create "$tag" --verify-tag --latest --title "Remora $version" --notes-file "$notes" "$dist/$dmg" "$dist/SHA256SUMS"
 '''
+
+[tasks."release:secrets"]
+description = "Copy the release secrets from the Remora vault in 1Password to the release environment on GitHub. See docs/releasing.md."
+usage = 'flag "--dry-run" help="List each secret and its 1Password reference without reading 1Password or changing GitHub"'
+# Each value goes from op read to gh secret set through a pipe, so it never reaches disk or the
+# terminal. File attachments go to GitHub as base64, as the release workflow decodes them.
+run = '''
+#!/usr/bin/env bash
+set -euo pipefail
+repo=sadiksaifi/remora
+secrets=(
+    "DEVELOPER_ID_P12_BASE64|op://Remora/Developer ID Application/developer-id.p12|base64"
+    "DEVELOPER_ID_P12_PASSWORD|op://Remora/Developer ID Application/password|text"
+    "NOTARY_KEY_P8_BASE64|op://Remora/Notary API key/notary.p8|base64"
+    "NOTARY_KEY_ID|op://Remora/Notary API key/key id|text"
+    "NOTARY_ISSUER_ID|op://Remora/Notary API key/issuer id|text"
+    "SPARKLE_ED_PRIVATE_KEY|op://Remora/Sparkle EdDSA key/private key|text"
+)
+if [[ ${usage_dry_run:-false} == true ]]; then
+    for secret in "${secrets[@]}"; do
+        IFS='|' read -r name ref encoding <<<"$secret"
+        printf '%-26s %-7s %s\n' "$name" "$encoding" "$ref"
+    done
+    echo "Dry run: read nothing from 1Password and changed nothing on GitHub."
+    exit 0
+fi
+command -v op >/dev/null || { echo "The 1Password CLI, op, is not installed. Install it with: brew install 1password-cli" >&2; exit 1; }
+command -v gh >/dev/null || { echo "The GitHub CLI, gh, is not installed. Install it with: brew install gh" >&2; exit 1; }
+gh auth status --hostname github.com >/dev/null || { echo "gh is not signed in to github.com. Run: gh auth login" >&2; exit 1; }
+op vault get Remora >/dev/null || { echo "op cannot open the Remora vault. Sign in to the 1Password CLI and check that the vault exists." >&2; exit 1; }
+# Every value is read before any secret changes, so a missing reference changes nothing.
+values=()
+for secret in "${secrets[@]}"; do
+    IFS='|' read -r name ref encoding <<<"$secret"
+    if [[ $encoding == base64 ]]; then
+        value=$(op read --no-newline "$ref" | base64) || { echo "Cannot read $ref for $name." >&2; exit 1; }
+    else
+        value=$(op read --no-newline "$ref") || { echo "Cannot read $ref for $name." >&2; exit 1; }
+    fi
+    [[ -n $value ]] || { echo "$ref for $name is empty." >&2; exit 1; }
+    values+=("$value")
+done
+for i in "${!secrets[@]}"; do
+    printf '%s' "${values[i]}" | gh secret set "${secrets[i]%%|*}" --env release --repo "$repo"
+done
+'''
