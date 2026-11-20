@@ -53,20 +53,26 @@ run = "git diff --exit-code --stat -- Remora.xcodeproj || { echo 'Remora.xcodepr
 
 [tasks."setup:hooks"]
 description = "Install the Git hooks in lefthook.yml."
-run = "lefthook install --reset-hooks-path"
+run = "lefthook install"
 
 [tasks."lint:commit"]
 description = "Check that a commit message file is a Conventional Commit."
 usage = 'arg "<file>" help="File that holds the commit message or PR title"'
-run = "cog verify --ignore-merge-commits --file {{usage.file | quote}}"
+run = "cog verify --file {{usage.file | quote}}"
 
 [tasks."release:notes"]
 description = "Print the release notes for unreleased changes."
 run = "git-cliff --unreleased --offline --strip all"
 
-[tasks."release:notes:current"]
-description = "Print the release notes for the release tag at HEAD."
-run = "git-cliff --current --offline --strip all"
+[tasks."release:notes:tag"]
+description = "Print the release notes for a release tag."
+usage = 'arg "<tag>" help="Release tag, for example v1.2.3"'
+# The range starts after the previous stable tag. With no previous tag, git-cliff walks all history and prints the first-release line.
+run = '''
+commit=$(git rev-parse --verify {{usage.tag | quote}}^{commit}) || exit 1
+previous=$(git tag --list 'v*' --merged {{usage.tag | quote}}^ --sort=-v:refname | grep -m 1 -E '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$' || true)
+git-cliff --offline --strip all -- "${previous:+$previous..}$commit"
+'''
 
 [tasks."release:targets"]
 description = "Check the Tagsmith release configuration."
@@ -78,9 +84,9 @@ usage = 'arg "<bump>" help="SemVer part to bump" { choices "major" "minor" "patc
 run = "tagsmith tag --channel stable --bump {{usage.bump}} --dry-run --json"
 
 [tasks."release:tag"]
-description = "Create the next release tag at HEAD and push it to origin."
-usage = 'arg "<bump>" help="SemVer part to bump" { choices "major" "minor" "patch"; }'
-run = "tagsmith tag --channel stable --bump {{usage.bump}} --json --push"
+description = "Create a release tag at HEAD and push it to origin."
+usage = 'arg "<version>" help="Version that release:preview printed, for example 1.2.3"'
+run = "tagsmith tag --channel stable --version {{usage.version | quote}} --push --json"
 
 [tasks."release:validate"]
 description = "Validate a release tag on origin and write its facts to $GITHUB_OUTPUT."

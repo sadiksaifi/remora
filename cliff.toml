@@ -24,14 +24,13 @@ conventional_commits = true
 filter_unconventional = false
 # Stable SemVer tags only, as Tagsmith creates them.
 tag_pattern = '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'
-use_branch_tags = true
 sort_commits = "oldest"
 # The comments sort the groups; the template strips them.
 commit_parsers = [
-  { message = "^feat", group = "<!-- 0 -->Features" },
-  { message = "^fix", group = "<!-- 1 -->Fixes" },
-  { message = "^perf", group = "<!-- 2 -->Performance" },
-  { message = "^docs", group = "<!-- 3 -->Documentation" },
-  { message = "^(build|chore|ci|refactor|revert|style|test)", group = "<!-- 4 -->Maintenance" },
+  { message = '(?i)^feat[(!:]', group = "<!-- 0 -->Features" },
+  { message = '(?i)^fix[(!:]', group = "<!-- 1 -->Fixes" },
+  { message = '(?i)^perf[(!:]', group = "<!-- 2 -->Performance" },
+  { message = '(?i)^docs[(!:]', group = "<!-- 3 -->Documentation" },
+  { message = '(?i)^(build|chore|ci|refactor|revert|style|test)[(!:]', group = "<!-- 4 -->Maintenance" },
   { message = ".*", group = "<!-- 5 -->Other changes" },
 ]
