@@ -1,9 +1,10 @@
 name: CI
 
-# A change to only these files skips CI. `*.md` matches top-level files only, so skills/remora/SKILL.md, which the build checks, still runs CI.
+# Every pull request runs CI, because the main branch ruleset requires its checks. A pull request that
+# changes only docs skips the jobs, and GitHub counts a skipped job as passed.
+# A push to main only refreshes the engine cache, since pull requests can restore only caches saved on main.
 on:
   pull_request:
-    paths-ignore: ["*.md", LICENSE, assets/**, docs/**]
   push:
     branches: [main]
     paths-ignore: ["*.md", LICENSE, assets/**, docs/**]
@@ -17,8 +18,33 @@ permissions:
   contents: read
 
 jobs:
+  changes:
+    name: Detect changes
+    runs-on: ubuntu-slim
+    timeout-minutes: 5
+    permissions:
+      pull-requests: read
+    outputs:
+      code: ${{ github.event_name == 'push' || steps.filter.outputs.code == 'true' }}
+    steps:
+      # `*.md` matches top-level files only, so skills/remora/SKILL.md, which the build checks, still counts as code.
+      - id: filter
+        if: github.event_name == 'pull_request'
+        uses: dorny/paths-filter@v4
+        with:
+          predicate-quantifier: every
+          filters: |
+            code:
+              - "**"
+              - "!*.md"
+              - "!LICENSE"
+              - "!assets/**"
+              - "!docs/**"
+
   workflows:
     name: Lint workflows
+    needs: changes
+    if: github.event_name == 'pull_request' && needs.changes.outputs.code == 'true'
     runs-on: ubuntu-slim
     timeout-minutes: 5
     env:
@@ -38,6 +64,8 @@ jobs:
 
   check:
     name: Check
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: xcode-27
     timeout-minutes: 30
     env:
@@ -70,7 +98,8 @@ jobs:
             Vendor/src
           key: engine-${{ runner.os }}-${{ runner.arch }}-${{ steps.xcode.outputs.build }}-cmake-${{ steps.mise.outputs.cmake }}-${{ hashFiles('Vendor/build-engine.sh', 'Vendor/build-vnc.sh', 'Vendor/patches/**', 'Vendor/apple-mvs/**') }}
           restore-keys: engine-${{ runner.os }}-${{ runner.arch }}-
-      - run: mise run engine
+      - if: github.event_name == 'pull_request' || steps.engine.outputs.cache-hit != 'true'
+        run: mise run engine
       # Saved before the check, so a failing test does not discard the engine build.
       - if: steps.engine.outputs.cache-hit != 'true'
         uses: actions/cache/save@v6
@@ -79,4 +108,5 @@ jobs:
             Vendor/build
             Vendor/src
           key: ${{ steps.engine.outputs.cache-primary-key }}
-      - run: mise run check
+      - if: github.event_name == 'pull_request'
+        run: mise run check
