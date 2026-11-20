@@ -5,17 +5,11 @@ import RemoraControl
 @MainActor
 struct ApplicationClient {
     private var running: Bool {
-        let developmentSocket = ProcessInfo.processInfo.environment["REMORA_SOCKET"] != nil
-        return NSWorkspace.shared.runningApplications.contains {
-            !$0.isTerminated
-                && (developmentSocket
-                    ? $0.bundleURL?.resolvingSymlinksInPath() == AppIdentity.current.app
-                    : $0.bundleIdentifier == AppIdentity.current.bundleIdentifier)
-        }
+        NSWorkspace.shared.runningApplications.contains { !$0.isTerminated && $0.bundleIdentifier == AppIdentity.current.bundleIdentifier }
     }
 
     func request(_ request: ControlRequest, launch: Bool, timeout: Double) async throws -> ControlResponse {
-        let client = ControlClient(endpoint: try ControlEndpoint())
+        let client = ControlClient(endpoint: ControlEndpoint())
         let wasRunning = running
         if !launch {
             do { return try await client.request(request, timeout: timeout, isMutation: false) } catch let failure as ControlFailure
@@ -50,9 +44,6 @@ struct ApplicationClient {
         configuration.activates = false
         configuration.promptsUserIfNeeded = false
         configuration.allowsRunningApplicationSubstitution = false
-        if let socket = ProcessInfo.processInfo.environment["REMORA_SOCKET"] {
-            configuration.environment = ["REMORA_SOCKET": socket]
-        }
         configuration.arguments = ["--cli-background"]
         // A second simultaneous CLI launch must not send a window-opening reopen event.
         configuration.appleEvent = NSAppleEventDescriptor(
@@ -77,6 +68,6 @@ struct ApplicationClient {
             } catch { throw ControlFailure(.cancelled, "The command was interrupted.") }
             delay = min(delay * 2, 0.25)
         }
-        throw ControlFailure(.appUnavailable, "Remora did not start its control listener within 10 seconds.")
+        throw ControlFailure(.appUnavailable, "\(AppIdentity.current.name) did not start its control listener within 10 seconds.")
     }
 }

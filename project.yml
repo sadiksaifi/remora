@@ -61,24 +61,25 @@ targets:
       # A skill's name must match its folder, so Remora Dev bundles the skill as remora-dev and names its own command in it.
       - name: Bundle agent skill
         script: |
-          command=$(echo "$PRODUCT_NAME" | tr 'A-Z ' 'a-z-')
-          skill="$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/skills/$command"
-          mkdir -p "$skill"
-          sed -e "s/^name: remora$/name: $command/" -e "s/\`remora/\`$command/g" "$SRCROOT/skills/remora/SKILL.md" > "$skill/SKILL.md"
+          sed -e "s/^name: remora$/name: $REMORA_COMMAND/" -e "s/\`remora/\`$REMORA_COMMAND/g" "$SCRIPT_INPUT_FILE_0" > "$SCRIPT_OUTPUT_FILE_0"
         inputFiles:
           - $(SRCROOT)/skills/remora/SKILL.md
-        basedOnDependencyAnalysis: false
+        outputFiles:
+          - $(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/skills/$(REMORA_COMMAND)/SKILL.md
       # Checks the skill, the failure hints and the command descriptions with the embedded, signed CLI, without running a command.
       - name: Check agent help
         script: '"$TARGET_BUILD_DIR/$CONTENTS_FOLDER_PATH/Helpers/remora" __check-help "$SRCROOT/skills/remora/SKILL.md"'
         inputFiles:
           - $(SRCROOT)/skills/remora/SKILL.md
+          - $(TARGET_BUILD_DIR)/$(CONTENTS_FOLDER_PATH)/Helpers/remora
         basedOnDependencyAnalysis: false
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: $(REMORA_BUNDLE_IDENTIFIER)
         PRODUCT_NAME: $(REMORA_NAME)
         PRODUCT_MODULE_NAME: Remora
+        # remora or remora-dev, as AppIdentity.commandName derives it at runtime.
+        REMORA_COMMAND: $(PRODUCT_NAME:rfc1034identifier:lower)
         CODE_SIGN_STYLE: Automatic
         DEVELOPMENT_TEAM: LZ3V3WUPWR
         ENABLE_APP_SANDBOX: NO
@@ -108,6 +109,8 @@ targets:
         CODE_SIGN_STYLE: Automatic
         DEVELOPMENT_TEAM: LZ3V3WUPWR
         SKIP_INSTALL: YES
+        # A tool requires entitlements by default, so Xcode would add an application identifier that a Developer ID build has no profile for.
+        ENTITLEMENTS_REQUIRED: NO
         # An Info.plist in the binary lets macOS name the app in privacy and Keychain prompts.
         GENERATE_INFOPLIST_FILE: YES
         CREATE_INFOPLIST_SECTION_IN_BINARY: YES

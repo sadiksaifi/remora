@@ -27,7 +27,7 @@ extension CommandLineController {
                 if request.command == "settings.cli.repair" { try tool.repair() }
                 if request.command == "settings.cli.uninstall" { try tool.uninstall() }
             } catch let failure as CommandLineTool.Failure {
-                throw ControlFailure(.invalidArgument, failure.localizedDescription)
+                throw ControlFailure(.invalidArgument, failure.localizedDescription, hint: failure.recoverySuggestion)
             } catch { throw ControlFailure(.ioFailed, error.localizedDescription) }
             return tool.status
         default: throw ControlFailure(.unknownCommand, "Unknown settings command.")

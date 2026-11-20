@@ -58,7 +58,8 @@ struct SettingsCommand: AsyncParsableCommand {
             }
         }
         struct Repair: AsyncParsableCommand {
-            static let configuration = CommandConfiguration(abstract: "Point \(CommandLineTool().displayPath) at this copy of \(AppIdentity.current.name).")
+            static let configuration = CommandConfiguration(
+                abstract: "Point \(CommandLineTool().displayPath) at this copy of \(AppIdentity.current.name).", discussion: readOnlyDiscussion)
             @OptionGroup var options: CommonOptions
             @MainActor func run() async throws { try await options.execute(.init(command: "settings.cli.repair")) }
         }

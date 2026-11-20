@@ -2,6 +2,9 @@ import ArgumentParser
 import Foundation
 import RemoraControl
 
+/// A link to an app on a disk image or in App Translocation's temporary copy would soon break.
+let readOnlyDiscussion = "It refuses while \(AppIdentity.current.name) runs from a disk image or a temporary location. Move the app to Applications first."
+
 /// Claude Code reads only its own skills folder. The other agents read the shared Agent Skills folder.
 enum SkillAgent: String, CaseIterable, ExpressibleByArgument {
     case agents, codex, opencode, pi, muse, antigravity, cursor, fx
@@ -27,7 +30,8 @@ struct SkillCommand: ParsableCommand {
 
     struct Install: ParsableCommand {
         static let configuration = CommandConfiguration(
-            abstract: "Link the skill as \(AppIdentity.current.commandName) in ~/.agents/skills and ~/.claude/skills.")
+            abstract: "Link the skill as \(AppIdentity.current.commandName) in ~/.agents/skills and ~/.claude/skills.",
+            discussion: readOnlyDiscussion)
         @OptionGroup var targets: Targets
         func run() throws { try targets.apply(install: true) }
     }
@@ -61,7 +65,9 @@ struct SkillCommand: ParsableCommand {
                     if link.state != .conflict {
                         if install { try link.install() } else if link.state != .notInstalled { try link.uninstall() }
                     }
-                } catch { throw ControlFailure(.ioFailed, error.localizedDescription) }
+                } catch {
+                    throw ControlFailure(.ioFailed, error.localizedDescription, hint: (error as? CommandLineTool.Failure)?.recoverySuggestion)
+                }
                 results.append(.object(["agent": .string(name), "path": .string(link.link.path), "state": .string(link.state.rawValue)]))
                 if !options.json {
                     print(

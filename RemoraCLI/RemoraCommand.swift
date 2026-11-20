@@ -174,7 +174,7 @@ struct AppCommand: AsyncParsableCommand {
     }
     struct Show: AsyncParsableCommand {
         enum Page: String, ExpressibleByArgument { case connections, settings }
-        static let configuration = CommandConfiguration(abstract: "Show and activate Remora.")
+        static let configuration = CommandConfiguration(abstract: "Show and activate \(AppIdentity.current.name).")
         @OptionGroup var options: CommonOptions
         @Option(help: "Open connections or settings.") var page: Page?
         @MainActor func run() async throws {
@@ -214,12 +214,12 @@ enum Output {
         guard case .success(let value) = response else { return }
         if case .object(let fields) = value, case .bool(let running) = fields["running"] {
             guard running else {
-                print("Remora is not running.")
+                print("\(AppIdentity.current.name) is not running.")
                 return
             }
             let hidden = fields["hidden"] == .bool(true)
             let visible = fields["windowVisible"] == .bool(true)
-            print("Remora is running. Main window: \(visible ? "open" : "closed"). App: \(hidden ? "hidden" : "shown").")
+            print("\(AppIdentity.current.name) is running. Main window: \(visible ? "open" : "closed"). App: \(hidden ? "hidden" : "shown").")
         } else if case .object(let fields) = value, case .array(let commands) = fields["commands"] {
             for case .string(let command) in commands { print(command) }
         } else if value == .object([:]) || value == .object(["quitting": .bool(true)]) {

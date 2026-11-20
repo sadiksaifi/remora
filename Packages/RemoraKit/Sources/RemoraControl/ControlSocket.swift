@@ -3,16 +3,10 @@ import Foundation
 import Network
 
 public struct ControlEndpoint: Sendable {
-    /// Remora and Remora Dev each listen in their own folder.
-    static let defaultPath = "/tmp/\(AppIdentity.current.commandName)-\(getuid())/control.sock"
-    public let path: String
-
-    public init(environment: [String: String] = ProcessInfo.processInfo.environment) throws {
-        path = environment["REMORA_SOCKET"] ?? Self.defaultPath
-        guard path.hasPrefix("/"), !path.utf8.contains(0), path.utf8.count < 104 else {
-            throw ControlFailure(.invalidArgument, "The control socket needs an absolute path shorter than 104 UTF-8 bytes.")
-        }
-    }
+    /// The folder is named after the app's bundle identifier, so the CLI reaches only the app that contains it,
+    /// never the other variant or an older Remora that used /tmp/remora-<uid>.
+    public let path = "/tmp/\(AppIdentity.current.bundleIdentifier)-\(getuid())/control.sock"
+    public init() {}
 }
 
 /// One request per connection. Callers may retry readiness probes, never a submitted mutation.
@@ -123,12 +117,8 @@ public actor ControlServer {
     public func start() async throws {
         guard listener == nil else { return }
         let directory = URL(fileURLWithPath: endpoint.path).deletingLastPathComponent()
-        if endpoint.path == ControlEndpoint.defaultPath {
-            try FileManager.default.createDirectory(
-                at: directory, withIntermediateDirectories: true,
-                attributes: [.posixPermissions: 0o700])
-            try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: directory.path)
-        }
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: directory.path)
         if FileManager.default.fileExists(atPath: endpoint.path) {
             let probe = NWConnection(to: .unix(path: endpoint.path), using: .tcp)
             defer { probe.cancel() }

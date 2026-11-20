@@ -262,7 +262,6 @@
 /* Begin PBXShellScriptBuildPhase section */
 		21CCABC3DA2DAF02DC43C0E8 /* Bundle agent skill */ = {
 			isa = PBXShellScriptBuildPhase;
-			alwaysOutOfDate = 1;
 			buildActionMask = 2147483647;
 			files = (
 			);
@@ -275,10 +274,11 @@
 			outputFileListPaths = (
 			);
 			outputPaths = (
+				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/skills/$(REMORA_COMMAND)/SKILL.md",
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
-			shellScript = "command=$(echo \"$PRODUCT_NAME\" | tr 'A-Z ' 'a-z-')\nskill=\"$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/skills/$command\"\nmkdir -p \"$skill\"\nsed -e \"s/^name: remora$/name: $command/\" -e \"s/\\`remora/\\`$command/g\" \"$SRCROOT/skills/remora/SKILL.md\" > \"$skill/SKILL.md\"\n";
+			shellScript = "sed -e \"s/^name: remora$/name: $REMORA_COMMAND/\" -e \"s/\\`remora/\\`$REMORA_COMMAND/g\" \"$SCRIPT_INPUT_FILE_0\" > \"$SCRIPT_OUTPUT_FILE_0\"\n";
 		};
 		512B769278C98AA32BA65E82 /* Check agent help */ = {
 			isa = PBXShellScriptBuildPhase;
@@ -290,6 +290,7 @@
 			);
 			inputPaths = (
 				"$(SRCROOT)/skills/remora/SKILL.md",
+				"$(TARGET_BUILD_DIR)/$(CONTENTS_FOLDER_PATH)/Helpers/remora",
 			);
 			name = "Check agent help";
 			outputFileListPaths = (
@@ -346,6 +347,7 @@
 				COMBINE_HIDPI_IMAGES = YES;
 				CREATE_INFOPLIST_SECTION_IN_BINARY = YES;
 				DEVELOPMENT_TEAM = LZ3V3WUPWR;
+				ENTITLEMENTS_REQUIRED = NO;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = "$(REMORA_NAME)";
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -455,6 +457,7 @@
 				PRODUCT_BUNDLE_IDENTIFIER = "$(REMORA_BUNDLE_IDENTIFIER)";
 				PRODUCT_MODULE_NAME = Remora;
 				PRODUCT_NAME = "$(REMORA_NAME)";
+				REMORA_COMMAND = "$(PRODUCT_NAME:rfc1034identifier:lower)";
 				SDKROOT = macosx;
 			};
 			name = Release;
@@ -481,6 +484,7 @@
 				PRODUCT_BUNDLE_IDENTIFIER = "$(REMORA_BUNDLE_IDENTIFIER)";
 				PRODUCT_MODULE_NAME = Remora;
 				PRODUCT_NAME = "$(REMORA_NAME)";
+				REMORA_COMMAND = "$(PRODUCT_NAME:rfc1034identifier:lower)";
 				SDKROOT = macosx;
 			};
 			name = Debug;
@@ -558,6 +562,7 @@
 				COMBINE_HIDPI_IMAGES = YES;
 				CREATE_INFOPLIST_SECTION_IN_BINARY = YES;
 				DEVELOPMENT_TEAM = LZ3V3WUPWR;
+				ENTITLEMENTS_REQUIRED = NO;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = "$(REMORA_NAME)";
 				LD_RUNPATH_SEARCH_PATHS = (
