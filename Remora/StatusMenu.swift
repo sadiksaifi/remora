@@ -9,6 +9,7 @@ final class StatusMenu: NSObject, NSMenuDelegate {
     private let sessionTabs: SessionTabs
     /// Owns the agent control actions and their validation, which work while its window is closed.
     private let windowController: MainWindowController
+    private let updater: AppUpdater
     private let onOpen: () -> Void
     private let onShowTab: (UUID) -> Void
     private let onShowSettings: () -> Void
@@ -17,17 +18,20 @@ final class StatusMenu: NSObject, NSMenuDelegate {
     init(
         sessionTabs: SessionTabs,
         windowController: MainWindowController,
+        updater: AppUpdater,
         onOpen: @escaping () -> Void,
         onShowTab: @escaping (UUID) -> Void,
         onShowSettings: @escaping () -> Void
     ) {
         self.sessionTabs = sessionTabs
         self.windowController = windowController
+        self.updater = updater
         self.onOpen = onOpen
         self.onShowTab = onShowTab
         self.onShowSettings = onShowSettings
         super.init()
-        statusItem.button?.image = Self.barIcon()
+        updateIcon()
+        updater.onUpdateWaitingChange = { [weak self] in self?.updateIcon() }
         let menu = NSMenu()
         menu.delegate = self
         statusItem.menu = menu
@@ -46,6 +50,7 @@ final class StatusMenu: NSObject, NSMenuDelegate {
         ).target = windowController
         menu.addItem(.separator())
         addItem("Settings…", #selector(showSettings(_:)), key: ",", to: menu)
+        if let checkForUpdates = updater.makeMenuItem() { menu.addItem(checkForUpdates) }
         menu.addItem(.separator())
         menu.addItem(withTitle: "Quit \(AppIdentity.current.name)", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
             .target = NSApplication.shared
@@ -79,9 +84,12 @@ final class StatusMenu: NSObject, NSMenuDelegate {
         return item
     }
 
+    private func updateIcon() { statusItem.button?.image = Self.barIcon(marked: updater.updateWaiting) }
+
     /// The menu bar icon: the display symbol with the pointer over its lower right corner, as in the app icon.
     /// No system symbol pairs the two, so both are drawn into one template image.
-    private static func barIcon() -> NSImage? {
+    /// A dot in the upper right corner marks an update that waits for the user.
+    private static func barIcon(marked: Bool) -> NSImage? {
         func symbol(_ name: String, _ pointSize: CGFloat, _ colors: [NSColor]) -> NSImage? {
             NSImage(systemSymbolName: name, accessibilityDescription: nil)?
                 .withSymbolConfiguration(.init(pointSize: pointSize, weight: .medium).applying(.init(paletteColors: colors)))
@@ -99,10 +107,18 @@ final class StatusMenu: NSObject, NSMenuDelegate {
                 pointer.draw(in: pointerRect.offsetBy(dx: gap * cos(angle), dy: gap * sin(angle)), from: .zero, operation: .destinationOut, fraction: 1)
             }
             pointer.draw(in: pointerRect)
+            if marked {
+                let dot = NSRect(x: displayRect.maxX - 5, y: displayRect.maxY - 5, width: 5, height: 5)
+                NSColor.black.setFill()
+                NSGraphicsContext.current?.compositingOperation = .destinationOut
+                NSBezierPath(ovalIn: dot.insetBy(dx: -gap, dy: -gap)).fill()
+                NSGraphicsContext.current?.compositingOperation = .sourceOver
+                NSBezierPath(ovalIn: dot).fill()
+            }
             return true
         }
         image.isTemplate = true
-        image.accessibilityDescription = AppIdentity.current.name
+        image.accessibilityDescription = marked ? "\(AppIdentity.current.name), update available" : AppIdentity.current.name
         return image
     }
 

@@ -1,6 +1,7 @@
 import AppKit
 import RemoraControl
 import RemoraCore
+import Sparkle
 import SwiftUI
 
 /// Remora's settings in user defaults, also exposed by the command line.
@@ -32,9 +33,12 @@ extension NSApplication {
 
 /// The Settings scene's content. It holds only settings that change existing behavior.
 struct SettingsView: View {
+    /// Nil in a build without updates, such as Remora Dev.
+    let updater: SPUUpdater?
+
     var body: some View {
         TabView {
-            Tab("General", systemImage: "gearshape") { GeneralPane() }
+            Tab("General", systemImage: "gearshape") { GeneralPane(updater: updater) }
             Tab("Command Line", systemImage: "terminal") { CommandLinePane() }
         }
     }
@@ -67,6 +71,7 @@ private struct StatusLabel: View {
 }
 
 private struct GeneralPane: View {
+    let updater: SPUUpdater?
     @AppStorage(SystemShortcutCapture.enabledKey) private var captureShortcuts = true
     @AppStorage(AppSettings.showKeyPressesKey) private var showKeyPresses = false
     @AppStorage(AppSettings.keyPressSizeKey) private var keyPressSize = 1.0
@@ -147,6 +152,7 @@ private struct GeneralPane: View {
                 .accessibilityLabel(Self.pointerTitle)
                 .accessibilityIdentifier("showPointerInRecordings")
             }
+            if let updater { UpdatesSection(updater: updater) }
         }
         .settingsPane()
         .fileImporter(isPresented: $choosingFolder, allowedContentTypes: [.folder]) { result in
@@ -156,6 +162,29 @@ private struct GeneralPane: View {
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             trusted = SystemShortcutCapture.isTrusted
         }
+    }
+}
+
+/// The choices Sparkle's first prompt offers, so they can change later. Setting them through the updater
+/// lets Sparkle reschedule its checks at once. The switches follow the updater, which also changes when the prompt is answered.
+private struct UpdatesSection: View {
+    let updater: SPUUpdater
+    @State private var checks = false
+    @State private var installs = false
+
+    var body: some View {
+        Section("Updates") {
+            Toggle("Check for updates automatically", isOn: Binding(get: { checks }, set: { updater.automaticallyChecksForUpdates = $0 }))
+                .accessibilityIdentifier("checkForUpdates")
+            Toggle(
+                "Download and install updates automatically",
+                isOn: Binding(get: { installs }, set: { updater.automaticallyDownloadsUpdates = $0 })
+            )
+            .disabled(!checks)
+            .accessibilityIdentifier("installUpdates")
+        }
+        .onReceive(updater.publisher(for: \.automaticallyChecksForUpdates)) { checks = $0 }
+        .onReceive(updater.publisher(for: \.automaticallyDownloadsUpdates)) { installs = $0 }
     }
 }
 

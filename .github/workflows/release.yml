@@ -2,8 +2,8 @@ name: Release
 
 # A pushed v* tag builds, signs, notarizes and publishes that release.
 # A manual run on main is a rehearsal: it builds, signs and notarizes version 0.0.0 and uploads
-# the DMG as a workflow artifact without creating a release. Tagsmith starts counting at 0.0.0,
-# so no release tag can have that version.
+# the DMG and its appcast as a workflow artifact without creating a release. Tagsmith starts
+# counting at 0.0.0, so no release tag can have that version.
 on:
   push:
     tags: ["v*"]
@@ -76,12 +76,18 @@ jobs:
       - uses: actions/checkout@v7
         with:
           ref: ${{ github.sha }}
+          # The appcast embeds the release notes, which cover the commits since the previous release tag.
+          fetch-depth: 0
           persist-credentials: false
       # This job holds the signing secrets, so it restores no cache that another run wrote.
       - uses: jdx/mise-action@v5
         with:
-          install_args: cmake xcodegen
+          install_args: cmake xcodegen git-cliff
           cache: false
+      # Fails before the long build when either Sparkle key is missing.
+      - run: mise run release:keys --private
+        env:
+          SPARKLE_ED_PRIVATE_KEY: ${{ secrets.SPARKLE_ED_PRIVATE_KEY }}
       # The engine builds third-party code, so it runs before the certificate is in a keychain.
       - run: mise run engine
       # The action would leave a decoded certificate on disk until the runner is cleaned up.
@@ -101,6 +107,9 @@ jobs:
           NOTARY_KEY_P8_BASE64: ${{ secrets.NOTARY_KEY_P8_BASE64 }}
           NOTARY_KEY_ID: ${{ secrets.NOTARY_KEY_ID }}
           NOTARY_ISSUER_ID: ${{ secrets.NOTARY_ISSUER_ID }}
+      - run: mise run release:appcast
+        env:
+          SPARKLE_ED_PRIVATE_KEY: ${{ secrets.SPARKLE_ED_PRIVATE_KEY }}
       - uses: actions/upload-artifact@v7
         with:
           name: Remora-${{ env.VERSION }}

@@ -31,6 +31,7 @@
 - **Screenshots and recordings**: Capture a screenshot or record HEVC video, even from a tab you are not looking at.
 - **Shared clipboard**: In RDP and standard VNC, text copied on either side pastes on the other while you control the focused session.
 - **Passwords and encryption**: Passwords stay in your keychain. Standard VNC requires certificate TLS when the server offers VeNCrypt. Apple mode and VNC servers without VeNCrypt send the desktop unencrypted.
+- **Automatic updates**: Remora updates itself in the background with Sparkle.
 - **CLI**: `remora` opens sessions, captures screens, sends input and manages saved connections. Run `remora --help` for the full list.
 
 ## Install
