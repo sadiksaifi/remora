@@ -76,12 +76,18 @@ jobs:
       - uses: actions/checkout@v7
         with:
           ref: ${{ github.sha }}
+          # The appcast embeds the release notes, which cover the commits since the previous release tag.
+          fetch-depth: 0
           persist-credentials: false
       # This job holds the signing secrets, so it restores no cache that another run wrote.
       - uses: jdx/mise-action@v5
         with:
-          install_args: cmake xcodegen
+          install_args: cmake xcodegen git-cliff
           cache: false
+      # Fails before the long build when either Sparkle key is missing.
+      - run: mise run release:keys --private
+        env:
+          SPARKLE_ED_PRIVATE_KEY: ${{ secrets.SPARKLE_ED_PRIVATE_KEY }}
       # The engine builds third-party code, so it runs before the certificate is in a keychain.
       - run: mise run engine
       # The action would leave a decoded certificate on disk until the runner is cleaned up.

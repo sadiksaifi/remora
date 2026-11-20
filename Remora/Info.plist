@@ -6,5 +6,7 @@
 	<string>$(REMORA_UPDATE_FEED_URL)</string>
 	<key>SUPublicEDKey</key>
 	<string>$(REMORA_SPARKLE_PUBLIC_KEY)</string>
+	<key>SUVerifyUpdateBeforeExtraction</key>
+	<true/>
 </dict>
 </plist>

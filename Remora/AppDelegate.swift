@@ -8,7 +8,7 @@ import os
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var mainWindowController: MainWindowController?
     private let updater = AppUpdater()
-    private lazy var settings = NSHostingSceneRepresentation { [updater] in Settings { SettingsView(showsUpdates: updater.isAvailable) } }
+    private lazy var settings = NSHostingSceneRepresentation { [updater] in Settings { SettingsView(updater: updater.sparkle) } }
     private var statusMenu: StatusMenu?
     private var sessionTabs: SessionTabs?
     private var commandLineController: CommandLineController?
