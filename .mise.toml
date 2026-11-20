@@ -113,3 +113,132 @@ run = "tagsmith tag --channel stable --version {{usage.version | quote}} --push 
 description = "Validate a release tag on origin and write its facts to $GITHUB_OUTPUT."
 usage = 'arg "<tag>" help="Release tag, for example v1.2.3"'
 run = "tagsmith validate --tag {{usage.tag | quote}} --github-output"
+
+# The release tasks build the signed and notarized DMG in build/release/dist. On CI they run in
+# .github/workflows/release.yml. Locally they need the Developer ID Application certificate in a
+# keychain, and release:notarize needs the same NOTARY_* variables as the workflow.
+
+[tasks."release:app"]
+description = "Archive, sign and verify Remora.app with the Developer ID certificate."
+usage = 'arg "<version>" help="App version, for example 1.2.3"'
+depends = ["engine", "xcodeproj"]
+run = '''
+#!/usr/bin/env bash
+set -euo pipefail
+version={{usage.version | quote}}
+[[ $version =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]] || { echo "$version is not an X.Y.Z version" >&2; exit 1; }
+team=LZ3V3WUPWR
+out=build/release
+rm -rf "$out/Remora.xcarchive" "$out/export"
+mkdir -p "$out"
+# Sparkle compares CFBundleVersion, so both versions are the release version.
+xcodebuild -project Remora.xcodeproj -scheme Remora -configuration Release -derivedDataPath build/DerivedData \
+    -destination 'generic/platform=macOS' -archivePath "$out/Remora.xcarchive" -quiet archive \
+    CODE_SIGN_STYLE=Manual CODE_SIGN_IDENTITY="Developer ID Application" DEVELOPMENT_TEAM="$team" \
+    MARKETING_VERSION="$version" CURRENT_PROJECT_VERSION="$version"
+options="$out/ExportOptions.plist"
+plutil -create xml1 "$options"
+plutil -insert method -string developer-id "$options"
+plutil -insert signingStyle -string manual "$options"
+plutil -insert teamID -string "$team" "$options"
+xcodebuild -exportArchive -archivePath "$out/Remora.xcarchive" -exportOptionsPlist "$options" -exportPath "$out/export" -quiet
+
+app="$out/export/Remora.app"
+codesign --verify --deep --strict --verbose=2 "$app"
+# A Developer ID Application certificate of the team.
+requirement="anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] and certificate leaf[field.1.2.840.113635.100.6.1.13] and certificate leaf[subject.OU] = \"$team\""
+for code in "$app" "$app/Contents/Helpers/remora"; do
+    codesign --verify --strict -R="$requirement" "$code"
+    details=$(codesign --display --verbose=2 "$code" 2>&1)
+    [[ $details =~ flags=0x[0-9a-f]+\([^\)]*runtime ]] || { echo "$code lacks the hardened runtime" >&2; exit 1; }
+    entitlements=$(codesign --display --entitlements - --xml "$code" 2>/dev/null)
+    [[ $entitlements != *get-task-allow* ]] || { echo "$code has the get-task-allow entitlement" >&2; exit 1; }
+done
+echo "Signed and verified $app $version"
+'''
+
+[tasks."release:dmg"]
+description = "Build and sign the DMG from the app that release:app built."
+run = '''
+#!/usr/bin/env bash
+set -euo pipefail
+app=build/release/export/Remora.app
+version=$(plutil -extract CFBundleShortVersionString raw -o - "$app/Contents/Info.plist")
+stage=build/release/dmg
+dist=build/release/dist
+dmg="$dist/Remora-$version-macos-arm64.dmg"
+rm -rf "$stage" "$dist"
+mkdir -p "$stage" "$dist"
+ditto "$app" "$stage/Remora.app"
+ln -s /Applications "$stage/Applications"
+hdiutil create -quiet -fs APFS -format ULFO -volname Remora -srcfolder "$stage" "$dmg"
+codesign --sign "Developer ID Application" --timestamp "$dmg"
+codesign --verify --strict --verbose=2 "$dmg"
+'''
+
+[tasks."release:notarize"]
+description = "Notarize and staple the DMG, assess it with Gatekeeper, and write SHA256SUMS."
+run = '''
+#!/usr/bin/env bash
+set -euo pipefail
+: "${NOTARY_KEY_P8_BASE64:?Set it to the base64 App Store Connect API key (.p8)}"
+: "${NOTARY_KEY_ID:?Set it to the API key ID}"
+: "${NOTARY_ISSUER_ID:?Set it to the API key issuer ID}"
+dist=build/release/dist
+version=$(plutil -extract CFBundleShortVersionString raw -o - build/release/export/Remora.app/Contents/Info.plist)
+dmg="$dist/Remora-$version-macos-arm64.dmg"
+key=$(mktemp)
+mount=
+cleanup() {
+    rm -f "$key"
+    if [[ -n $mount ]]; then hdiutil detach -quiet "$mount" && rmdir "$mount"; fi
+}
+trap cleanup EXIT
+base64 --decode <<<"$NOTARY_KEY_P8_BASE64" > "$key"
+auth=(--key "$key" --key-id "$NOTARY_KEY_ID" --issuer "$NOTARY_ISSUER_ID")
+
+result=$(xcrun notarytool submit "$dmg" "${auth[@]}" --wait --timeout 1h --output-format json) || true
+id=$(jq -r '.id // empty' <<<"$result" 2>/dev/null || true)
+status=$(jq -r '.status // empty' <<<"$result" 2>/dev/null || true)
+# The log lists every issue, including warnings on an accepted submission.
+if [[ -n $id ]]; then xcrun notarytool log "$id" "${auth[@]}"; fi
+[[ $status == Accepted ]] || { echo "Notarization did not succeed: ${result:-no response}" >&2; exit 1; }
+xcrun stapler staple "$dmg"
+xcrun stapler validate "$dmg"
+
+spctl --assess --type open --context context:primary-signature --verbose=2 "$dmg"
+mount=$(mktemp -d)
+hdiutil attach -quiet -nobrowse -readonly -mountpoint "$mount" "$dmg"
+spctl --assess --type exec --verbose=2 "$mount/Remora.app"
+(cd "$dist" && shasum -a 256 "${dmg##*/}" > SHA256SUMS)
+cat "$dist/SHA256SUMS"
+'''
+
+[tasks."release:publish"]
+description = "Create the GitHub release for a tag with the DMG and SHA256SUMS in build/release/dist."
+usage = '''
+arg "<tag>" help="Stable release tag, for example v1.2.3"
+arg "<commit>" help="Commit the tag must point to on origin"
+'''
+run = '''
+#!/usr/bin/env bash
+set -euo pipefail
+tag={{usage.tag | quote}}
+commit={{usage.commit | quote}}
+version=${tag#v}
+dist=build/release/dist
+dmg="Remora-$version-macos-arm64.dmg"
+# SHA256SUMS must list only this DMG, and the DMG must match it.
+[[ $(cut -d ' ' -f 3- "$dist/SHA256SUMS") == "$dmg" ]] || { echo "$dist/SHA256SUMS does not list only $dmg" >&2; exit 1; }
+(cd "$dist" && shasum -a 256 --check SHA256SUMS)
+notes=$(mktemp)
+trap 'rm -f "$notes"' EXIT
+{
+    echo "[![Download for macOS](https://img.shields.io/badge/Download-macOS-10B981?style=for-the-badge&labelColor=1F2937&logo=apple&logoColor=white)](https://github.com/sadiksaifi/remora/releases/download/$tag/$dmg)"
+    echo
+    mise run release:notes:tag "$tag"
+} > "$notes"
+remote=$(gh api "repos/{owner}/{repo}/commits/refs/tags/$tag" --jq .sha)
+[[ $remote == "$commit" ]] || { echo "Tag $tag points to $remote on origin, not $commit" >&2; exit 1; }
+gh release create "$tag" --verify-tag --latest --title "Remora $version" --notes-file "$notes" "$dist/$dmg" "$dist/SHA256SUMS"
+'''
