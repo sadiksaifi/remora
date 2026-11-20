@@ -1,6 +1,7 @@
 import Darwin
 import Foundation
 import RemoraCore
+import Synchronization
 import Testing
 import VNCSession
 
@@ -207,9 +208,19 @@ private struct DiscardFrames: FrameSink { func consume(_ frame: BorrowedFrame) {
 @Test @MainActor func vncPartialFrameCancellationDoesNotStrandAnAdmittedAgentSend() async throws {
     let peer = try StalledPeer(partialFrame: true)
     defer { peer.stop() }
+    // The agent key's feedback runs on the worker after its write and before its receipt resolves,
+    // so the disconnect always starts while that admitted send is outstanding.
+    let owner = Mutex<VNCSession?>(nil)
+    let disconnectedAt = Mutex<ContinuousClock.Instant?>(nil)
     let session = VNCSession(
         configuration: .init(host: "127.0.0.1", port: peer.port, username: "", desktopSize: .init(width: 16, height: 16)), frameSink: DiscardFrames(),
-        certificateStoreURL: unusedPins)
+        inputFeedback: { source, event in
+            guard case .agent = source, case .key(_, true, _) = event else { return }
+            disconnectedAt.withLock { $0 = .now }
+            owner.withLock { $0 }?.disconnect()
+        }, certificateStoreURL: unusedPins)
+    owner.withLock { $0 = session }
+    defer { owner.withLock { $0 = nil } }
     session.connect()
     let fallback = Task {
         do {
@@ -220,20 +231,21 @@ private struct DiscardFrames: FrameSink { func consume(_ frame: BorrowedFrame) {
     }
     defer { fallback.cancel() }
     var request: (any AgentInputRequest)?
-    var started = ContinuousClock.now
+    var send: Task<Void, any Error>?
     for await event in session.events {
         if case .stateChanged(.connected) = event {
             try await Task.sleep(for: .milliseconds(100))
             let input = try #require(session.beginAgentInput())
             request = input
-            // The worker acknowledges the admitted send during the stalled read. A fixed sleep here raced
-            // the send's own submission, which a loaded machine could run after the cancellation.
-            try await input.send(.key(try PhysicalKey.chord("ShiftLeft")[0], down: true), deadline: .now.advanced(by: .seconds(10)))
-            started = .now
-            session.disconnect()
+            let key = try PhysicalKey.chord("ShiftLeft")[0]
+            send = Task { try await input.send(.key(key, down: true), deadline: .now.advanced(by: .seconds(10))) }
         }
     }
-    #expect(started.duration(to: .now) < .seconds(1))
+    let disconnected = try #require(disconnectedAt.withLock { $0 })
+    #expect(disconnected.duration(to: .now) < .seconds(1))
+    // The admitted send settles with the session, acknowledged or ended, long before its own deadline.
+    do { try await #require(send).value } catch let failure as AgentInputFailure { #expect(failure == .sessionEnded) }
+    #expect(disconnected.duration(to: .now) < .seconds(1))
     #expect(await request?.finish() == false)
 }
 
