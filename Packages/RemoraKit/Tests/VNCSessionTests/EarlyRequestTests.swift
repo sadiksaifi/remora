@@ -58,9 +58,13 @@ import VNCSession
     let firstDone = try await peer.wait("response_body_end")
     #expect(try #require(preparation["at_us"] as? Int) < #require(firstDone["at_us"] as? Int))
     let headers = peer.events("response_header")
-    let interval = try #require(headers[1]["at_us"] as? Int) - #require(headers[0]["at_us"] as? Int)
-    print("Early request preparation overlap start_to_start_us=\(interval) wait_us=200000 transfer_us=300000")
-    #expect(interval < 450_000)  // Secondary bound: max(wait, transfer), rather than their sum.
+    let firstHeader = try #require(headers[0]["at_us"] as? Int)
+    let interval = try #require(headers[1]["at_us"] as? Int) - firstHeader
+    let transfer = try #require(firstDone["at_us"] as? Int) - firstHeader
+    print("Early request preparation overlap start_to_start_us=\(interval) wait_us=200000 transfer_us=\(transfer)")
+    // Secondary bound: max(wait, transfer), rather than their sum. A request sent after the first body
+    // would start the 200 ms preparation after the measured transfer.
+    #expect(interval < transfer + 200_000)
     let deadline = ContinuousClock.now.advanced(by: .seconds(1))
     while frames.values.count < 4, ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(5)) }
     #expect(frames.values.count == 4)

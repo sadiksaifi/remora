@@ -550,7 +550,10 @@ def serve_once(offer_mode, outcome, port):
                             compressed = synthetic_zrle(dimension)
                             report['compressed_bytes'] = len(compressed)
                             send(struct.pack('>BBHHHHHiI', 0, 0, 1, 0, 0, dimension, dimension, 16, len(compressed)))
-                            chunk = 4 if dimension == 16 else 512
+                            # 120 separate writes give the client more than the 100 readiness wakeups that the old
+                            # retry count allowed. A fixed count, not a fixed size, keeps the whole delivery inside
+                            # the client's 10 s read deadline where each short sleep takes far longer than 5 ms.
+                            chunk = -(-len(compressed) // 120)
                             began = time.monotonic()
                             report['sent_bytes'] = 0
                             try:

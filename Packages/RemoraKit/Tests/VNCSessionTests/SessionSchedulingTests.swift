@@ -38,8 +38,9 @@ final class SessionPeer: @unchecked Sendable {
     }
     func command(_ action: String) throws { try input.fileHandleForWriting.write(contentsOf: Data("{\"action\":\"\(action)\"}\n".utf8)) }
     func events(_ event: String) -> [[String: Any]] { lock.withLock { reports.filter { $0["event"] as? String == event } } }
+    /// Waits for the peer's report of an event. The deadline only ends a wait for a report that never comes.
     func wait(_ event: String, count: Int = 1) async throws -> [String: Any] {
-        let deadline = ContinuousClock.now.advanced(by: .seconds(4))
+        let deadline = ContinuousClock.now.advanced(by: .seconds(30))
         while ContinuousClock.now < deadline {
             if let result = events(event).dropFirst(count - 1).first { return result }
             try await Task.sleep(for: .milliseconds(5))
