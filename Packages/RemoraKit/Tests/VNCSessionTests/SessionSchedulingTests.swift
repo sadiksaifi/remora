@@ -1,5 +1,4 @@
 import Foundation
-import OSLog
 import RemoraCore
 import Synchronization
 import Testing
@@ -229,20 +228,7 @@ final class MarkerFrames: FrameSink, @unchecked Sendable {
     for await _ in session.events {}
     #expect(frames.values.isEmpty)
     let attemptID = session.handshakeAttemptID
-    let messages = try await Task.detached {
-        let store = try OSLogStore(scope: .currentProcessIdentifier)
-        let predicate = NSPredicate(format: "subsystem == %@ AND category == %@", "com.peblon.remora", "VNC")
-        let deadline = ContinuousClock.now.advanced(by: .seconds(2))
-        var messages: [String] = []
-        repeat {
-            messages = try store.getEntries(at: store.position(date: started), matching: predicate)
-                .compactMap { ($0 as? OSLogEntryLog)?.composedMessage }
-                .filter { $0.hasPrefix("Runtime failure attempt=\(attemptID) ") }
-            if !messages.isEmpty { break }
-            try await Task.sleep(for: .milliseconds(25))
-        } while ContinuousClock.now < deadline
-        return messages
-    }.value
+    let messages = try await localVNCLog(since: started, matching: { $0.hasPrefix("Runtime failure attempt=\(attemptID) ") }) { !$0.isEmpty }
     #expect(messages.count == 1)
     let message = try #require(messages.first)
     print("After in-read input: \(message)")
