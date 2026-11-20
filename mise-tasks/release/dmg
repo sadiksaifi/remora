@@ -3,13 +3,11 @@
 set -euo pipefail
 app=build/release/export/Remora.app
 version=$(plutil -extract CFBundleShortVersionString raw -o - "$app/Contents/Info.plist")
-stage=build/release/dmg
 dist=build/release/dist
 dmg="$dist/Remora-$version-macos-arm64.dmg"
-rm -rf "$stage" "$dist"
-mkdir -p "$stage" "$dist"
-ditto "$app" "$stage/Remora.app"
-ln -s /Applications "$stage/Applications"
-hdiutil create -quiet -fs APFS -format ULFO -volname Remora -srcfolder "$stage" "$dmg"
+rm -rf "$dist"
+mkdir -p "$dist"
+# assets/dmg/settings.py sets the window size, the background and the icon positions.
+dmgbuild -s assets/dmg/settings.py -D app="$app" Remora "$dmg"
 codesign --sign "Developer ID Application" --timestamp "$dmg"
 codesign --verify --strict --verbose=2 "$dmg"

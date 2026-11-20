@@ -82,7 +82,7 @@ jobs:
       # This job holds the signing secrets, so it restores no cache that another run wrote.
       - uses: jdx/mise-action@v5
         with:
-          install_args: cmake xcodegen git-cliff
+          install_args: cmake xcodegen git-cliff uv pipx:dmgbuild
           cache: false
       # The engine builds third-party code, so it runs before the certificate is in a keychain.
       - run: mise run engine
