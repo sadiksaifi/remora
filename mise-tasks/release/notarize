@@ -30,6 +30,8 @@ xcrun stapler validate "$dmg"
 spctl --assess --type open --context context:primary-signature --verbose=2 "$dmg"
 mount=$(mktemp -d)
 hdiutil attach -quiet -nobrowse -readonly -mountpoint "$mount" "$dmg"
+# dmgbuild ignores a failed copy, and Finder metadata on the bundle breaks a strict signature check.
+codesign --verify --deep --strict --verbose=2 "$mount/Remora.app"
 spctl --assess --type exec --verbose=2 "$mount/Remora.app"
 (cd "$dist" && shasum -a 256 "${dmg##*/}" > SHA256SUMS)
 cat "$dist/SHA256SUMS"

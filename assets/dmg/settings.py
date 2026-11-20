@@ -10,7 +10,6 @@ format = "ULFO"
 filesystem = "APFS"
 files = [app]
 symlinks = {"Applications": "/Applications"}
-hide_extensions = [os.path.basename(app)]
 icon = os.path.join(app, "Contents/Resources/AppIcon.icns")
 background = "assets/dmg/background.png"
 # The height adds 32 points for the title bar above the 660 x 400 background.

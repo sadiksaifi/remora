@@ -9,9 +9,10 @@ jactionlint = "2.6.0"
 zizmor = "1.32.0"
 # jactionlint checks workflow run scripts with ShellCheck.
 shellcheck = "0.11.0"
-# dmgbuild lays out the release DMG window. mise installs it with uv.
+# dmgbuild lays out the release DMG window. uv installs it with exact dependency versions,
+# because the release job runs it while the signing identity is in the keychain.
 uv = "0.13.7"
-"pipx:dmgbuild" = "1.6.7"
+"pipx:dmgbuild" = { version = "1.6.7", uvx_args = "--with ds_store==1.3.3 --with mac_alias==2.2.3" }
 # aube refuses packages under 1000 weekly downloads; Tagsmith is published by the Remora owner.
 "npm:tagsmith" = { version = "1.2.1", allow_low_downloads = true }
 
