@@ -5,6 +5,10 @@ cocogitto = "7.0.0"
 lefthook = "2.2.2"
 git-cliff = "2.14.2"
 node = "26.13.1"
+jactionlint = "2.6.0"
+zizmor = "1.32.0"
+# jactionlint checks workflow run scripts with ShellCheck.
+shellcheck = "0.11.0"
 # aube refuses packages under 1000 weekly downloads; Tagsmith is published by the Remora owner.
 "npm:tagsmith" = { version = "1.2.1", allow_low_downloads = true }
 
@@ -18,11 +22,18 @@ description = "Regenerate Remora.xcodeproj from project.yml."
 run = "xcodegen generate --quiet"
 
 [tasks.build]
-description = "Build the Debug app, Remora Dev, and verify its Apple-issued signature."
+description = "Build the Debug app, Remora Dev, and verify its Apple-issued signature. With REMORA_AD_HOC_SIGNING set, as on CI, sign it ad hoc and verify that signature instead."
 depends = ["engine", "xcodeproj"]
 run = [
-    "xcodebuild -project Remora.xcodeproj -scheme Remora -configuration Debug -derivedDataPath build/DerivedData -quiet build",
-    "codesign --verify --deep --strict -R='anchor apple generic' 'build/DerivedData/Build/Products/Debug/Remora Dev.app'",
+    "xcodebuild -project Remora.xcodeproj -scheme Remora -configuration Debug -derivedDataPath build/DerivedData -quiet build ${REMORA_AD_HOC_SIGNING:+CODE_SIGN_STYLE=Manual CODE_SIGN_IDENTITY=- DEVELOPMENT_TEAM=}",
+    '''
+app='build/DerivedData/Build/Products/Debug/Remora Dev.app'
+if [ -n "${REMORA_AD_HOC_SIGNING:-}" ]; then
+    codesign --verify --deep --strict "$app"
+else
+    codesign --verify --deep --strict -R='anchor apple generic' "$app"
+fi
+''',
 ]
 
 [tasks.launch]
@@ -54,6 +65,11 @@ run = "git diff --exit-code --stat -- Remora.xcodeproj || { echo 'Remora.xcodepr
 [tasks."setup:hooks"]
 description = "Install the Git hooks in lefthook.yml."
 run = "lefthook install"
+
+[tasks."lint:workflows"]
+description = "Lint the GitHub Actions workflows and Dependabot configuration."
+# zizmor owns the security and pinning rules, so jactionlint checks only correctness.
+run = ["jactionlint --profile correctness", "zizmor ."]
 
 [tasks."lint:commit"]
 description = "Check that a commit message file is a Conventional Commit."
