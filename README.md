@@ -14,7 +14,7 @@
 </p>
 
 <p align="center">
-  <img src="https://github.com/user-attachments/assets/af53e6e8-4ed0-4c74-8fca-7f22c9cf1403" width="100%" alt="Remora switching between macOS, Debian and Windows sessions in one window">
+  <img src="assets/demo.gif" width="100%" alt="Remora switching between macOS, Debian and Windows sessions in one window">
 </p>
 
 ## Highlights
