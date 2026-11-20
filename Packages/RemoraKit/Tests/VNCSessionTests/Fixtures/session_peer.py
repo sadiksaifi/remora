@@ -1,7 +1,12 @@
 """Literal-loopback RFB peer for public session scheduling/geometry tests.
 
-One connection, ten-second total deadline, no external hosts or credentials.
+One connection, a one-minute backstop deadline, no external hosts or credentials.
 The reader processes input independently of any paced framebuffer writer.
+A paced body goes out in a fixed number of writes, not writes of a fixed size. Where each short
+sleep takes several times longer, as on a virtualized runner, the body then still arrives well
+within the client's 10 s read deadline. In the paced-small and paced-large modes, the body stops
+halfway until the test sends `finish`, so the frame stays incomplete however late the test's
+input comes. A 5 s backstop, below the client's read deadline, then sends the rest anyway.
 """
 import json
 import selectors
@@ -11,6 +16,7 @@ import sys
 import threading
 import time
 
+PACED_WRITES = 100
 output_lock = threading.Lock()
 def report(event, **fields):
     with output_lock:
@@ -24,11 +30,12 @@ def serve():
     began = None
     intentional_close = threading.Event()
     body_finished = threading.Event()
-    deadline = time.monotonic() + 10
+    finish_body = threading.Event()
+    deadline = time.monotonic() + 60
     with socket.socket() as listener:
         listener.bind(('127.0.0.1', 0))
         listener.listen(1)
-        listener.settimeout(10)
+        listener.settimeout(60)
         report('listen', port=listener.getsockname()[1])
         connection, _ = listener.accept()
         with connection:
@@ -162,8 +169,9 @@ def serve():
                             def perf_writer():
                                 try:
                                     send(prefix)
-                                    for offset in range(0, len(first)-4, 4):
-                                        send(first[offset:min(offset+4, len(first)-4)])
+                                    step = -(-(len(first)-4) // PACED_WRITES)
+                                    for offset in range(0, len(first)-4, step):
+                                        send(first[offset:min(offset+step, len(first)-4)])
                                         if offset == 0: report('body_started')
                                         time.sleep(0.007)
                                     send(first[-4:] + tail)
@@ -193,14 +201,16 @@ def serve():
                             send(prefix)
                             def writer():
                                 try:
-                                    chunk = len(payload) if mode == 'unpaced' else (4 if dimension == 16 else 512)
+                                    chunk = len(payload) if mode == 'unpaced' else -(-len(payload) // PACED_WRITES)
                                     for offset in range(0, len(payload), chunk):
+                                        if offset == chunk*(PACED_WRITES//2) and mode.startswith('paced-'):
+                                            finish_body.wait(5)
                                         if offset+chunk >= len(payload): body_finished.set()
                                         send(payload[offset:offset+chunk])
                                         if offset == 0:
                                             report('body_started')
                                         if mode != 'unpaced':
-                                            time.sleep(0.007 if dimension == 16 else 0.004)
+                                            time.sleep(0.007)
                                     if mode == 'early-last': send(struct.pack('>HHHHi', 0, 0, 0, 0, -224))
                                     if mode == 'early-geometry':
                                         send(struct.pack('>HHHHi', 0, 0, dimension+1, dimension+1, -223))
@@ -210,6 +220,8 @@ def serve():
                                         report('error', code=type(error).__name__)
                             if mode == 'early-geometry': width = height = dimension+1
                             threading.Thread(target=writer, daemon=True).start()
+                        elif command['action'] == 'finish':
+                            finish_body.set()
                         elif command['action'] == 'stop':
                             return
                         continue
@@ -250,7 +262,7 @@ def serve():
                         if key_event[0] and mode == 'refresh':
                             marker = 2
                             update()
-                        report('key', down=key_event[0], symbol=int.from_bytes(key_event[3:], 'big'), ms=round((time.monotonic()-began)*1000) if began else 0)
+                        report('key', down=key_event[0], symbol=int.from_bytes(key_event[3:], 'big'), body_finished=body_finished.is_set(), ms=round((time.monotonic()-began)*1000) if began else 0)
                     elif kind == 5:
                         pointer = exact(5)
                         report('pointer', x=int.from_bytes(pointer[1:3], 'big'), y=int.from_bytes(pointer[3:5], 'big'), mask=pointer[0])

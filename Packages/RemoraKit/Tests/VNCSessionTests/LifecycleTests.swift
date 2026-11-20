@@ -1,6 +1,7 @@
 import Darwin
 import Foundation
 import RemoraCore
+import Synchronization
 import Testing
 import VNCSession
 
@@ -204,12 +205,35 @@ private struct DiscardFrames: FrameSink { func consume(_ frame: BorrowedFrame) {
     #expect(terminals == [.cancelledByUser])
 }
 
+/// Runs each job to its next suspension, then counts it. A send runs synchronously through its admission
+/// before it first suspends, so one counted job means the send was admitted or refused.
+private final class CountingExecutor: TaskExecutor {
+    let ran = Mutex(0)
+    private let queue = DispatchQueue(label: "VNCSessionTests.CountingExecutor")
+    func enqueue(_ job: consuming ExecutorJob) {
+        let job = UnownedJob(job)
+        queue.async {
+            job.runSynchronously(on: self.asUnownedTaskExecutor())
+            self.ran.withLock { $0 += 1 }
+        }
+    }
+}
+
 @Test @MainActor func vncPartialFrameCancellationDoesNotStrandAnAdmittedAgentSend() async throws {
     let peer = try StalledPeer(partialFrame: true)
     defer { peer.stop() }
+    // The first agent key's feedback holds the worker after its write. A second send is admitted
+    // meanwhile, and only teardown can settle it.
+    let held = Mutex(false)
+    let release = DispatchSemaphore(value: 0)
     let session = VNCSession(
         configuration: .init(host: "127.0.0.1", port: peer.port, username: "", desktopSize: .init(width: 16, height: 16)), frameSink: DiscardFrames(),
-        certificateStoreURL: unusedPins)
+        inputFeedback: { source, event in
+            guard case .agent = source, case .key(_, true, _) = event, !held.withLock({ $0 }) else { return }
+            held.withLock { $0 = true }
+            _ = release.wait(timeout: .now() + 5)
+        }, certificateStoreURL: unusedPins)
+    defer { release.signal() }
     session.connect()
     let fallback = Task {
         do {
@@ -220,26 +244,40 @@ private struct DiscardFrames: FrameSink { func consume(_ frame: BorrowedFrame) {
     }
     defer { fallback.cancel() }
     var request: (any AgentInputRequest)?
-    var send: Task<Void, any Error>?
-    var started = ContinuousClock.now
+    var first: Task<Void, any Error>?
+    var second: Task<Void, any Error>?
+    var disconnectedAt: ContinuousClock.Instant?
     for await event in session.events {
-        if case .stateChanged(.connected) = event {
-            try await Task.sleep(for: .milliseconds(100))
-            let input = try #require(session.beginAgentInput())
-            request = input
-            let key = try PhysicalKey.chord("ShiftLeft")[0]
-            send = Task { try await input.send(.key(key, down: true), deadline: .now.advanced(by: .seconds(2))) }
-            try await Task.sleep(for: .milliseconds(50))
-            started = .now
-            session.disconnect()
+        guard case .stateChanged(.connected) = event else { continue }
+        try await Task.sleep(for: .milliseconds(100))
+        let input = try #require(session.beginAgentInput())
+        request = input
+        let shift = try PhysicalKey.chord("ShiftLeft")[0]
+        first = Task { try await input.send(.key(shift, down: true), deadline: .now.advanced(by: .seconds(10))) }
+        let heldDeadline = ContinuousClock.now.advanced(by: .seconds(10))
+        while !held.withLock({ $0 }), ContinuousClock.now < heldDeadline { try await Task.sleep(for: .milliseconds(5)) }
+        try #require(held.withLock { $0 })
+        let key = try PhysicalKey.chord("KeyA")[0]
+        let executor = CountingExecutor()
+        second = Task(executorPreference: executor) {
+            try await input.send(.key(key, down: true), deadline: .now.advanced(by: .seconds(10)))
         }
+        while executor.ran.withLock({ $0 }) == 0, ContinuousClock.now < heldDeadline { try await Task.sleep(for: .milliseconds(5)) }
+        try #require(executor.ran.withLock { $0 } > 0)
+        disconnectedAt = .now
+        session.disconnect()
+        release.signal()
     }
-    #expect(started.duration(to: .now) < .seconds(1))
-    let admitted = try #require(send)
-    // Input can now be acknowledged during the read. If cancellation wins,
-    // the admitted receipt must instead terminate with the session.
-    do { try await admitted.value } catch let failure as AgentInputFailure { #expect(failure == .sessionEnded) }
-    #expect(started.duration(to: .now) < .seconds(1))
+    let disconnected = try #require(disconnectedAt)
+    // The held write finished before the disconnect, so the first send succeeds.
+    try await #require(first).value
+    do {
+        try await #require(second).value
+        Issue.record("A send admitted before the disconnect must end with the session.")
+    } catch let failure as AgentInputFailure {
+        #expect(failure == .sessionEnded)
+    }
+    #expect(disconnected.duration(to: .now) < .seconds(1))
     #expect(await request?.finish() == false)
 }
 

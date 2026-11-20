@@ -1,5 +1,4 @@
 import Foundation
-import OSLog
 import RemoraCore
 import Testing
 
@@ -334,20 +333,7 @@ private final class ApplePixels: FrameSink, @unchecked Sendable {
     ) { session, _ in
         // Both transports report under one attempt ID, and the retired one keeps its failure evidence.
         let attempt = session.handshakeAttemptID
-        let summaries = try await Task.detached {
-            let store = try OSLogStore(scope: .currentProcessIdentifier)
-            let predicate = NSPredicate(format: "subsystem == %@ AND category == %@", "com.peblon.remora", "VNC")
-            let deadline = ContinuousClock.now.advanced(by: .seconds(2))
-            var summaries: [String] = []
-            repeat {
-                summaries = try store.getEntries(at: store.position(date: started), matching: predicate)
-                    .compactMap { ($0 as? OSLogEntryLog)?.composedMessage }
-                    .filter { $0.hasPrefix("Handshake attempt=\(attempt) ") }
-                if summaries.count >= 2 { break }
-                try await Task.sleep(for: .milliseconds(25))
-            } while ContinuousClock.now < deadline
-            return summaries
-        }.value
+        let summaries = try await localVNCLog(since: started, matching: { $0.hasPrefix("Handshake attempt=\(attempt) ") }) { $0.count >= 2 }
         #expect(summaries.count == 2)
         #expect(summaries.first?.contains(" connected=0 native_error=11 phase=18 last_success=17 failure=10 ") == true)
         #expect(summaries.last?.contains(" connected=1 native_error=0 phase=22 last_success=22 failure=0 ") == true)
