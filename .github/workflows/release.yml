@@ -50,8 +50,13 @@ jobs:
   build:
     name: Build, sign and notarize
     needs: validate
-    # A rehearsal skips the validate job.
-    if: ${{ !failure() && !cancelled() }}
+    # A rehearsal runs only on main. A tag runs only after validate passed for the commit this run checks out.
+    if: >-
+      ${{ !cancelled() && (
+        (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') ||
+        (github.event_name == 'push' && needs.validate.result == 'success' &&
+          needs.validate.outputs.version != '' && needs.validate.outputs.commit == github.sha)
+      ) }}
     runs-on: xcode-27
     timeout-minutes: 60
     environment: release
@@ -70,7 +75,7 @@ jobs:
           xcodebuild -version
       - uses: actions/checkout@v7
         with:
-          ref: ${{ needs.validate.outputs.commit || github.sha }}
+          ref: ${{ github.sha }}
           persist-credentials: false
       # This job holds the signing secrets, so it restores no cache that another run wrote.
       - uses: jdx/mise-action@v5
@@ -79,10 +84,16 @@ jobs:
           cache: false
       # The engine builds third-party code, so it runs before the certificate is in a keychain.
       - run: mise run engine
+      # The action would leave a decoded certificate on disk until the runner is cleaned up.
+      - run: umask 077 && base64 --decode <<<"$P12_BASE64" > "$RUNNER_TEMP/developer-id.p12"
+        env:
+          P12_BASE64: ${{ secrets.DEVELOPER_ID_P12_BASE64 }}
       - uses: apple-actions/import-codesign-certs@v7
         with:
-          p12-file-base64: ${{ secrets.DEVELOPER_ID_P12_BASE64 }}
+          p12-filepath: ${{ runner.temp }}/developer-id.p12
           p12-password: ${{ secrets.DEVELOPER_ID_P12_PASSWORD }}
+      - if: always()
+        run: rm -f "$RUNNER_TEMP/developer-id.p12"
       - run: mise run release:app "$VERSION"
       - run: mise run release:dmg
       - run: mise run release:notarize
@@ -100,7 +111,7 @@ jobs:
   publish:
     name: Publish release
     needs: [validate, build]
-    if: github.event_name == 'push'
+    if: github.event_name == 'push' && needs.validate.outputs.commit == github.sha
     runs-on: ubuntu-slim
     timeout-minutes: 10
     permissions:
@@ -122,6 +133,6 @@ jobs:
         with:
           name: Remora-${{ needs.validate.outputs.version }}
           path: build/release/dist
-      - run: mise run release:publish "$GITHUB_REF_NAME"
+      - run: mise run release:publish "$GITHUB_REF_NAME" "$GITHUB_SHA"
         env:
           GH_TOKEN: ${{ github.token }}

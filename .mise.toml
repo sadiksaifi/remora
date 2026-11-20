@@ -216,14 +216,21 @@ cat "$dist/SHA256SUMS"
 
 [tasks."release:publish"]
 description = "Create the GitHub release for a tag with the DMG and SHA256SUMS in build/release/dist."
-usage = 'arg "<tag>" help="Stable release tag, for example v1.2.3"'
+usage = '''
+arg "<tag>" help="Stable release tag, for example v1.2.3"
+arg "<commit>" help="Commit the tag must point to on origin"
+'''
 run = '''
 #!/usr/bin/env bash
 set -euo pipefail
 tag={{usage.tag | quote}}
+commit={{usage.commit | quote}}
 version=${tag#v}
 dist=build/release/dist
 dmg="Remora-$version-macos-arm64.dmg"
+# SHA256SUMS must list only this DMG, and the DMG must match it.
+[[ $(cut -d ' ' -f 3- "$dist/SHA256SUMS") == "$dmg" ]] || { echo "$dist/SHA256SUMS does not list only $dmg" >&2; exit 1; }
+(cd "$dist" && shasum -a 256 --check SHA256SUMS)
 notes=$(mktemp)
 trap 'rm -f "$notes"' EXIT
 {
@@ -231,5 +238,7 @@ trap 'rm -f "$notes"' EXIT
     echo
     mise run release:notes:tag "$tag"
 } > "$notes"
+remote=$(gh api "repos/{owner}/{repo}/commits/refs/tags/$tag" --jq .sha)
+[[ $remote == "$commit" ]] || { echo "Tag $tag points to $remote on origin, not $commit" >&2; exit 1; }
 gh release create "$tag" --verify-tag --latest --title "Remora $version" --notes-file "$notes" "$dist/$dmg" "$dist/SHA256SUMS"
 '''
