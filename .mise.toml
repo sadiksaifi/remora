@@ -133,6 +133,8 @@ run = '''
 set -euo pipefail
 # Only its presence is checked, before any other process starts.
 private=${SPARKLE_ED_PRIVATE_KEY:-}
+# A name already exported from the environment stays exported on assignment.
+export -n private
 unset SPARKLE_ED_PRIVATE_KEY
 if [[ -n ${usage_private:-} && -z $private ]]; then
     echo "Set SPARKLE_ED_PRIVATE_KEY to the private key that Sparkle's generate_keys -x exports. On GitHub it is a secret of the release environment." >&2
@@ -141,7 +143,8 @@ fi
 private=
 # Remora verifies each update with this key, so a release without it could never install the next one.
 key=$(sed -n 's/^ *REMORA_SPARKLE_PUBLIC_KEY: *//p' project.yml | tr -d "\"'")
-[[ $(base64 --decode <<<"$key" 2>/dev/null | wc -c) -eq 32 ]] || { echo "Set REMORA_SPARKLE_PUBLIC_KEY in project.yml (settings, configs, Release) to the EdDSA public key that Sparkle's generate_keys prints." >&2; exit 1; }
+# Foundation reads only standard Base64, which is 44 characters for 32 bytes.
+[[ $key =~ ^[A-Za-z0-9+/]{43}=$ && $(base64 --decode <<<"$key" 2>/dev/null | wc -c) -eq 32 ]] || { echo "Set REMORA_SPARKLE_PUBLIC_KEY in project.yml (settings, configs, Release) to the EdDSA public key that Sparkle's generate_keys prints." >&2; exit 1; }
 '''
 
 [tasks."release:app"]
@@ -253,6 +256,8 @@ run = '''
 set -euo pipefail
 # Only generate_appcast reads the private key, through a pipe. No other process sees it.
 key=${SPARKLE_ED_PRIVATE_KEY:-}
+# A name already exported from the environment stays exported on assignment.
+export -n key
 unset SPARKLE_ED_PRIVATE_KEY
 [[ -n $key ]] || { echo "Set SPARKLE_ED_PRIVATE_KEY to the private key that Sparkle's generate_keys -x exports." >&2; exit 1; }
 version=$(plutil -extract CFBundleShortVersionString raw -o - build/release/export/Remora.app/Contents/Info.plist)
@@ -266,7 +271,8 @@ cleanup() {
     if [[ -n $mount ]]; then hdiutil detach -quiet "$mount" && rmdir "$mount"; fi
 }
 trap cleanup EXIT
-rm -rf "$stage"
+# release:publish attaches whatever feed is in dist, so only a verified one may get there.
+rm -rf "$stage" "$dist/appcast.xml"
 mkdir -p "$stage"
 ln "$dist/$dmg" "$stage/$dmg"
 # generate_appcast embeds the notes beside the DMG in the update window. A rehearsal has no tag, so it shows the unreleased changes.
@@ -278,14 +284,14 @@ fi
 printf '%s' "$key" | build/DerivedData/SourcePackages/artifacts/sparkle/Sparkle/bin/generate_appcast --ed-key-file - \
     --download-url-prefix "$releases/download/v$version/" --full-release-notes-url "$releases/tag/v$version" --embed-release-notes "$stage"
 key=
-mv "$stage/appcast.xml" "$dist/appcast.xml"
+feed="$stage/appcast.xml"
 
 # Installed copies verify the download with the key in the app, so check the signature against the app in this DMG.
 mount=$(mktemp -d)
 hdiutil attach -quiet -nobrowse -readonly -mountpoint "$mount" "$dist/$dmg"
 public=$(plutil -extract SUPublicEDKey raw -o - "$mount/Remora.app/Contents/Info.plist")
-enclosure() { xmllint --xpath "string(//item/enclosure/@*[local-name()='$1'])" "$dist/appcast.xml"; }
-[[ $(xmllint --xpath 'count(//item)' "$dist/appcast.xml") == 1 ]] || { echo "appcast.xml must have one item" >&2; exit 1; }
+enclosure() { xmllint --xpath "string(//item/enclosure/@*[local-name()='$1'])" "$feed"; }
+[[ $(xmllint --xpath 'count(//item)' "$feed") == 1 ]] || { echo "appcast.xml must have one item" >&2; exit 1; }
 [[ $(enclosure url) == "$releases/download/v$version/$dmg" ]] || { echo "appcast.xml does not offer $releases/download/v$version/$dmg" >&2; exit 1; }
 [[ $(enclosure length) == "$(stat -f %z "$dist/$dmg")" ]] || { echo "appcast.xml has the wrong length for $dmg" >&2; exit 1; }
 swift -e '
@@ -299,6 +305,7 @@ else {
     exit(1)
 }
 ' "$public" "$(enclosure edSignature)" "$dist/$dmg"
+mv "$feed" "$dist/appcast.xml"
 cat "$dist/appcast.xml"
 '''
 
