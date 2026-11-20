@@ -1,4 +1,5 @@
 import AppKit
+import RemoraControl
 import RemoraCore
 import SwiftUI
 import os
@@ -39,8 +40,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 return
             }
             #endif
-            let connectionStore = try ConnectionStore()
-            let credentialStore = CredentialStore()
+            let connectionStore = try ConnectionStore(fileURL: AppIdentity.current.supportDirectory.appending(path: "connections.json"))
+            let credentialStore = CredentialStore(service: AppIdentity.current.bundleIdentifier)
             let sessionTabs = SessionTabs(connectionStore: connectionStore, credentialStore: credentialStore)
             self.sessionTabs = sessionTabs
             let windowController = MainWindowController(
@@ -81,7 +82,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 commandLineController = controller
                 Task {
                     do { try await controller.start() } catch {
-                        Logger(subsystem: "dev.sadiksaifi.Remora", category: "Control").error(
+                        Logger(subsystem: "com.peblon.remora", category: "Control").error(
                             "Control listener failed: \(error.localizedDescription, privacy: .public)")
                     }
                 }
@@ -117,7 +118,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         Task { @MainActor in
             try? await Task.sleep(for: .seconds(10))
             if terminationPending {
-                let log = Logger(subsystem: "dev.sadiksaifi.Remora", category: "Capture")
+                let log = Logger(subsystem: "com.peblon.remora", category: "Capture")
                 for url in sessionTabs.unfinishedCaptureURLs {
                     log.error(
                         "Quit timed out finishing \(url.path, privacy: .public). The reserved file and a hidden .Remora-*.partial.mov may remain in its folder."

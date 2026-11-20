@@ -34,7 +34,7 @@ private func inspectSystem(host: String, port: UInt16, isCancelled: @Sendable ()
     let connection = NWConnection(host: NWEndpoint.Host(host), port: port, using: .tcp)
     let result = OSAllocatedUnfairLock<ConnectionFailureDiagnosis.Access?>(initialState: nil)
     let completed = DispatchSemaphore(value: 0)
-    let log = Logger(subsystem: "dev.sadiksaifi.Remora", category: "NetworkAccess")
+    let log = Logger(subsystem: "com.peblon.remora", category: "NetworkAccess")
     let attempt = UUID().uuidString
     connection.stateUpdateHandler = { [weak connection] state in
         guard let connection else { return }

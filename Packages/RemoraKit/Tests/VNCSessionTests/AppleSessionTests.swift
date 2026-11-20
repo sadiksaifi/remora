@@ -336,7 +336,7 @@ private final class ApplePixels: FrameSink, @unchecked Sendable {
         let attempt = session.handshakeAttemptID
         let summaries = try await Task.detached {
             let store = try OSLogStore(scope: .currentProcessIdentifier)
-            let predicate = NSPredicate(format: "subsystem == %@ AND category == %@", "dev.sadiksaifi.Remora", "VNC")
+            let predicate = NSPredicate(format: "subsystem == %@ AND category == %@", "com.peblon.remora", "VNC")
             let deadline = ContinuousClock.now.advanced(by: .seconds(2))
             var summaries: [String] = []
             repeat {

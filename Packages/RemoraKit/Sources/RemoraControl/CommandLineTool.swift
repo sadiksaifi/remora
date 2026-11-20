@@ -1,6 +1,7 @@
 import Foundation
 
 /// A link Remora owns: the `remora` command on the user's PATH, or the `remora` folder in an agent's skills folder.
+/// Remora Dev's links are named `remora-dev`.
 /// Remora creates, replaces and removes only its own links, so it never overwrites or deletes a file it didn't create.
 public struct CommandLineTool: Sendable {
     public enum State: String, Sendable {
@@ -30,10 +31,11 @@ public struct CommandLineTool: Sendable {
     public let target: URL
     private let adoptsOtherCopies: Bool
 
-    /// `target` is the file the link points to, such as the bundled executable, `Remora.app/Contents/Helpers/remora`.
-    /// With `adoptsOtherCopies`, a link to a Remora helper in another copy of Remora also counts as Remora's.
+    /// `target` is the file the link points to, by default this app's bundled executable, `Remora.app/Contents/Helpers/remora`.
+    /// With `adoptsOtherCopies`, a link to the helper in another copy of the same app, such as a moved `Remora.app`, also counts as this app's.
     public init(
-        target: URL, link: URL = FileManager.default.homeDirectoryForCurrentUser.appending(path: ".local/bin/remora"),
+        target: URL = AppIdentity.current.app.appending(path: "Contents/Helpers/remora"),
+        link: URL = FileManager.default.homeDirectoryForCurrentUser.appending(path: ".local/bin/\(AppIdentity.current.commandName)"),
         adoptsOtherCopies: Bool = true
     ) {
         self.target = target
@@ -84,7 +86,7 @@ public struct CommandLineTool: Sendable {
         let output = Pipe()
         process.executableURL = URL(fileURLWithPath: shell)
         // Record separators mark the answer, because shell config can print escapes on the same line.
-        process.arguments = ["-l", "-i", "-c", #"printf '\036%s\036' "$(command -v remora)""#]
+        process.arguments = ["-l", "-i", "-c", #"printf '\036%s\036' "$(command -v "# + link.lastPathComponent + #")""#]
         process.environment = ["HOME": FileManager.default.homeDirectoryForCurrentUser.path, "USER": NSUserName(), "SHELL": shell, "TERM": "dumb"]
         (process.standardInput, process.standardOutput, process.standardError) = (FileHandle.nullDevice, output, FileHandle.nullDevice)
         return await withCheckedContinuation { continuation in
@@ -109,11 +111,11 @@ public struct CommandLineTool: Sendable {
         return parts.count >= 3 ? parts[parts.count - 2] : nil
     }
 
-    /// A symbolic link to the target, or with `adoptsOtherCopies` to a Remora helper in a moved or deleted copy of Remora.
+    /// A symbolic link to the target, or with `adoptsOtherCopies` to the helper in a moved or deleted copy of the same app.
     private var isOwned: Bool {
         guard let destination = try? FileManager.default.destinationOfSymbolicLink(atPath: link.path) else { return false }
         let found = URL(fileURLWithPath: destination, relativeTo: link.deletingLastPathComponent()).standardizedFileURL
         return found == target.standardizedFileURL
-            || adoptsOtherCopies && found.path.hasSuffix("/Remora.app/Contents/Helpers/remora")
+            || adoptsOtherCopies && found.path.hasSuffix("/" + target.pathComponents.suffix(4).joined(separator: "/"))
     }
 }

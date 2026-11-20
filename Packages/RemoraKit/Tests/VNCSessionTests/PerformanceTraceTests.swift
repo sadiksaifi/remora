@@ -10,7 +10,7 @@ import os
 /// does not retain DynamicTracing signposts on this SDK, even during capture.
 @Test @MainActor func vncPerformanceTraceFixture() async throws {
     let attaching = ProcessInfo.processInfo.environment["REMORA_TEST_TRACE_ATTACH"] == "1"
-    let tracing = OSLog(subsystem: "dev.sadiksaifi.Remora", category: "DynamicTracing")
+    let tracing = OSLog(subsystem: "com.peblon.remora", category: "DynamicTracing")
     if attaching { #expect(!tracing.signpostsEnabled) }
     let peer = try SessionPeer(arguments: ["perf"])
     defer { peer.stop() }

@@ -6,7 +6,7 @@ import SwiftUI
 import VNCSession
 import os
 
-private let sessionLog = Logger(subsystem: "dev.sadiksaifi.Remora", category: "Session")
+private let sessionLog = Logger(subsystem: "com.peblon.remora", category: "Session")
 
 /// One tab's page. Owns a single-use session per attempt. Closing cancels both the stream and any sheet.
 /// Sheets attach to the main window only while the tab shows; a hidden tab's request waits and marks the tab.
@@ -586,8 +586,14 @@ final class SessionViewController: NSViewController {
             }
             let session: any RemoteSession =
                 switch connection.kind {
-                case .rdp: RDPSession(configuration: configuration, frameSink: renderer, inputFeedback: inputFeedback)
-                case .vnc: VNCSession(configuration: configuration, frameSink: renderer, inputFeedback: inputFeedback)
+                case .rdp:
+                    RDPSession(
+                        configuration: configuration, frameSink: renderer, inputFeedback: inputFeedback,
+                        configurationDirectory: AppIdentity.current.supportDirectory.appending(path: "FreeRDP", directoryHint: .isDirectory))
+                case .vnc:
+                    VNCSession(
+                        configuration: configuration, frameSink: renderer, inputFeedback: inputFeedback,
+                        certificateStoreURL: AppIdentity.current.supportDirectory.appending(path: "VNC/certificates", directoryHint: .isDirectory))
                 }
             let desktopView = RemoteDesktopView(renderer: renderer)
             desktopView.allowsHumanInput = control.allowsHumanInput

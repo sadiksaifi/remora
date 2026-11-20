@@ -21,7 +21,6 @@
 		BDE8D1D89FD473F62EB7E3C2 /* ApplicationClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 032183C95484016E7FA4168D /* ApplicationClient.swift */; };
 		BF043928244705CEE24238D0 /* licenses in Resources */ = {isa = PBXBuildFile; fileRef = C5EC201A8ADAB7EA85ABF992 /* licenses */; };
 		BF3629BE785DAD332249FF76 /* RDPSession in Frameworks */ = {isa = PBXBuildFile; productRef = CEE650B072CCF9E151EF611A /* RDPSession */; };
-		D5B4AD9852F4632BF785D4D2 /* skills in Resources */ = {isa = PBXBuildFile; fileRef = 33A5CB241568CBA13777867B /* skills */; };
 		DA3C773AD4CF29259B8F1BE8 /* ArgumentParser in Frameworks */ = {isa = PBXBuildFile; productRef = 3F0067FBBEC140EDB05ACBCB /* ArgumentParser */; };
 		E03EDE23E73F6310DE1E7FF1 /* ConnectionCommands.swift in Sources */ = {isa = PBXBuildFile; fileRef = 32288A5FADB0939E34A8C07D /* ConnectionCommands.swift */; };
 		E314C4C3BC51A2B84C43CFA5 /* SettingsCommands.swift in Sources */ = {isa = PBXBuildFile; fileRef = 138AE6D8487D62E879520635 /* SettingsCommands.swift */; };
@@ -58,7 +57,6 @@
 		032183C95484016E7FA4168D /* ApplicationClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ApplicationClient.swift; sourceTree = "<group>"; };
 		138AE6D8487D62E879520635 /* SettingsCommands.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsCommands.swift; sourceTree = "<group>"; };
 		32288A5FADB0939E34A8C07D /* ConnectionCommands.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConnectionCommands.swift; sourceTree = "<group>"; };
-		33A5CB241568CBA13777867B /* skills */ = {isa = PBXFileReference; lastKnownFileType = folder; path = skills; sourceTree = SOURCE_ROOT; };
 		4DC27472693A2B19F629E343 /* SkillCommands.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SkillCommands.swift; sourceTree = "<group>"; };
 		774002F2A34E21E2D626D880 /* SessionCommands.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionCommands.swift; sourceTree = "<group>"; };
 		B508BCE9DE4C6DC56D8AA602 /* RemoraCommand.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoraCommand.swift; sourceTree = "<group>"; };
@@ -112,7 +110,6 @@
 			isa = PBXGroup;
 			children = (
 				C5EC201A8ADAB7EA85ABF992 /* licenses */,
-				33A5CB241568CBA13777867B /* skills */,
 				F0BF86DBEFD17FE6CE62F9E8 /* Packages */,
 				C5CDBF053038F5C0A7637D02 /* Remora */,
 				56F0691862A0747BF0D09712 /* RemoraCLI */,
@@ -186,6 +183,7 @@
 				D70E8659A83FB2E523CE92C6 /* Resources */,
 				3C1DE59AC7E6A766092B8ECD /* Frameworks */,
 				B2E885D83E3A0B847FDD9123 /* Embed Dependencies */,
+				21CCABC3DA2DAF02DC43C0E8 /* Bundle agent skill */,
 				512B769278C98AA32BA65E82 /* Check agent help */,
 			);
 			buildRules = (
@@ -256,13 +254,32 @@
 			buildActionMask = 2147483647;
 			files = (
 				BF043928244705CEE24238D0 /* licenses in Resources */,
-				D5B4AD9852F4632BF785D4D2 /* skills in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXShellScriptBuildPhase section */
+		21CCABC3DA2DAF02DC43C0E8 /* Bundle agent skill */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+				"$(SRCROOT)/skills/remora/SKILL.md",
+			);
+			name = "Bundle agent skill";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "command=$(echo \"$PRODUCT_NAME\" | tr 'A-Z ' 'a-z-')\nskill=\"$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/skills/$command\"\nmkdir -p \"$skill\"\nsed -e \"s/^name: remora$/name: $command/\" -e \"s/\\`remora/\\`$command/g\" \"$SRCROOT/skills/remora/SKILL.md\" > \"$skill/SKILL.md\"\n";
+		};
 		512B769278C98AA32BA65E82 /* Check agent help */ = {
 			isa = PBXShellScriptBuildPhase;
 			alwaysOutOfDate = 1;
@@ -327,12 +344,15 @@
 			buildSettings = {
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
+				CREATE_INFOPLIST_SECTION_IN_BINARY = YES;
 				DEVELOPMENT_TEAM = LZ3V3WUPWR;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = "$(REMORA_NAME)";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = dev.sadiksaifi.Remora.cli;
+				PRODUCT_BUNDLE_IDENTIFIER = "$(REMORA_BUNDLE_IDENTIFIER).cli";
 				PRODUCT_MODULE_NAME = RemoraCLI;
 				PRODUCT_NAME = remora;
 				SDKROOT = macosx;
@@ -376,6 +396,7 @@
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				COPY_PHASE_STRIP = NO;
 				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
 				ENABLE_TESTABILITY = YES;
 				GCC_C_LANGUAGE_STANDARD = gnu11;
@@ -393,12 +414,15 @@
 				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
+				INFOPLIST_KEY_NSHumanReadableCopyright = "Copyright © 2026 Peblon";
 				MACOSX_DEPLOYMENT_TARGET = 26.0;
 				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
 				MTL_FAST_MATH = YES;
 				MTL_TREAT_WARNINGS_AS_ERRORS = YES;
 				ONLY_ACTIVE_ARCH = YES;
 				PRODUCT_NAME = "$(TARGET_NAME)";
+				REMORA_BUNDLE_IDENTIFIER = com.peblon.remora.dev;
+				REMORA_NAME = "Remora Dev";
 				SDKROOT = macosx;
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
 				SWIFT_DEFAULT_ACTOR_ISOLATION = nonisolated;
@@ -418,8 +442,8 @@
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = LZ3V3WUPWR;
 				ENABLE_APP_SANDBOX = NO;
-				ENABLE_HARDENED_RUNTIME = NO;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = "$(REMORA_NAME)";
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.utilities";
 				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "Remora connects to remote computers on your local network.";
 				INFOPLIST_KEY_NSPrincipalClass = NSApplication;
@@ -428,8 +452,9 @@
 					"@executable_path/../Frameworks",
 				);
 				MARKETING_VERSION = 0.1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = dev.sadiksaifi.Remora;
-				PRODUCT_NAME = Remora;
+				PRODUCT_BUNDLE_IDENTIFIER = "$(REMORA_BUNDLE_IDENTIFIER)";
+				PRODUCT_MODULE_NAME = Remora;
+				PRODUCT_NAME = "$(REMORA_NAME)";
 				SDKROOT = macosx;
 			};
 			name = Release;
@@ -443,8 +468,8 @@
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = LZ3V3WUPWR;
 				ENABLE_APP_SANDBOX = NO;
-				ENABLE_HARDENED_RUNTIME = NO;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = "$(REMORA_NAME)";
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.utilities";
 				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "Remora connects to remote computers on your local network.";
 				INFOPLIST_KEY_NSPrincipalClass = NSApplication;
@@ -453,8 +478,9 @@
 					"@executable_path/../Frameworks",
 				);
 				MARKETING_VERSION = 0.1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = dev.sadiksaifi.Remora;
-				PRODUCT_NAME = Remora;
+				PRODUCT_BUNDLE_IDENTIFIER = "$(REMORA_BUNDLE_IDENTIFIER)";
+				PRODUCT_MODULE_NAME = Remora;
+				PRODUCT_NAME = "$(REMORA_NAME)";
 				SDKROOT = macosx;
 			};
 			name = Debug;
@@ -495,6 +521,7 @@
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				COPY_PHASE_STRIP = NO;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_NS_ASSERTIONS = NO;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
 				GCC_C_LANGUAGE_STANDARD = gnu11;
@@ -506,11 +533,14 @@
 				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
+				INFOPLIST_KEY_NSHumanReadableCopyright = "Copyright © 2026 Peblon";
 				MACOSX_DEPLOYMENT_TARGET = 26.0;
 				MTL_ENABLE_DEBUG_INFO = NO;
 				MTL_FAST_MATH = YES;
 				MTL_TREAT_WARNINGS_AS_ERRORS = YES;
 				PRODUCT_NAME = "$(TARGET_NAME)";
+				REMORA_BUNDLE_IDENTIFIER = com.peblon.remora;
+				REMORA_NAME = Remora;
 				SDKROOT = macosx;
 				SWIFT_COMPILATION_MODE = wholemodule;
 				SWIFT_DEFAULT_ACTOR_ISOLATION = nonisolated;
@@ -526,12 +556,15 @@
 			buildSettings = {
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
+				CREATE_INFOPLIST_SECTION_IN_BINARY = YES;
 				DEVELOPMENT_TEAM = LZ3V3WUPWR;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = "$(REMORA_NAME)";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = dev.sadiksaifi.Remora.cli;
+				PRODUCT_BUNDLE_IDENTIFIER = "$(REMORA_BUNDLE_IDENTIFIER).cli";
 				PRODUCT_MODULE_NAME = RemoraCLI;
 				PRODUCT_NAME = remora;
 				SDKROOT = macosx;

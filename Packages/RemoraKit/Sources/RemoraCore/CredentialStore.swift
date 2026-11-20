@@ -4,8 +4,8 @@ import KeychainAccess
 public final class CredentialStore {
     private let keychain: Keychain
 
-    public init() {
-        keychain = Keychain(service: "dev.sadiksaifi.Remora")
+    public init(service: String) {
+        keychain = Keychain(service: service)
     }
 
     public func password(for id: UUID) throws -> String? {

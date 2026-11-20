@@ -4,18 +4,13 @@ import RemoraControl
 /// Launch Services owns app identity and startup. Only read-only probes are retried.
 @MainActor
 struct ApplicationClient {
-    nonisolated static var bundleURL: URL {
-        (Bundle.main.executableURL ?? URL(fileURLWithPath: CommandLine.arguments[0])).resolvingSymlinksInPath()
-            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
-    }
-
     private var running: Bool {
         let developmentSocket = ProcessInfo.processInfo.environment["REMORA_SOCKET"] != nil
         return NSWorkspace.shared.runningApplications.contains {
             !$0.isTerminated
                 && (developmentSocket
-                    ? $0.bundleURL?.resolvingSymlinksInPath() == Self.bundleURL
-                    : $0.bundleIdentifier == "dev.sadiksaifi.Remora")
+                    ? $0.bundleURL?.resolvingSymlinksInPath() == AppIdentity.current.app
+                    : $0.bundleIdentifier == AppIdentity.current.bundleIdentifier)
         }
     }
 
@@ -47,8 +42,9 @@ struct ApplicationClient {
     }
 
     private func openApplication() throws {
-        guard Bundle(url: Self.bundleURL)?.bundleIdentifier == "dev.sadiksaifi.Remora" else {
-            throw ControlFailure(.appUnavailable, "The helper could not find its containing Remora.app.")
+        // The build gives the helper its app's bundle identifier plus .cli, so a helper outside its own app never launches another.
+        guard Bundle.main.bundleIdentifier == AppIdentity.current.bundleIdentifier + ".cli" else {
+            throw ControlFailure(.appUnavailable, "The helper could not find its containing Remora app.")
         }
         let configuration = NSWorkspace.OpenConfiguration()
         configuration.activates = false
@@ -63,7 +59,7 @@ struct ApplicationClient {
             eventClass: AEEventClass(kCoreEventClass),
             eventID: AEEventID(kAEOpenApplication), targetDescriptor: nil,
             returnID: AEReturnID(kAutoGenerateReturnID), transactionID: AETransactionID(kAnyTransactionID))
-        NSWorkspace.shared.openApplication(at: Self.bundleURL, configuration: configuration, completionHandler: nil)
+        NSWorkspace.shared.openApplication(at: AppIdentity.current.app, configuration: configuration, completionHandler: nil)
     }
 
     private func waitForReadiness(_ client: ControlClient) async throws {

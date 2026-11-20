@@ -5,7 +5,7 @@ import Foundation
 import RemoraCore
 import os
 
-private let log = Logger(subsystem: "dev.sadiksaifi.Remora", category: "VNC")
+private let log = Logger(subsystem: "com.peblon.remora", category: "VNC")
 
 /// One native VNC connection. The worker owns LibVNCClient, frame storage and
 /// held input. The lock protects only admission, receipts, prompts and abort.
@@ -31,7 +31,7 @@ public final class VNCSession: AgentInputSession, @unchecked Sendable {
     public init(
         configuration: SessionConfiguration, frameSink: any FrameSink,
         inputFeedback: @escaping @Sendable (InputSource, SessionInputFeedback) -> Void = { _, _ in },
-        certificateStoreURL: URL = URL.applicationSupportDirectory.appending(path: "Remora/VNC/certificates", directoryHint: .isDirectory),
+        certificateStoreURL: URL,
         failureDiagnosis: ConnectionFailureDiagnosis = .system
     ) {
         self.failureDiagnosis = failureDiagnosis

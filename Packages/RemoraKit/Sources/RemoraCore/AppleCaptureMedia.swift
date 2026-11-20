@@ -119,7 +119,7 @@ public struct AppleCaptureMedia: CaptureMedia {
 /// After construction, media operations run on queue. The mailbox holds one arrival time.
 /// @unchecked covers queue-confined framework objects; mailbox and outcome use lock.
 final class AppleCaptureMovie: CaptureMovie, @unchecked Sendable {
-    private let queue = DispatchQueue(label: "dev.sadiksaifi.Remora.capture", qos: .userInitiated)
+    private let queue = DispatchQueue(label: "com.peblon.remora.capture", qos: .userInitiated)
     private let lock = NSLock()
     private var pending: TimeInterval?
     private var scheduled = false

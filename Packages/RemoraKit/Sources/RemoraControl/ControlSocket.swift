@@ -3,10 +3,12 @@ import Foundation
 import Network
 
 public struct ControlEndpoint: Sendable {
+    /// Remora and Remora Dev each listen in their own folder.
+    static let defaultPath = "/tmp/\(AppIdentity.current.commandName)-\(getuid())/control.sock"
     public let path: String
 
     public init(environment: [String: String] = ProcessInfo.processInfo.environment) throws {
-        path = environment["REMORA_SOCKET"] ?? "/tmp/remora-\(getuid())/control.sock"
+        path = environment["REMORA_SOCKET"] ?? Self.defaultPath
         guard path.hasPrefix("/"), !path.utf8.contains(0), path.utf8.count < 104 else {
             throw ControlFailure(.invalidArgument, "The control socket needs an absolute path shorter than 104 UTF-8 bytes.")
         }
@@ -121,7 +123,7 @@ public actor ControlServer {
     public func start() async throws {
         guard listener == nil else { return }
         let directory = URL(fileURLWithPath: endpoint.path).deletingLastPathComponent()
-        if endpoint.path == "/tmp/remora-\(getuid())/control.sock" {
+        if endpoint.path == ControlEndpoint.defaultPath {
             try FileManager.default.createDirectory(
                 at: directory, withIntermediateDirectories: true,
                 attributes: [.posixPermissions: 0o700])
@@ -213,7 +215,7 @@ public actor ControlServer {
     }
 }
 
-private let socketQueue = DispatchQueue(label: "dev.sadiksaifi.Remora.control", qos: .userInitiated)
+private let socketQueue = DispatchQueue(label: "com.peblon.remora.control", qos: .userInitiated)
 private let maximumLineSize = 1_048_576
 
 private func remaining(_ deadline: ContinuousClock.Instant) -> Double {

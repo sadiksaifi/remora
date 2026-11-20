@@ -4,6 +4,9 @@ import RemoraCore
 import Testing
 import VNCSession
 
+/// These sessions use no TLS, so they never write a certificate pin here.
+private let unusedPins = FileManager.default.temporaryDirectory.appending(path: "remora-unused-pins", directoryHint: .isDirectory)
+
 /// A loopback network boundary that stalls inside a greeting, a raw rectangle, or a classic VNC password challenge.
 /// No TLS, credentials, external server, saved settings, or Keychain is used.
 private final class StalledPeer: @unchecked Sendable {
@@ -149,7 +152,8 @@ private struct DiscardFrames: FrameSink { func consume(_ frame: BorrowedFrame) {
     let peer = try StalledPeer(partialFrame: false)
     defer { peer.stop() }
     let session = VNCSession(
-        configuration: .init(host: "127.0.0.1", port: peer.port, username: "", desktopSize: .init(width: 16, height: 16)), frameSink: DiscardFrames())
+        configuration: .init(host: "127.0.0.1", port: peer.port, username: "", desktopSize: .init(width: 16, height: 16)), frameSink: DiscardFrames(),
+        certificateStoreURL: unusedPins)
     session.connect()
     let fallback = Task {
         do {
@@ -173,7 +177,8 @@ private struct DiscardFrames: FrameSink { func consume(_ frame: BorrowedFrame) {
     let peer = try StalledPeer(partialFrame: false, passwordChallenge: true)
     defer { peer.stop() }
     let session = VNCSession(
-        configuration: .init(host: "127.0.0.1", port: peer.port, username: "", desktopSize: .init(width: 16, height: 16)), frameSink: DiscardFrames())
+        configuration: .init(host: "127.0.0.1", port: peer.port, username: "", desktopSize: .init(width: 16, height: 16)), frameSink: DiscardFrames(),
+        certificateStoreURL: unusedPins)
     let fallback = Task {
         do {
             try await Task.sleep(for: .seconds(3))
@@ -203,7 +208,8 @@ private struct DiscardFrames: FrameSink { func consume(_ frame: BorrowedFrame) {
     let peer = try StalledPeer(partialFrame: true)
     defer { peer.stop() }
     let session = VNCSession(
-        configuration: .init(host: "127.0.0.1", port: peer.port, username: "", desktopSize: .init(width: 16, height: 16)), frameSink: DiscardFrames())
+        configuration: .init(host: "127.0.0.1", port: peer.port, username: "", desktopSize: .init(width: 16, height: 16)), frameSink: DiscardFrames(),
+        certificateStoreURL: unusedPins)
     session.connect()
     let fallback = Task {
         do {
@@ -241,7 +247,8 @@ private struct DiscardFrames: FrameSink { func consume(_ frame: BorrowedFrame) {
     let peer = try StalledPeer(partialFrame: true, stallRectangle: false)
     defer { peer.stop() }
     let session = VNCSession(
-        configuration: .init(host: "127.0.0.1", port: peer.port, username: "", desktopSize: .init(width: 16, height: 16)), frameSink: DiscardFrames())
+        configuration: .init(host: "127.0.0.1", port: peer.port, username: "", desktopSize: .init(width: 16, height: 16)), frameSink: DiscardFrames(),
+        certificateStoreURL: unusedPins)
     let fallback = Task {
         do {
             try await Task.sleep(for: .seconds(3))
@@ -292,7 +299,8 @@ private struct DiscardFrames: FrameSink { func consume(_ frame: BorrowedFrame) {
     let peer = try StalledPeer(partialFrame: true, stallRectangle: false)
     defer { peer.stop() }
     let session = VNCSession(
-        configuration: .init(host: "127.0.0.1", port: peer.port, username: "", desktopSize: .init(width: 16, height: 16)), frameSink: DiscardFrames())
+        configuration: .init(host: "127.0.0.1", port: peer.port, username: "", desktopSize: .init(width: 16, height: 16)), frameSink: DiscardFrames(),
+        certificateStoreURL: unusedPins)
     let fallback = Task {
         do {
             try await Task.sleep(for: .seconds(3))
@@ -338,7 +346,8 @@ private func waitForResizes(_ count: Int, from peer: StalledPeer) async throws -
     let peer = try StalledPeer(partialFrame: true, stallRectangle: false)
     defer { peer.stop() }
     let session = VNCSession(
-        configuration: .init(host: "127.0.0.1", port: peer.port, username: "", desktopSize: .init(width: 16, height: 16)), frameSink: DiscardFrames())
+        configuration: .init(host: "127.0.0.1", port: peer.port, username: "", desktopSize: .init(width: 16, height: 16)), frameSink: DiscardFrames(),
+        certificateStoreURL: unusedPins)
     let fallback = Task {
         do {
             try await Task.sleep(for: .seconds(5))
@@ -394,7 +403,8 @@ private func waitForResizes(_ count: Int, from peer: StalledPeer) async throws -
         let peer = try StalledPeer(partialFrame: true, stallRectangle: false)
         defer { peer.stop() }
         let session = VNCSession(
-            configuration: .init(host: "127.0.0.1", port: peer.port, username: "", desktopSize: .init(width: 16, height: 16)), frameSink: DiscardFrames())
+            configuration: .init(host: "127.0.0.1", port: peer.port, username: "", desktopSize: .init(width: 16, height: 16)), frameSink: DiscardFrames(),
+            certificateStoreURL: unusedPins)
         let fallback = Task {
             do {
                 try await Task.sleep(for: .seconds(5))
@@ -439,7 +449,8 @@ private func waitForResizes(_ count: Int, from peer: StalledPeer) async throws -
     let peer = try StalledPeer(partialFrame: true, stallRectangle: false)
     defer { peer.stop() }
     let session = VNCSession(
-        configuration: .init(host: "127.0.0.1", port: peer.port, username: "", desktopSize: .init(width: 16, height: 16)), frameSink: DiscardFrames())
+        configuration: .init(host: "127.0.0.1", port: peer.port, username: "", desktopSize: .init(width: 16, height: 16)), frameSink: DiscardFrames(),
+        certificateStoreURL: unusedPins)
     let fallback = Task {
         do {
             try await Task.sleep(for: .seconds(1))
@@ -508,7 +519,8 @@ private final class MultiDisplayFrames: FrameSink, @unchecked Sendable {
     defer { peer.stop() }
     let frames = MultiDisplayFrames()
     let session = VNCSession(
-        configuration: .init(host: "127.0.0.1", port: peer.port, username: "", desktopSize: .init(width: 16, height: 16)), frameSink: frames)
+        configuration: .init(host: "127.0.0.1", port: peer.port, username: "", desktopSize: .init(width: 16, height: 16)), frameSink: frames,
+        certificateStoreURL: unusedPins)
     let deadline = Task {
         try? await Task.sleep(for: .seconds(2))
         session.disconnect()

@@ -92,7 +92,7 @@ private final class DiagnosticFrames: FrameSink, @unchecked Sendable {
         // off MainActor so other public-session timing/cancellation tests run.
         let attemptMessages = try await Task.detached {
             let store = try OSLogStore(scope: .currentProcessIdentifier)
-            let predicate = NSPredicate(format: "subsystem == %@ AND category == %@", "dev.sadiksaifi.Remora", "VNC")
+            let predicate = NSPredicate(format: "subsystem == %@ AND category == %@", "com.peblon.remora", "VNC")
             let deadline = ContinuousClock.now.advanced(by: .seconds(2))
             var messages: [String] = []
             repeat {
@@ -195,7 +195,7 @@ private final class DiagnosticFrames: FrameSink, @unchecked Sendable {
         let attemptID = session.handshakeAttemptID
         let messages = try await Task.detached {
             let store = try OSLogStore(scope: .currentProcessIdentifier)
-            let predicate = NSPredicate(format: "subsystem == %@ AND category == %@", "dev.sadiksaifi.Remora", "VNC")
+            let predicate = NSPredicate(format: "subsystem == %@ AND category == %@", "com.peblon.remora", "VNC")
             let deadline = ContinuousClock.now.advanced(by: .seconds(2))
             var messages: [String] = []
             repeat {

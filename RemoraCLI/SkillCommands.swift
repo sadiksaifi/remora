@@ -15,7 +15,7 @@ struct SkillCommand: ParsableCommand {
         commandName: "skill", abstract: "Link the bundled agent skill into AI agents' skills folders.",
         subcommands: [Path.self, Install.self, Uninstall.self])
 
-    static var skill: AgentSkill { AgentSkill(app: ApplicationClient.bundleURL) }
+    static var skill: AgentSkill { AgentSkill() }
 
     struct Path: ParsableCommand {
         static let configuration = CommandConfiguration(abstract: "Print the bundled skill folder.")
@@ -26,13 +26,14 @@ struct SkillCommand: ParsableCommand {
     }
 
     struct Install: ParsableCommand {
-        static let configuration = CommandConfiguration(abstract: "Link the skill as remora in ~/.agents/skills and ~/.claude/skills.")
+        static let configuration = CommandConfiguration(
+            abstract: "Link the skill as \(AppIdentity.current.commandName) in ~/.agents/skills and ~/.claude/skills.")
         @OptionGroup var targets: Targets
         func run() throws { try targets.apply(install: true) }
     }
 
     struct Uninstall: ParsableCommand {
-        static let configuration = CommandConfiguration(abstract: "Remove the remora links that point to this app's skill.")
+        static let configuration = CommandConfiguration(abstract: "Remove the \(AppIdentity.current.commandName) links that point to this app's skill.")
         @OptionGroup var targets: Targets
         func run() throws { try targets.apply(install: false) }
     }

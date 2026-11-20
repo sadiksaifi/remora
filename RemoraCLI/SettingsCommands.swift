@@ -46,23 +46,24 @@ struct SettingsCommand: AsyncParsableCommand {
     }
     struct CLI: AsyncParsableCommand {
         static let configuration = CommandConfiguration(
-            commandName: "cli", abstract: "Inspect or change the remora link in ~/.local/bin.", subcommands: [Get.self, Repair.self, Uninstall.self])
+            commandName: "cli", abstract: "Inspect or change the \(AppIdentity.current.commandName) link in ~/.local/bin.",
+            subcommands: [Get.self, Repair.self, Uninstall.self])
         @OptionGroup var options: CommonOptions
         struct Get: AsyncParsableCommand {
-            static let configuration = CommandConfiguration(abstract: "Report whether ~/.local/bin/remora is installed and points to this copy of Remora.")
+            static let configuration = CommandConfiguration(
+                abstract: "Report whether \(CommandLineTool().displayPath) is installed and points to this copy of \(AppIdentity.current.name).")
             @OptionGroup var options: CommonOptions
             @MainActor func run() async throws {
-                let helper = ApplicationClient.bundleURL.appending(path: "Contents/Helpers/remora")
-                Output.write(.success(CommandLineTool(target: helper).status), json: options.json)
+                Output.write(.success(CommandLineTool().status), json: options.json)
             }
         }
         struct Repair: AsyncParsableCommand {
-            static let configuration = CommandConfiguration(abstract: "Point ~/.local/bin/remora at this copy of Remora.")
+            static let configuration = CommandConfiguration(abstract: "Point \(CommandLineTool().displayPath) at this copy of \(AppIdentity.current.name).")
             @OptionGroup var options: CommonOptions
             @MainActor func run() async throws { try await options.execute(.init(command: "settings.cli.repair")) }
         }
         struct Uninstall: AsyncParsableCommand {
-            static let configuration = CommandConfiguration(abstract: "Remove ~/.local/bin/remora.")
+            static let configuration = CommandConfiguration(abstract: "Remove \(CommandLineTool().displayPath).")
             @OptionGroup var options: CommonOptions
             @MainActor func run() async throws { try await options.execute(.init(command: "settings.cli.uninstall")) }
         }
