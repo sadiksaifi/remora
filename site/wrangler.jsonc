@@ -11,5 +11,7 @@
   // peblon.com is a zone on the same Cloudflare account, so the deploy creates the DNS record and certificate.
   "routes": [{ "pattern": "remora.peblon.com", "custom_domain": true }],
   "workers_dev": false,
-  "preview_urls": true
+  "preview_urls": true,
+  // Cloudflare builds each pull request with "npx wrangler preview", which refuses to run without this block.
+  "previews": {}
 }
