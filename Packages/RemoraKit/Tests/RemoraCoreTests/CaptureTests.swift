@@ -396,17 +396,22 @@ private func animatesThroughout(_ times: [Double], from start: Double, to end: D
     let png = try media.png(frames.snapshot())
     let started = ProcessInfo.processInfo.systemUptime
     let movie = try media.movie(at: url, source: frames)
+    // The movie's clock starts after `started`, 29 ms after it once on the CI runner, so a frame's time is
+    // that much earlier than the test's time for the same moment. Windows that must hold the first frame
+    // after an event open this long before it, while the screen still shows the state before the event.
+    let lead = 0.1
     // The move starts after the encoder's warm-up, which held the second frame back 0.5 s on the CI runner.
     try await Task.sleep(for: .seconds(1))
     let moveAt = ProcessInfo.processInfo.systemUptime - started
     // Three legs, out, back and out again, each starting as the last one settles. One move spends only
-    // about 0.25 s between the resting positions, which a slow encoder samples once or twice.
+    // about 0.25 s between the resting positions, which a slow encoder samples once or twice. A leg's
+    // window opens while the cursor still rests at its start, so it holds the frame the move starts.
     var legs: [(start: Double, arrival: Double, outbound: Bool)] = []
     for (index, x) in [500.0, 80, 500].enumerated() {
         let start = ProcessInfo.processInfo.systemUptime - started
         let arrival = state.moveAgentCursor(to: CGPoint(x: x, y: index == 1 ? 180 : 140), animated: true)
         legs.append((start, arrival, index != 1))
-        try await Task.sleep(for: .seconds(arrival + 0.05))
+        try await Task.sleep(for: .seconds(arrival + lead))
     }
     let arrivedAt = ProcessInfo.processInfo.systemUptime - started
     // Each state holds for several frame intervals of a slow encoder, so the movie records it at any frame rate.
@@ -419,7 +424,8 @@ private func animatesThroughout(_ times: [Double], from start: Double, to end: D
     try await Task.sleep(for: .milliseconds(450))
     let humanAt = ProcessInfo.processInfo.systemUptime - started
     state.receive(.human, .pointer(.init(x: 200, y: 100), .left))
-    try await Task.sleep(for: .milliseconds(150))
+    // The ring stays bright enough for the check below for about 0.2 s. Record all of that time.
+    try await Task.sleep(for: .milliseconds(300))
     _ = try await movie.finish().get()
     #expect(try media.png(frames.snapshot()) == png)
     #expect(state.snapshot().clicks.allSatisfy { $0.source == .human })
@@ -449,7 +455,7 @@ private func animatesThroughout(_ times: [Double], from start: Double, to end: D
         let time = CMSampleBufferGetPresentationTimeStamp(sample).seconds
         let buffer = try #require(CMSampleBufferGetImageBuffer(sample))
         times.append(time)
-        if let leg = legs.firstIndex(where: { time > $0.start + 0.02 && time < $0.start + $0.arrival }) {
+        if let leg = legs.firstIndex(where: { time > $0.start - lead && time < $0.start + $0.arrival }) {
             CVPixelBufferLockBaseAddress(buffer, .readOnly)
             let bytes = CVPixelBufferGetBaseAddress(buffer)!.assumingMemoryBound(to: UInt8.self)
             let stride = CVPixelBufferGetBytesPerRow(buffer)
@@ -466,7 +472,7 @@ private func animatesThroughout(_ times: [Double], from start: Double, to end: D
         }
         if time > arrivedAt + 0.15 && time < pressAt { resting = buffer }
         if time > pressAt + 0.08 && time < pressAt + 0.45 { pressed.append((time - pressAt, buffer)) }
-        if time > humanAt + 0.03 && time < humanAt + 0.5 { human.append(buffer) }
+        if time > humanAt - lead && time < humanAt + 0.5 { human.append(buffer) }
     }
     #expect(animatesThroughout(times, from: moveAt, to: humanAt))
     // The cursor travels between resting centers near x 84-96 and 504-514. Frames between them are in each
@@ -506,6 +512,7 @@ private func animatesThroughout(_ times: [Double], from start: Double, to end: D
         #expect(rgb(press, 500 + Int(14 * unit), 140)[2] < 135)
         #expect(rgb(press, 500, 140).allSatisfy { $0 > 125 })
     }
-    // The user's ring still appears, away from the agent sprite. It fades from its first frames.
+    // The user's ring still appears, away from the agent sprite. It fades from its first frames, so the
+    // frame the click wakes counts. Frames from before the click show the gray desktop at this point.
     #expect(human.contains { rgb($0, 200 + Int(14 * unit), 100)[2] > 150 })
 }
