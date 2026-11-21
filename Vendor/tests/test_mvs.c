@@ -243,6 +243,10 @@ static void test_malformed(void) {
     /* All-ones is no K.5 code */
     buffer bad_huffman = partial_update(14, 19, bits("01", "000000", "0", "1111111111111111", "0", EOB, "00", marker("mvs", 2), NULL));
     CHECK(decode(&s, &bad_huffman) == MVS_E_HUFFMAN);
+    /* Padding past eight bytes sends the same code through the 64-bit lookup */
+    buffer bad_huffman_wide = partial_update(14, 19, bits("01", "000000", "0", "1111111111111111", "0", EOB, "00", marker("mvs", 2),
+        "0000000000000000000000000000000000000000000000000000000000000000", NULL));
+    CHECK(decode(&s, &bad_huffman_wide) == MVS_E_HUFFMAN);
     screen_free(&s);
 
     /* Repeat tile first: no previous DCT tile */
@@ -392,9 +396,10 @@ static void test_raw_coverage_and_geometry_reset(void) {
 
 /* Generated update sequences over a larger screen. Their structured headers
  * reach every tile type, both threshold ranges, custom quantization and the
- * cache, and random bodies reach wide transforms and every error path. The
- * hash covers the result, statistics, written rectangles and pixels of every
- * update, so a faster decoder must reproduce this one bit for bit. */
+ * cache, and random bodies reach wide transforms. test_malformed covers the
+ * Rice and Huffman rejections. The hash covers the result, statistics, written
+ * rectangles and pixels of every update, so a faster decoder must reproduce
+ * this one bit for bit. */
 typedef struct { uint8_t bytes[16384]; size_t bits; } bit_writer;
 static void put_bits(bit_writer *w, uint32_t value, unsigned n) {
     for (unsigned i = n; i > 0; i--) {
