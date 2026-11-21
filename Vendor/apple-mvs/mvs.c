@@ -92,12 +92,15 @@ static inline int32_t wrap32(int64_t v) {
 
 static inline uint8_t clamp255(int32_t v) { return v < 0 ? 0 : (v > 255 ? 255 : (uint8_t)v); }
 
-/* libjpeg jdcolor.c tables, indexed by the level-shifted 0..255 chroma sample */
-static inline int32_t cr_r(unsigned i) { return (int32_t)asr(91881LL * ((int32_t)i - 128) + 32768, 16); }
-static inline int32_t cb_b(unsigned i) { return (int32_t)asr(116130LL * ((int32_t)i - 128) + 32768, 16); }
-static inline int32_t cr_g(unsigned i) { return -46802 * ((int32_t)i - 128); }
-static inline int32_t cb_g(unsigned i) { return -22554 * ((int32_t)i - 128) + 32768; }
-static inline int32_t g_add(unsigned cb, unsigned cr) { return (int32_t)asr((int64_t)cb_g(cb) + cr_g(cr), 16); }
+/* libjpeg jdcolor.c with its tables folded in, for 0..255 samples. Adding 2^24
+ * keeps each numerator positive, so the shift is a floor division without
+ * signed shifts. Plain arithmetic lets the compiler vectorize a tile. */
+static inline int32_t floor_shift16(int32_t v) { return (int32_t)((uint32_t)(v + (1 << 24)) >> 16) - 256; }
+static inline uint8_t red(int32_t y, int32_t cr) { return clamp255(y + floor_shift16(91881 * (cr - 128) + 32768)); }
+static inline uint8_t green(int32_t y, int32_t cb, int32_t cr) {
+    return clamp255(y + floor_shift16(-22554 * (cb - 128) - 46802 * (cr - 128) + 32768));
+}
+static inline uint8_t blue(int32_t y, int32_t cb) { return clamp255(y + floor_shift16(116130 * (cb - 128) + 32768)); }
 
 /* ---- Bitstream (mvs-bitstream.js). A read past the end sets a sticky
  * error and returns zeros, so every loop still ends; the caller checks the
@@ -120,7 +123,27 @@ static unsigned read_bit(bitstream *b) {
     return v;
 }
 
+/* The next 64 bits, MSB first, when 8 bytes remain; the slow paths handle the tail. */
+static inline bool peek64(const bitstream *b, uint64_t *out) {
+    if (b->length - b->byte < 8 || b->byte > b->length) return false;
+    uint64_t w;
+    memcpy(&w, b->data + b->byte, 8);
+    *out = (__builtin_bswap64(w) & (UINT64_MAX >> b->bit)) << b->bit;
+    return true;
+}
+
+static inline void skip_bits(bitstream *b, unsigned n) {
+    unsigned pos = b->bit + n;
+    b->byte += pos >> 3;
+    b->bit = pos & 7;
+}
+
 static uint32_t read_bits(bitstream *b, unsigned n) {
+    uint64_t w;
+    if (n && n <= 32 && peek64(b, &w)) {
+        skip_bits(b, n);
+        return (uint32_t)(w >> (64 - n));
+    }
     uint32_t v = 0;
     for (unsigned i = 0; i < n; i++) v = (v << 1) | read_bit(b);
     return v;
@@ -131,6 +154,11 @@ static void fail(mvs_error *error, mvs_error e) { if (!*error) *error = e; }
 /* ---- Rice codes (mvs-rice.js) ---- */
 
 static uint32_t leading_ones(bitstream *b) {
+    uint64_t w;
+    if (peek64(b, &w)) {
+        unsigned ones = ~w ? (unsigned)__builtin_clzll(~w) : 64;
+        if (ones < 57) { skip_bits(b, ones + 1); return ones; }
+    }
     uint32_t n = 0;
     while (read_bit(b) == 1) {
         if (++n > MVS_MAX_RICE_PREFIX) { fail(b->error, MVS_E_RICE); return 0; }
@@ -226,6 +254,22 @@ static huffman_table build_table(void) {
 }
 
 static uint8_t huffman_symbol(bitstream *b, const huffman_table *t) {
+    uint64_t w;
+    if (peek64(b, &w)) {
+        for (int len = 1; len <= 16; len++) {
+            int32_t code = (int32_t)(w >> (64 - len));
+            if (t->max_code[len] >= 0 && code <= t->max_code[len]) {
+                int32_t index = t->val_ptr[len] + (code - t->min_code[len]);
+                skip_bits(b, (unsigned)len);
+                if (index >= 0 && index < (int32_t)sizeof AC_VALUES) return AC_VALUES[index];
+                fail(b->error, MVS_E_HUFFMAN);
+                return 0;
+            }
+        }
+        skip_bits(b, 16);
+        fail(b->error, MVS_E_HUFFMAN);
+        return 0;
+    }
     int32_t code = 0;
     for (int len = 1; len <= 16; len++) {
         code = (code << 1) | (int32_t)read_bit(b);
@@ -276,12 +320,17 @@ enum { CONST_BITS = 13, PASS1_BITS = 2 };
 /* libjpeg range limit: level shift by 128 and clamp, wrapping wildly
  * out-of-range values the way the 10-bit table does */
 static uint8_t range_limit(int64_t v) {
-    unsigned m = (unsigned)((uint64_t)v & 0x3ffu);
-    if (m < 128) return (uint8_t)(m + 128);
-    if (m < 512) return 255;
-    if (m < 896) return 0;
-    return (uint8_t)(m - 896);
+    /* m < 128 gives m + 128, m < 512 gives 255, m < 896 gives 0, and the rest m - 896.
+     * Rotating by 128 puts the two passthrough ranges first, without branches. */
+    unsigned t = ((unsigned)((uint64_t)v & 0x3ffu) + 128u) & 0x3ffu;
+    return t < 256 ? (uint8_t)t : (t < 640 ? 255 : 0);
 }
+
+/* range_limit(asr(v, n)) reads only bits n..n+9 of v, which a logical shift keeps. */
+static inline uint8_t descale_limit(int64_t v, unsigned n) { return range_limit((int64_t)((uint64_t)v >> n)); }
+
+/* wrap32(asr(v, n)) keeps bits n..n+31 of v, which a logical shift keeps too. */
+static inline int32_t descale_wrap(int64_t v, unsigned n) { return wrap32((int64_t)((uint64_t)v >> n)); }
 
 uint8_t mvs_idct_flat(int32_t dc) {
     return range_limit(asr((int64_t)dc * (1 << PASS1_BITS) + (1 << (PASS1_BITS + 2)), PASS1_BITS + 3));
@@ -316,16 +365,22 @@ void mvs_idct8x8(const int32_t block[64], uint8_t out[64]) {
         tmp0 += z1 + z3; tmp1 += z2 + z4; tmp2 += z2 + z3; tmp3 += z1 + z4;
         const unsigned shift = CONST_BITS - PASS1_BITS;
         const int64_t round = (int64_t)1 << (shift - 1);
-        ws[c]      = wrap32(asr(tmp10 + tmp3 + round, shift));
-        ws[c + 56] = wrap32(asr(tmp10 - tmp3 + round, shift));
-        ws[c + 8]  = wrap32(asr(tmp11 + tmp2 + round, shift));
-        ws[c + 48] = wrap32(asr(tmp11 - tmp2 + round, shift));
-        ws[c + 16] = wrap32(asr(tmp12 + tmp1 + round, shift));
-        ws[c + 40] = wrap32(asr(tmp12 - tmp1 + round, shift));
-        ws[c + 24] = wrap32(asr(tmp13 + tmp0 + round, shift));
-        ws[c + 32] = wrap32(asr(tmp13 - tmp0 + round, shift));
+        ws[c]      = descale_wrap(tmp10 + tmp3 + round, shift);
+        ws[c + 56] = descale_wrap(tmp10 - tmp3 + round, shift);
+        ws[c + 8]  = descale_wrap(tmp11 + tmp2 + round, shift);
+        ws[c + 48] = descale_wrap(tmp11 - tmp2 + round, shift);
+        ws[c + 16] = descale_wrap(tmp12 + tmp1 + round, shift);
+        ws[c + 40] = descale_wrap(tmp12 - tmp1 + round, shift);
+        ws[c + 24] = descale_wrap(tmp13 + tmp0 + round, shift);
+        ws[c + 32] = descale_wrap(tmp13 - tmp0 + round, shift);
     }
     for (int r = 0; r < 64; r += 8) {
+        if (!ws[r + 1] && !ws[r + 2] && !ws[r + 3] && !ws[r + 4] && !ws[r + 5] && !ws[r + 6] && !ws[r + 7]) {
+            /* Every term but the DC is zero, so all eight outputs equal its rounded value. */
+            const unsigned shift = CONST_BITS + PASS1_BITS + 3;
+            memset(out + r, descale_limit((int64_t)ws[r] * (1 << CONST_BITS) + ((int64_t)1 << (shift - 1)), shift), 8);
+            continue;
+        }
         int64_t z2 = ws[r + 2], z3 = ws[r + 6];
         int64_t z1 = (z2 + z3) * FIX_0_541196100;
         int64_t tmp2 = z1 - z3 * FIX_1_847759065;
@@ -344,14 +399,14 @@ void mvs_idct8x8(const int32_t block[64], uint8_t out[64]) {
         tmp0 += z1 + z3; tmp1 += z2 + z4; tmp2 += z2 + z3; tmp3 += z1 + z4;
         const unsigned shift = CONST_BITS + PASS1_BITS + 3;
         const int64_t round = (int64_t)1 << (shift - 1);
-        out[r]     = range_limit(asr(tmp10 + tmp3 + round, shift));
-        out[r + 7] = range_limit(asr(tmp10 - tmp3 + round, shift));
-        out[r + 1] = range_limit(asr(tmp11 + tmp2 + round, shift));
-        out[r + 6] = range_limit(asr(tmp11 - tmp2 + round, shift));
-        out[r + 2] = range_limit(asr(tmp12 + tmp1 + round, shift));
-        out[r + 5] = range_limit(asr(tmp12 - tmp1 + round, shift));
-        out[r + 3] = range_limit(asr(tmp13 + tmp0 + round, shift));
-        out[r + 4] = range_limit(asr(tmp13 - tmp0 + round, shift));
+        out[r]     = descale_limit(tmp10 + tmp3 + round, shift);
+        out[r + 7] = descale_limit(tmp10 - tmp3 + round, shift);
+        out[r + 1] = descale_limit(tmp11 + tmp2 + round, shift);
+        out[r + 6] = descale_limit(tmp11 - tmp2 + round, shift);
+        out[r + 2] = descale_limit(tmp12 + tmp1 + round, shift);
+        out[r + 5] = descale_limit(tmp12 - tmp1 + round, shift);
+        out[r + 3] = descale_limit(tmp13 + tmp0 + round, shift);
+        out[r + 4] = descale_limit(tmp13 - tmp0 + round, shift);
     }
 }
 
@@ -370,10 +425,12 @@ typedef struct {
 } tile_desc;
 
 struct mvs_decoder {
-    uint8_t luma_quant[64], chroma_quant[64];
+    uint8_t luma_quant[64], chroma_quant[64]; /* in coefficient (zigzag) order */
     int16_t coeffs[192], dpcm[192];
     uint8_t solid[3], two_a[3], two_b[3];
-    uint8_t tile[64][3];
+    uint32_t tile[64];             /* pixels in the surface format of the current decode */
+    unsigned red_shift, green_shift, blue_shift;
+    uint32_t alpha;
     int8_t *cache;                 /* MVS_CACHE_SLOTS entries of 99 bytes; slot 0 unused */
     uint32_t cache_write, cache_last;
     uint64_t cache_count;
@@ -398,13 +455,20 @@ size_t mvs_descriptor_bytes_for(uint32_t width, uint32_t height, size_t *tiles_o
     return bytes;
 }
 
+/* Tables arrive in natural order; keep them in the order coefficients are coded. */
+static void set_quant(mvs_decoder *d, const uint8_t luma[64], const uint8_t chroma[64]) {
+    for (int i = 0; i < 64; i++) {
+        d->luma_quant[i] = luma[ZIGZAG[i]];
+        d->chroma_quant[i] = chroma[ZIGZAG[i]];
+    }
+}
+
 mvs_decoder *mvs_create(void) {
     mvs_decoder *d = calloc(1, sizeof *d);
     if (!d) return NULL;
     d->cache = calloc(MVS_CACHE_SLOTS, MVS_CACHE_ENTRY_BYTES);
     if (!d->cache) { free(d); return NULL; }
-    memcpy(d->luma_quant, DEFAULT_LUMA_QUANT, 64);
-    memcpy(d->chroma_quant, DEFAULT_CHROMA_QUANT, 64);
+    set_quant(d, DEFAULT_LUMA_QUANT, DEFAULT_CHROMA_QUANT);
     d->huffman = build_table();
     return d;
 }
@@ -485,17 +549,11 @@ mvs_error mvs_mark_raw(mvs_decoder *d, uint32_t width, uint32_t height, uint32_t
 
 static void put_tile(mvs_decoder *d, const mvs_surface *s, uint32_t tx, uint32_t ty, uint32_t tw, uint32_t th,
                      mvs_written_fn written, void *context) {
-    for (uint32_t row = 0; row < th; row++) {
-        uint8_t *dst = s->pixels + (size_t)(ty + row) * s->stride + (size_t)tx * 4;
-        for (uint32_t col = 0; col < tw; col++) {
-            const uint8_t *rgb = d->tile[row * 8 + col];
-            uint32_t px = ((uint32_t)rgb[0] << s->red_shift) | ((uint32_t)rgb[1] << s->green_shift) |
-                          ((uint32_t)rgb[2] << s->blue_shift);
-            uint32_t alpha_shift = 48u - s->red_shift - s->green_shift - s->blue_shift;
-            if (alpha_shift < 32) px |= 0xffu << alpha_shift;
-            memcpy(dst + (size_t)col * 4, &px, 4);
-        }
-    }
+    uint8_t *dst = s->pixels + (size_t)ty * s->stride + (size_t)tx * 4;
+    if (tw == 8)
+        for (uint32_t row = 0; row < th; row++) memcpy(dst + row * s->stride, d->tile + row * 8, 32);
+    else
+        for (uint32_t row = 0; row < th; row++) memcpy(dst + row * s->stride, d->tile + row * 8, (size_t)tw * 4);
     coverage(d,tx,ty,tw,th,true);
     if (written) written(context, tx, ty, tw, th);
 }
@@ -522,24 +580,37 @@ static void copy_tile(mvs_decoder *d, const mvs_surface *s, int64_t sx, int64_t 
 
 /* ---- Dequantize, transform, colour convert (into d->tile) ---- */
 
+static inline uint32_t pack_rgb(const mvs_decoder *d, const uint8_t rgb[3]) {
+    return ((uint32_t)rgb[0] << d->red_shift) | ((uint32_t)rgb[1] << d->green_shift) |
+           ((uint32_t)rgb[2] << d->blue_shift) | d->alpha;
+}
+
 static int transform_plane(mvs_decoder *d, unsigned plane, const uint8_t quant[64], uint8_t out[64]) {
-    int32_t dq[64];
+    const int16_t *c = d->coeffs + plane;
     int32_t ac = 0;
-    bool wide = false;
-    for (int i = 1; i < 64; i++) {
-        unsigned n = ZIGZAG[i];
-        int32_t v = d->coeffs[plane + i];
-        ac |= v;
-        dq[n] = v * quant[n];
-        if (dq[n] > 4096 || dq[n] < -4096) wide = true;
-    }
-    int32_t dc = d->coeffs[plane] * quant[0];
+    for (int i = 1; i < 64; i++) ac |= c[i];
+    int32_t dc = c[0] * quant[0];
     if (ac == 0) return mvs_idct_flat(dc);
-    if (dc > 4096 || dc < -4096) wide = true;
+    int32_t dq[64];
+    bool wide = false;
+    for (int i = 0; i < 64; i++) {
+        int32_t v = c[i] * quant[i];
+        wide |= v > 4096 || v < -4096;
+        dq[ZIGZAG[i]] = v;
+    }
     if (wide && d->stats) d->stats->wide_idct++;
-    dq[0] = dc;
     mvs_idct8x8(dq, out);
     return -1;
+}
+
+static void render(mvs_decoder *d, const uint8_t ys[64], const uint8_t cbs[64], const uint8_t crs[64]) {
+    /* Locals, because the stores to d->tile could alias the decoder's fields. */
+    const unsigned rs = d->red_shift, gs = d->green_shift, bs = d->blue_shift;
+    const uint32_t alpha = d->alpha;
+    uint32_t *tile = d->tile;
+    for (int i = 0; i < 64; i++)
+        tile[i] = ((uint32_t)red(ys[i], crs[i]) << rs) | ((uint32_t)green(ys[i], cbs[i], crs[i]) << gs) |
+                  ((uint32_t)blue(ys[i], cbs[i]) << bs) | alpha;
 }
 
 static void dequant_and_render(mvs_decoder *d) {
@@ -550,15 +621,12 @@ static void dequant_and_render(mvs_decoder *d) {
     int cr_flat = transform_plane(d, CR, d->chroma_quant, crs);
     if (cb_flat >= 0) memset(cbs, cb_flat, 64);
     if (cr_flat >= 0) memset(crs, cr_flat, 64);
-    for (int i = 0; i < 64; i++) {
-        d->tile[i][0] = clamp255(ys[i] + cr_r(crs[i]));
-        d->tile[i][1] = clamp255(ys[i] + g_add(cbs[i], crs[i]));
-        d->tile[i][2] = clamp255(ys[i] + cb_b(cbs[i]));
-    }
+    render(d, ys, cbs, crs);
 }
 
 static void fill_tile(mvs_decoder *d, const uint8_t rgb[3]) {
-    for (int i = 0; i < 64; i++) memcpy(d->tile[i], rgb, 3);
+    const uint32_t px = pack_rgb(d, rgb);
+    for (int i = 0; i < 64; i++) d->tile[i] = px;
 }
 
 /* ---- Cache ---- */
@@ -583,26 +651,23 @@ static bool load_cache(mvs_decoder *d, uint32_t idx) {
 static void read_ycbcr20(bitstream *b, uint8_t rgb[3]) {
     int32_t y = (int32_t)read_bits(b, 8);
     unsigned cb = read_bits(b, 6) << 2, cr = read_bits(b, 6) << 2;
-    rgb[0] = clamp255(y + cr_r(cr));
-    rgb[1] = clamp255(y + g_add(cb, cr));
-    rgb[2] = clamp255(y + cb_b(cb));
+    rgb[0] = red(y, (int32_t)cr);
+    rgb[1] = green(y, (int32_t)cb, (int32_t)cr);
+    rgb[2] = blue(y, (int32_t)cb);
 }
 
 static void two_color_bitmap(mvs_decoder *d, bitstream *b, const uint8_t a[3], const uint8_t c[3]) {
+    const uint32_t pa = pack_rgb(d, a), pc = pack_rgb(d, c);
     uint32_t selector = read_bits(b, 8);
     for (int row = 0; row < 8; row++) {
         uint32_t bits = ((selector >> (7 - row)) & 1) ? 0xff : read_bits(b, 8);
-        for (int col = 0; col < 8; col++) memcpy(d->tile[row * 8 + col], ((bits >> (7 - col)) & 1) ? a : c, 3);
+        for (int col = 0; col < 8; col++) d->tile[row * 8 + col] = ((bits >> (7 - col)) & 1) ? pa : pc;
     }
 }
 
 static void black_white(mvs_decoder *d, bitstream *b) {
     static const uint8_t white[3] = { 255, 255, 255 }, black[3] = { 0, 0, 0 };
-    uint32_t selector = read_bits(b, 8);
-    for (int row = 0; row < 8; row++) {
-        uint32_t bits = ((selector >> (7 - row)) & 1) ? 0xff : read_bits(b, 8);
-        for (int col = 0; col < 8; col++) memcpy(d->tile[row * 8 + col], ((bits >> (7 - col)) & 1) ? white : black, 3);
-    }
+    two_color_bitmap(d, b, white, black);
 }
 
 static void solid_or_two_color(mvs_decoder *d, bitstream *b) {
@@ -869,8 +934,7 @@ static mvs_error decode_rect(mvs_decoder *d, const mvs_surface *s, uint32_t x, u
     if (d->stats) d->stats->kind = (mvs_kind)type;
     if (type == 0x02) {
         if (length != 129) return MVS_E_QUANT_LENGTH;
-        memcpy(d->luma_quant, payload + 1, 64);
-        memcpy(d->chroma_quant, payload + 65, 64);
+        set_quant(d, payload + 1, payload + 65);
         return MVS_OK;
     }
     if ((uint64_t)x + w > s->width || (uint64_t)y + h > s->height) return MVS_E_RECT;
@@ -890,6 +954,11 @@ mvs_error mvs_decode(mvs_decoder *d, const mvs_surface *s, uint32_t x, uint32_t 
     if (stats) memset(stats, 0, sizeof *stats);
     d->stats = stats;
     d->error = MVS_OK;
+    d->red_shift = s->red_shift;
+    d->green_shift = s->green_shift;
+    d->blue_shift = s->blue_shift;
+    uint32_t alpha_shift = 48u - s->red_shift - s->green_shift - s->blue_shift;
+    d->alpha = alpha_shift < 32 ? 0xffu << alpha_shift : 0;
     mvs_error e = decode_rect(d, s, x, y, w, h, payload, length, written, context);
     d->stats = NULL;
     return e;

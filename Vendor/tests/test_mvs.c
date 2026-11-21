@@ -390,6 +390,116 @@ static void test_raw_coverage_and_geometry_reset(void) {
     screen_free(&s);
 }
 
+/* Generated update sequences over a larger screen. Their structured headers
+ * reach every tile type, both threshold ranges, custom quantization and the
+ * cache, and random bodies reach wide transforms and every error path. The
+ * hash covers the result, statistics, written rectangles and pixels of every
+ * update, so a faster decoder must reproduce this one bit for bit. */
+typedef struct { uint8_t bytes[16384]; size_t bits; } bit_writer;
+static void put_bits(bit_writer *w, uint32_t value, unsigned n) {
+    for (unsigned i = n; i > 0; i--) {
+        if ((value >> (i - 1)) & 1) w->bytes[w->bits / 8] |= (uint8_t)(0x80 >> (w->bits % 8));
+        w->bits++;
+    }
+}
+
+static uint64_t golden_state;
+__attribute__((no_sanitize("integer"))) static uint32_t golden_random(void) {
+    uint64_t z = (golden_state += 0x9e3779b97f4a7c15ull);
+    z = (z ^ (z >> 30)) * 0xbf58476d1ce4e5b9ull;
+    z = (z ^ (z >> 27)) * 0x94d049bb133111ebull;
+    return (uint32_t)((z ^ (z >> 31)) >> 32);
+}
+
+static uint64_t golden_hash = 0xcbf29ce484222325ull;
+__attribute__((no_sanitize("integer"))) static void hash_bytes(const void *data, size_t n) {
+    const uint8_t *p = data;
+    for (size_t i = 0; i < n; i++) golden_hash = (golden_hash ^ p[i]) * 0x100000001b3ull;
+}
+static void hash_write(void *context, uint32_t x, uint32_t y, uint32_t w, uint32_t h) {
+    (void)context;
+    const uint32_t r[4] = { x, y, w, h };
+    hash_bytes(r, sizeof r);
+}
+
+static unsigned golden_type(void) {
+    static const uint8_t weights[8] = { 3, 5, 5, 8, 12, 55, 6, 6 };
+    unsigned pick = golden_random() % 100;
+    for (unsigned t = 0; t < 8; t++) {
+        if (pick < weights[t]) return t;
+        pick -= weights[t];
+    }
+    return 5;
+}
+
+static void test_golden_sequence(void) {
+    enum { W = 157, H = 99, UPDATES = 4000 };
+    static uint8_t payload[1 << 16];
+    static bit_writer header;
+    uint8_t *pixels = calloc((size_t)W * H, 4);
+    mvs_surface surface = { pixels, W, H, W * 4, 0, 8, 16 };
+    mvs_decoder *d = mvs_create();
+    golden_state = 21;
+    long errors = 0;
+    for (int i = 0; i < UPDATES; i++) {
+        if (i % 500 == 499) { mvs_destroy(d); d = mvs_create(); }
+        uint32_t w = 1 + golden_random() % W, h = 1 + golden_random() % H;
+        uint32_t x = golden_random() % (W - w + 1), y = golden_random() % (H - h + 1);
+        size_t tiles = (size_t)((w + 7) / 8) * ((h + 7) / 8), length;
+        unsigned kind = golden_random() % 100;
+        if (kind < 6) {
+            payload[0] = 2;
+            unsigned range = golden_random() % 3 ? 32 : 255;
+            for (int q = 1; q < 129; q++) payload[q] = (uint8_t)(1 + golden_random() % range);
+            length = 129;
+        } else if (kind < 50) {
+            memset(&header, 0, sizeof header);
+            put_bits(&header, 0, 1);
+            for (size_t done = 0; done < tiles;) {
+                unsigned type = done ? golden_type() : 5, form = golden_random() % 100;
+                uint32_t count = 1;
+                put_bits(&header, type, 3);
+                if (form < 75) put_bits(&header, 0, 1);
+                else if (form < 95) { uint32_t v = golden_random() % 15; put_bits(&header, 1, 1); put_bits(&header, v, 4); count = v + 2; }
+                else {
+                    uint32_t v = golden_random() % 300;
+                    put_bits(&header, 1, 1); put_bits(&header, 15, 4);
+                    if (v < 128) put_bits(&header, v, 8);
+                    else { put_bits(&header, 0x80 | (v & 0x7f), 8); put_bits(&header, v >> 7, 8); }
+                    count = v + 17;
+                }
+                done += count;
+            }
+            put_bits(&header, 0x6d, 8);
+            size_t header_bytes = (header.bits + 7) / 8, body = tiles * 10 + 16, offset = 6 + header_bytes;
+            payload[0] = 0;
+            payload[1] = (uint8_t)(golden_random() % 2 ? 1 + golden_random() % 14 : 15 + golden_random() % 49);
+            payload[2] = (uint8_t)(golden_random() % 2 ? 1 + golden_random() % 14 : 15 + golden_random() % 49);
+            payload[3] = (uint8_t)(offset >> 16); payload[4] = (uint8_t)(offset >> 8); payload[5] = (uint8_t)offset;
+            memcpy(payload + 6, header.bytes, header_bytes);
+            for (size_t b = 0; b < body; b++) payload[offset + b] = (uint8_t)golden_random();
+            payload[offset] &= 0x7f;
+            length = offset + body;
+        } else {
+            payload[0] = 1;
+            payload[1] = (uint8_t)(golden_random() % 70);
+            payload[2] = (uint8_t)(golden_random() % 70);
+            length = 3 + tiles * 4 + 8;
+            for (size_t b = 3; b < length; b++) payload[b] = (uint8_t)golden_random();
+        }
+        mvs_stats stats;
+        mvs_error e = mvs_decode(d, &surface, x, y, w, h, payload, length, hash_write, NULL, &stats);
+        if (e) errors++;
+        hash_bytes(&e, sizeof e);
+        hash_bytes(&stats, sizeof stats);
+        hash_bytes(pixels, (size_t)W * H * 4);
+    }
+    mvs_destroy(d);
+    free(pixels);
+    printf("golden: %d updates, %ld typed failures, hash %016llx\n", UPDATES, errors, (unsigned long long)golden_hash);
+    CHECK(golden_hash == 0xb4edd7871227d5fbull);
+}
+
 int main(int argc, char **argv) {
     build_vectors();
     test_regional_initialization();
@@ -400,6 +510,7 @@ int main(int argc, char **argv) {
     test_malformed();
     test_cache_bounds();
     test_memory();
+    test_golden_sequence();
     test_fuzz(argc > 1 ? atol(argv[1]) : 200000);
     if (failures) { fprintf(stderr, "%d failures\n", failures); return 1; }
     printf("all decoder tests passed\n");

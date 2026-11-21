@@ -42,6 +42,10 @@ wait_for = ["build"]
 # and miss their deadlines, so CI, where GitHub sets CI, runs them one at a time.
 run = 'swift test --package-path Packages/RemoraKit ${CI:+--no-parallel} ${usage_filter:+--filter "$usage_filter"}'
 
+[tasks."test:mvs"]
+description = "Run the Apple MVS decoder tests under ASan and UBSan, including the golden output hash."
+run = "Vendor/tests/test-apple-mvs.sh"
+
 [tasks.format]
 description = "Format the Swift sources in place."
 run = "set -o pipefail; git ls-files -z --cached --others --exclude-standard '*.swift' | xargs -0 xcrun swift-format format --in-place --parallel"
@@ -52,7 +56,7 @@ run = "set -o pipefail; git ls-files -z --cached --others --exclude-standard '*.
 
 [tasks.check]
 description = "Lint, build and test, and check that the committed Remora.xcodeproj matches project.yml. Run it before pushing or opening a PR."
-depends = ["lint", "build", "test"]
+depends = ["lint", "build", "test", "test:mvs"]
 run = "git diff --exit-code --stat -- Remora.xcodeproj || { echo 'Remora.xcodeproj did not match project.yml. It is regenerated now; commit it.' >&2; exit 1; }"
 
 [tasks."site:dev"]
