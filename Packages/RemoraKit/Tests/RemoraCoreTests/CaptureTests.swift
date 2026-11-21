@@ -399,6 +399,7 @@ private func animatesThroughout(_ times: [Double], from start: Double, to end: D
     // The movie's clock starts after `started`, 29 ms after it once on the CI runner, so a frame's time is
     // that much earlier than the test's time for the same moment. Windows that must hold the first frame
     // after an event open this long before it, while the screen still shows the state before the event.
+    // Windows that must end before an event close this long before it.
     let lead = 0.1
     // The move starts after the encoder's warm-up, which held the second frame back 0.5 s on the CI runner.
     try await Task.sleep(for: .seconds(1))
@@ -415,7 +416,9 @@ private func animatesThroughout(_ times: [Double], from start: Double, to end: D
     }
     let arrivedAt = ProcessInfo.processInfo.systemUptime - started
     // Each state holds for several frame intervals of a slow encoder, so the movie records it at any frame rate.
-    try await Task.sleep(for: .seconds(0.55))
+    // The resting window below closes `lead` before the press and stays 0.4 s long, longer than any frame gap
+    // the animation check allows, so it always holds a frame.
+    try await Task.sleep(for: .seconds(0.65))
     let pressAt = ProcessInfo.processInfo.systemUptime - started
     state.pressAgentCursor(depth: CursorTuning.clickDepth, animated: true)
     state.receive(.agent, .pointer(.init(x: 500, y: 140), .left))
@@ -470,7 +473,7 @@ private func animatesThroughout(_ times: [Double], from start: Double, to end: D
             if pixels > 0 { centers[leg].append(sum / pixels) }
             CVPixelBufferUnlockBaseAddress(buffer, .readOnly)
         }
-        if time > arrivedAt + 0.15 && time < pressAt { resting = buffer }
+        if time > arrivedAt + 0.15 && time < pressAt - lead { resting = buffer }
         if time > pressAt + 0.08 && time < pressAt + 0.45 { pressed.append((time - pressAt, buffer)) }
         if time > humanAt - lead && time < humanAt + 0.5 { human.append(buffer) }
     }
