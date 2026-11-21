@@ -1,0 +1,13 @@
+--- a/libfreerdp/codec/h264.c
++++ b/libfreerdp/codec/h264.c
+@@ -1003,7 +1003,9 @@
+ 	if (!h264_context_init(h264))
+ 		goto fail;
+ 
+-	h264->yuv = yuv_context_new(Compressor, 0);
++	/* Remora: convert on the decoding thread. Queuing 512x512 tiles on the WinPR
++	 * pool and waiting for it to drain cost more CPU than the conversion. */
++	h264->yuv = yuv_context_new(Compressor, THREADING_FLAGS_DISABLE_THREADS);
+ 	if (!h264->yuv)
+ 		goto fail;
+ 

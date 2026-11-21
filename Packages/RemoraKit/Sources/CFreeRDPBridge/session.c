@@ -81,7 +81,7 @@ static void configure_logging(void) {
     engine_log = os_log_create("com.peblon.remora", "FreeRDP");
     wLog *root = WLog_GetRoot();
     (void)WLog_SetLogLevel(root, WLOG_WARN);
-    /* The backend reports the selected hw device and any software fallback. */
+    /* freerdp-h264-decoder-log.patch reports whether Apple chose the hardware or software H.264 decoder. */
     (void)WLog_SetLogLevel(WLog_Get("com.freerdp.codec"), WLOG_INFO);
     if (WLog_SetLogAppenderType(root, WLOG_APPENDER_CALLBACK)) {
         wLogCallbacks callbacks = { .message = log_message };
@@ -96,7 +96,7 @@ static uint64_t milliseconds(void) {
     return (uint64_t)now.tv_sec * 1000 + (uint64_t)now.tv_nsec / 1000000;
 }
 
-/* FreeRDP 3.32.2 discards SO_ERROR and reports CONNECT_FAILED for both refusal
+/* FreeRDP 3.33.1 only logs SO_ERROR and reports CONNECT_FAILED for both refusal
  * and timeout (core/tcp.c). Its public TCPConnect hook is the narrow place to
  * retain that distinction. FreeRDP still owns the connected socket and all
  * transport, TLS, NLA, RDSTLS and redirection behavior. */
@@ -447,9 +447,6 @@ RMRDPSession *rm_rdp_create(const RMRDPConfiguration *config, const RMRDPCallbac
         freerdp_settings_set_bool(settings, FreeRDP_GfxH264, TRUE) &&
         freerdp_settings_set_bool(settings, FreeRDP_GfxAVC444, TRUE) &&
         freerdp_settings_set_bool(settings, FreeRDP_GfxAVC444v2, TRUE) &&
-        /* GDI still converts into our BGRA buffer. This flag lets its H.264
-         * contexts request FFmpeg hardware acceleration with software fallback. */
-        freerdp_settings_set_bool(settings, FreeRDP_SoftwareGdi, FALSE) &&
         /* Allow transient Tailscale path loss: the defaults (5/2/3 seconds)
          * abandon an unacknowledged connection after about 11 seconds. */
         freerdp_settings_set_bool(settings, FreeRDP_TcpKeepAlive, TRUE) &&

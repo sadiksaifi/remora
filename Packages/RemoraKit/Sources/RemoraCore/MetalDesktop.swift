@@ -58,11 +58,9 @@ public final class MetalDesktop: CaptureSource, Sendable {
             guard let storage = state.storage else { return 0 }
             var damage = FrameDamage()
             if resized {
-                damage.insert(.init(x: 0, y: 0, width: frame.width, height: frame.height))
+                damage.insert(contentsOf: [.init(x: 0, y: 0, width: frame.width, height: frame.height)])
             } else {
-                for rectangle in frame.dirtyRectangles {
-                    if let clipped = rectangle.clipped(width: frame.width, height: frame.height) { damage.insert(clipped) }
-                }
+                damage.insert(contentsOf: frame.dirtyRectangles.lazy.compactMap { $0.clipped(width: frame.width, height: frame.height) })
             }
             guard !damage.rectangles.isEmpty else { return 0 }
             if state.pending == nil {
@@ -83,8 +81,8 @@ public final class MetalDesktop: CaptureSource, Sendable {
                         frame.pixels + y * frame.stride + offset, rowBytes)
                 }
                 copied += rowBytes * rectangle.height
-                state.damage.insert(rectangle)
             }
+            state.damage.insert(contentsOf: damage.rectangles)
             state.revision += 1
             state.arrival = ProcessInfo.processInfo.systemUptime
             for observer in state.observers.values { observer(state.arrival) }
