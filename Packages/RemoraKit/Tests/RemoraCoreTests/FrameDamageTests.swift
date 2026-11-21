@@ -68,3 +68,13 @@ private func overlaps(_ a: DirtyRectangle, _ b: DirtyRectangle) -> Bool {
         })
     #expect(damage.rectangles == [DirtyRectangle(x: 0, y: 0, width: 1920, height: 1088)])
 }
+
+/// A change in one part of a band must not split damage that continues unchanged elsewhere in it.
+@Test func unchangedSpansStayWholeBesideStaggeredDamage() {
+    let strips = stride(from: 0, to: 128, by: 8).map { DirtyRectangle(x: $0, y: 0, width: 4, height: 1024) }
+    let dots = stride(from: 0, to: 1024, by: 16).map { DirtyRectangle(x: 200, y: $0, width: 4, height: 4) }
+    var damage = FrameDamage()
+    damage.insert(contentsOf: strips + dots)
+    #expect(damage.rectangles.count == strips.count + dots.count)
+    #expect(strips.allSatisfy(damage.rectangles.contains))
+}

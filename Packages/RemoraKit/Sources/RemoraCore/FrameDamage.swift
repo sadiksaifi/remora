@@ -26,20 +26,18 @@ struct FrameDamage {
         if rectangles.count > count { rectangles = Self.union(rectangles) }
     }
 
-    /// Between consecutive edges, merge the covering spans. Join a band to the one above when their spans match,
-    /// so coalescing never adds undamaged pixels.
+    /// Between consecutive edges, merge the covering spans. A span that continues unchanged into the next band
+    /// extends its rectangle, so coalescing never adds undamaged pixels and a change elsewhere in the band never
+    /// splits it.
     private static func union(_ input: [DirtyRectangle]) -> [DirtyRectangle] {
         let byTop = input.sorted { $0.y < $1.y }
         let edges = Set(input.flatMap { [$0.y, $0.bottom] }).sorted()
         var result: [DirtyRectangle] = []
         var active: [DirtyRectangle] = []
         var next = 0
-        var open: (top: Int, spans: [Range<Int>])?
-        func close(at bottom: Int) {
-            guard let open else { return }
-            for span in open.spans {
-                result.append(DirtyRectangle(x: span.lowerBound, y: open.top, width: span.count, height: bottom - open.top))
-            }
+        var open: [Range<Int>: Int] = [:]  // span to the top of its rectangle
+        func close(_ span: Range<Int>, top: Int, at bottom: Int) {
+            result.append(DirtyRectangle(x: span.lowerBound, y: top, width: span.count, height: bottom - top))
         }
         for top in edges.dropLast() {
             active.removeAll { $0.bottom <= top }
@@ -55,11 +53,14 @@ struct FrameDamage {
                     spans.append(span)
                 }
             }
-            if open?.spans == spans { continue }
-            close(at: top)
-            open = spans.isEmpty ? nil : (top, spans)
+            let current = Set(spans)
+            for (span, spanTop) in open where !current.contains(span) {
+                close(span, top: spanTop, at: top)
+                open[span] = nil
+            }
+            for span in spans where open[span] == nil { open[span] = top }
         }
-        close(at: edges.last ?? 0)
+        for (span, spanTop) in open { close(span, top: spanTop, at: edges.last ?? 0) }
         return result
     }
 }
