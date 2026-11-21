@@ -68,7 +68,7 @@ xcodebuild -version >/dev/null
 # A changed recipe or toolchain invalidates completed stages. Sources and their
 # checked archives are immutable and can be reused even for --clean.
 configuration=$({
-    shasum -a 256 "$VENDOR/build-engine.sh"
+    shasum -a 256 "$VENDOR/build-engine.sh" "$VENDOR/patches/"freerdp-*.patch
     "$REMORA_CMAKE" --version
     xcodebuild -version
     xcrun --sdk macosx --show-sdk-version
@@ -146,10 +146,15 @@ build_ffmpeg() {
 
 build_freerdp() {
     # RDP8 channel dependencies use rdpsnd with sys:fake; no audio device backend.
-    rm -rf "$BUILD/freerdp" "$FREERDP_PREFIX"
+    rm -rf "$BUILD/freerdp" "$BUILD/freerdp-source" "$FREERDP_PREFIX"
+    # Patch a copy, so the verified source stays pristine.
+    cp -R "$SOURCES/freerdp-$FREERDP_VERSION" "$BUILD/freerdp-source"
+    for change in "$VENDOR/patches/"freerdp-*.patch; do
+        patch -d "$BUILD/freerdp-source" -p1 --forward < "$change"
+    done
     # FreeRDP otherwise takes its version from a git tag on HEAD. Its source sits in the Remora
     # checkout, so a Remora release tag such as v0.1.0 would make it install as FreeRDP 0.
-    "$REMORA_CMAKE" -S "$SOURCES/freerdp-$FREERDP_VERSION" -B "$BUILD/freerdp" \
+    "$REMORA_CMAKE" -S "$BUILD/freerdp-source" -B "$BUILD/freerdp" \
         -G 'Unix Makefiles' \
         -DCMAKE_MAKE_PROGRAM=/usr/bin/make \
         -DCMAKE_C_COMPILER="$CC" \
