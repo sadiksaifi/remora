@@ -117,7 +117,7 @@ static UINT server_data_request(CliprdrClientContext *channel,
     void *data = NULL;
     const WCHAR empty = 0;
     if (request->requestedFormatId == CF_UNICODETEXT && c->local_text && !c->local_text[0]) {
-        /* WinPR 3.32.2 rejects an empty UTF-8 conversion (wlen == 0). */
+        /* WinPR 3.33.1 rejects an empty UTF-8 conversion (wlen == 0). */
         size = sizeof(empty);
     } else if (request->requestedFormatId == CF_UNICODETEXT && c->local_text) {
         const size_t length = strlen(c->local_text) + 1;

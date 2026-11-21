@@ -35,16 +35,16 @@ readonly VENDOR
 readonly SOURCES="$VENDOR/src"
 readonly BUILD="$VENDOR/build"
 readonly OPENSSL_VERSION=3.6.5
-readonly FREERDP_VERSION=3.32.2
+readonly FREERDP_VERSION=3.33.1
 readonly FFMPEG_VERSION=9.0.2
 # Official release assets and their published .sha256 files:
 # https://github.com/openssl/openssl/releases/tag/openssl-3.6.5
-# https://github.com/FreeRDP/FreeRDP/releases/tag/3.32.2
+# https://github.com/FreeRDP/FreeRDP/releases/tag/3.33.1
 # FFmpeg archive verified against ffmpeg.org release signing key
 # FCF986EA15E6E293A5644F10B4322F04D67658D8:
 # https://ffmpeg.org/releases/ffmpeg-9.0.2.tar.gz.asc
 readonly OPENSSL_SHA256=a2157c2830efdec3788939b00c9b0638306d3f0bbb76dc4832ee503bb397df98
-readonly FREERDP_SHA256=e95a505c0057e4d06a3b120477c421028769deba4db9c639ef3465d050f0955c
+readonly FREERDP_SHA256=4431bbf04d370545cfe2924b9d9f116b95c90c64ff156b2550bbaf82d34e7124
 readonly FFMPEG_SHA256=84960df915059e8754fef2cd7c9afeb614062b1b5458ec471eecee619ee04e98
 readonly FFMPEG_PREFIX="$BUILD/ffmpeg-install"
 readonly OPENSSL_PREFIX="$BUILD/openssl-install"
@@ -128,8 +128,8 @@ build_ffmpeg() {
     rm -rf "$BUILD/ffmpeg" "$FFMPEG_PREFIX"
     mkdir -p "$BUILD/ffmpeg"
     cd "$BUILD/ffmpeg"
-    # FreeRDP initialises the H.264 parser and uses swscale to convert downloaded
-    # VideoToolbox frames to YUV420P. No encoders or third-party libraries.
+    # FreeRDP decodes H.264 with VideoToolbox directly. It needs only swscale, for surfaces
+    # a server maps to a scaled output. No codecs or third-party libraries.
     "$SOURCES/ffmpeg-$FFMPEG_VERSION/configure" \
         --prefix="$FFMPEG_PREFIX" --cc="$CC" \
         --arch=arm64 --target-os=darwin --sysroot="$SDKROOT" \
@@ -139,9 +139,7 @@ build_ffmpeg() {
         --disable-shared --enable-static --enable-pic --disable-debug \
         --disable-programs --disable-doc --disable-network \
         --disable-avdevice --disable-avfilter --disable-avformat --disable-swresample \
-        --enable-avcodec --enable-avutil --enable-swscale \
-        --enable-decoder=h264 --enable-parser=h264 \
-        --enable-hwaccel=h264_videotoolbox --enable-videotoolbox
+        --disable-avcodec --enable-avutil --enable-swscale
     make -j "$JOBS"
     make install
 }
@@ -172,10 +170,6 @@ build_freerdp() {
         -DOPENSSL_INCLUDE_DIR="$OPENSSL_PREFIX/include" \
         -DOPENSSL_SSL_LIBRARY="$OPENSSL_PREFIX/lib/libssl.a" \
         -DOPENSSL_CRYPTO_LIBRARY="$OPENSSL_PREFIX/lib/libcrypto.a" \
-        -DFFMPEG_INCLUDE_DIRS:STRING="$FFMPEG_PREFIX/include" \
-        -DFFMPEG_LIBRARIES:STRING="$FFMPEG_PREFIX/lib/libavcodec.a;$FFMPEG_PREFIX/lib/libavutil.a;$FFMPEG_PREFIX/lib/libswscale.a" \
-        -DAVCODEC_INCLUDE_DIRS:PATH="$FFMPEG_PREFIX/include" \
-        -DAVCODEC_LIBRARIES:FILEPATH="$FFMPEG_PREFIX/lib/libavcodec.a" \
         -DAVUTIL_INCLUDE_DIRS:PATH="$FFMPEG_PREFIX/include" \
         -DAVUTIL_LIBRARIES:FILEPATH="$FFMPEG_PREFIX/lib/libavutil.a" \
         -DSWSCALE_INCLUDE_DIRS:PATH="$FFMPEG_PREFIX/include" \
@@ -193,9 +187,9 @@ build_freerdp() {
         -DWITH_CUPS=OFF -DCHANNEL_URBDRC=OFF -DWITH_FUSE=OFF -DWITH_KRB5=OFF \
         -DWITH_WINPR_TOOLS=OFF -DWITH_MANPAGES=OFF -DWITH_URIPARSER=OFF \
         -DWITH_AAD=OFF -DWITH_JSON_DISABLED=ON -DWITH_VERBOSE_WINPR_ASSERT=OFF \
-        -DWITH_FFMPEG=ON -DWITH_VIDEO_FFMPEG=ON -DWITH_DSP_FFMPEG=OFF \
+        -DWITH_APPLE_VIDEOTOOLBOX=ON -DWITH_FFMPEG=OFF -DWITH_VIDEO_FFMPEG=OFF -DWITH_DSP_FFMPEG=OFF \
         -DCHANNEL_VIDEO=OFF \
-        -DWITH_FFMPEG_HWACCEL=ON -DWITH_SWSCALE=ON -DWITH_SWSCALE_LOADING=OFF -DWITH_OPENH264=OFF \
+        -DWITH_SWSCALE=ON -DWITH_SWSCALE_LOADING=OFF -DWITH_OPENH264=OFF \
         -DWITH_MACAUDIO=OFF -DCHANNEL_AUDIN=OFF -DCHANNEL_RDPSND=ON -DCHANNEL_TSMF=OFF \
         -DWITH_OPUS=OFF -DWITH_FDK_AAC=OFF -DWITH_GSM=OFF -DWITH_LAME=OFF \
         -DWITH_FAAD2=OFF -DWITH_FAAC=OFF -DWITH_SOXR=OFF \
@@ -212,10 +206,6 @@ build_freerdp() {
         "OPENSSL_INCLUDE_DIR:PATH=$OPENSSL_PREFIX/include" \
         "OPENSSL_SSL_LIBRARY:FILEPATH=$OPENSSL_PREFIX/lib/libssl.a" \
         "OPENSSL_CRYPTO_LIBRARY:FILEPATH=$OPENSSL_PREFIX/lib/libcrypto.a" \
-        "FFMPEG_INCLUDE_DIRS:STRING=$FFMPEG_PREFIX/include" \
-        "FFMPEG_LIBRARIES:STRING=$FFMPEG_PREFIX/lib/libavcodec.a;$FFMPEG_PREFIX/lib/libavutil.a;$FFMPEG_PREFIX/lib/libswscale.a" \
-        "AVCODEC_INCLUDE_DIRS:PATH=$FFMPEG_PREFIX/include" \
-        "AVCODEC_LIBRARIES:FILEPATH=$FFMPEG_PREFIX/lib/libavcodec.a" \
         "AVUTIL_INCLUDE_DIRS:PATH=$FFMPEG_PREFIX/include" \
         "AVUTIL_LIBRARIES:FILEPATH=$FFMPEG_PREFIX/lib/libavutil.a" \
         "SWSCALE_INCLUDE_DIRS:PATH=$FFMPEG_PREFIX/include" \
@@ -238,7 +228,7 @@ package_engine() {
         [[ $(lipo -archs "$archive") == arm64 ]] || die "Unexpected architecture: $archive"
         archives+=("$archive")
     done < <(find "$OPENSSL_PREFIX/lib" "$FREERDP_PREFIX/lib" "$FFMPEG_PREFIX/lib" -type f -name '*.a' -print0)
-    [[ ${#archives[@]} -ge 8 ]] || die "Expected OpenSSL, FFmpeg, WinPR, FreeRDP and client archives."
+    [[ ${#archives[@]} -ge 7 ]] || die "Expected OpenSSL, FFmpeg, WinPR, FreeRDP and client archives."
     # Client channel OBJECT libraries are already embedded in libfreerdp-client3.a
     # by upstream CMake. Do not add the installed channel .o files a second time.
     /usr/bin/libtool -static -o "$BUILD/package/libFreeRDP.a" "${archives[@]}"
@@ -255,7 +245,7 @@ fetch_source "freerdp-$FREERDP_VERSION" "$FREERDP_SHA256" \
 fetch_source "ffmpeg-$FFMPEG_VERSION" "$FFMPEG_SHA256" \
     "https://ffmpeg.org/releases/ffmpeg-$FFMPEG_VERSION.tar.gz"
 
-if [[ -f $BUILD/.ffmpeg-complete && -f $FFMPEG_PREFIX/lib/libavcodec.a && \
+if [[ -f $BUILD/.ffmpeg-complete && \
       -f $FFMPEG_PREFIX/lib/libavutil.a && -f $FFMPEG_PREFIX/lib/libswscale.a ]]; then
     echo 'Skipping completed FFmpeg stage.'
 else
@@ -284,8 +274,8 @@ fi
 
 echo "Output: $XCFRAMEWORK"
 echo "Size: $(du -sh "$XCFRAMEWORK" | awk '{print $1}'); elapsed: $((SECONDS - START)) seconds"
-echo "Static contents: OpenSSL $OPENSSL_VERSION, FFmpeg $FFMPEG_VERSION (avcodec, avutil, swscale), WinPR/FreeRDP/client common/client channels $FREERDP_VERSION"
-echo 'Target: arm64-apple-macos26.0, Release. H.264: FFmpeg with VideoToolbox and software decoding.'
+echo "Static contents: OpenSSL $OPENSSL_VERSION, FFmpeg $FFMPEG_VERSION (avutil, swscale), WinPR/FreeRDP/client common/client channels $FREERDP_VERSION"
+echo 'Target: arm64-apple-macos26.0, Release. H.264: VideoToolbox, hardware or software as Apple selects.'
 echo "Logs: $BUILD/logs"
 
 # Build VNC against these same OpenSSL archives; never package a second copy.

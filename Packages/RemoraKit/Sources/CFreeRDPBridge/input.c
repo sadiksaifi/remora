@@ -53,10 +53,9 @@ uint32_t rm_rdp_scancode(uint16_t key, bool iso_keyboard) {
         return 0;
     const DWORD vk = GetVirtualKeyCodeFromKeycode(key, WINPR_KEYCODE_TYPE_APPLE);
     const DWORD scan = GetVirtualScanCodeFromVirtualKeyCode(vk, 4);
-    /* FreeRDP 3.32.2 Apple table gaps. Preserve physical keys, including F13/F15
+    /* FreeRDP 3.33.1 Apple table gaps. Preserve physical keys, including F13/F15
      * rather than its legacy PrintScreen/Pause aliases. Fn has no PC equivalent. */
     switch (key) {
-        case 0x3E: return RDP_SCANCODE_RCONTROL;
         case 0x3F: return 0;
         case 0x48: return RDP_SCANCODE_VOLUME_UP;
         case 0x49: return RDP_SCANCODE_VOLUME_DOWN;
