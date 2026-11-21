@@ -1,0 +1,261 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Remora: RDP and VNC remote desktop client for Mac</title>
+    <meta name="description" content="A fast, native remote desktop client for the Mac. Connect to Windows, Linux and Mac over RDP and VNC, and let your AI agents use them. Free and open source.">
+    <link rel="canonical" href="https://remora.peblon.com/">
+    <meta name="color-scheme" content="light dark">
+    <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
+    <meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)">
+
+    <meta property="og:type" content="website">
+    <meta property="og:site_name" content="Remora">
+    <meta property="og:url" content="https://remora.peblon.com/">
+    <meta property="og:title" content="Remora: RDP and VNC remote desktop client for Mac">
+    <meta property="og:description" content="A fast, native remote desktop client for the Mac. Connect to Windows, Linux and Mac over RDP and VNC, and let your AI agents use them.">
+    <meta property="og:image" content="https://remora.peblon.com/og.jpg">
+    <meta property="og:image:width" content="1200">
+    <meta property="og:image:height" content="630">
+    <meta property="og:image:alt" content="The Remora window showing a remote desktop, with tabs for macOS, Linux and Windows sessions">
+    <!-- X shows its large card at 2:1, so it gets its own image. Its title and description come from the og: tags. -->
+    <meta name="twitter:card" content="summary_large_image">
+    <meta name="twitter:image" content="https://remora.peblon.com/x.jpg">
+    <meta name="twitter:image:alt" content="The Remora window showing a remote desktop, with tabs for macOS, Linux and Windows sessions">
+
+    <link rel="icon" type="image/png" href="/icon.png">
+    <link rel="apple-touch-icon" href="/icon.png">
+    <link rel="preload" as="image" href="/demo-poster.webp" fetchpriority="high">
+    <link rel="stylesheet" href="/styles.css">
+
+    <script type="application/ld+json">
+    {
+      "@context": "https://schema.org",
+      "@graph": [
+        {
+          "@type": "SoftwareApplication",
+          "@id": "https://remora.peblon.com/#app",
+          "name": "Remora",
+          "description": "A fast, native remote desktop client for the Mac that speaks RDP and VNC, and gives AI agents computer use on every machine you connect to.",
+          "url": "https://remora.peblon.com/",
+          "image": "https://remora.peblon.com/og.jpg",
+          "applicationCategory": "UtilitiesApplication",
+          "applicationSubCategory": "Remote desktop client",
+          "operatingSystem": "macOS 26 or later",
+          "processorRequirements": "Apple silicon",
+          "downloadUrl": "https://remora.peblon.com/download",
+          "releaseNotes": "https://github.com/sadiksaifi/remora/releases",
+          "license": "https://www.gnu.org/licenses/gpl-3.0.html",
+          "isAccessibleForFree": true,
+          "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" },
+          "featureList": [
+            "RDP and VNC",
+            "Metal rendering and hardware video decoding",
+            "Sessions as tabs in one window",
+            "Computer use for AI agents through the remora command-line tool",
+            "Screenshots and screen recordings of remote desktops",
+            "Shared clipboard"
+          ],
+          "sameAs": "https://github.com/sadiksaifi/remora",
+          "publisher": { "@type": "Organization", "name": "Peblon", "url": "https://peblon.com" }
+        },
+        {
+          "@type": "FAQPage",
+          "mainEntity": [
+            {
+              "@type": "Question",
+              "name": "Is Remora free and open source?",
+              "acceptedAnswer": { "@type": "Answer", "text": "Yes. Remora is free and open source under the GNU GPL v3. The source code is on GitHub." }
+            },
+            {
+              "@type": "Question",
+              "name": "Can I connect to a Windows PC from my Mac?",
+              "acceptedAnswer": { "@type": "Answer", "text": "Yes. Remora connects to Windows over RDP, the protocol behind Windows Remote Desktop. Turn on Remote Desktop on the PC, then add its address in Remora. The PC needs Windows Pro, Enterprise or Education. Windows Home cannot accept Remote Desktop connections." }
+            },
+            {
+              "@type": "Question",
+              "name": "Can I connect to Linux?",
+              "acceptedAnswer": { "@type": "Answer", "text": "Yes. Remora connects to Linux desktops that serve RDP, such as GNOME Remote Desktop, and to VNC servers." }
+            },
+            {
+              "@type": "Question",
+              "name": "Can I connect to another Mac?",
+              "acceptedAnswer": { "@type": "Answer", "text": "Yes. Turn on Screen Sharing on the other Mac, and Remora connects to it over VNC." }
+            },
+            {
+              "@type": "Question",
+              "name": "Which AI agents can use Remora?",
+              "acceptedAnswer": { "@type": "Answer", "text": "Any agent that can run the remora CLI can use it. Remora installs a skill for Claude Code, Codex, OpenCode, Cursor, or any other agent." }
+            }
+          ]
+        }
+      ]
+    }
+    </script>
+</head>
+<body>
+    <a class="skip" href="#main">Skip to content</a>
+
+    <header class="bar">
+        <div class="bar-inner">
+            <a class="bar-name" href="/">Remora</a>
+            <nav aria-label="Page">
+                <a href="#features">Features</a>
+                <a href="#agents">AI agents</a>
+                <a href="#questions">Questions</a>
+            </nav>
+            <a class="button button-small" href="/download">Download</a>
+        </div>
+    </header>
+
+    <main id="main">
+        <section class="hero">
+            <picture class="hero-icon">
+                <source media="(prefers-color-scheme: dark)" srcset="/icon-dark.png">
+                <img src="/icon.png" width="112" height="112" alt="Remora app icon">
+            </picture>
+            <h1>Remote desktop, made for the Mac.</h1>
+            <p class="intro">Remora is a fast, native RDP and VNC client. Your Windows, Linux and Mac machines open as tabs in one window, and your AI agents can use them too.</p>
+            <a class="button" href="/download">Download for Mac</a>
+            <p class="fine">Free and open source. Requires macOS 26 on Apple silicon.</p>
+            <figure class="window">
+                <div class="stage">
+                    <video controls autoplay muted loop playsinline preload="metadata" poster="/demo-poster.webp" width="1800" height="1124" aria-label="Remora switching between a macOS desktop, a Linux desktop and a Windows desktop, each in its own tab of one window">
+                        <source src="/demo.mp4" type="video/mp4">
+                    </video>
+                    <button class="playback" type="button" aria-label="Pause the demo video" aria-pressed="false" hidden>
+                        <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true">
+                            <path class="pause" d="M4.5 3h2.5v10H4.5zM9 3h2.5v10H9z"/>
+                            <path class="play" d="M5.5 3l7.5 5-7.5 5z"/>
+                        </svg>
+                    </button>
+                </div>
+            </figure>
+        </section>
+
+        <section class="statement">
+            <p>Remora is a native Mac app. <strong>Metal draws every frame</strong>, and <strong>hardware video decoding</strong> keeps the remote desktop sharp and responsive. It speaks <strong>RDP and VNC</strong>, so one app reaches every machine you have.</p>
+        </section>
+
+        <section class="section" id="features">
+            <h2>One app. Every machine.</h2>
+            <div class="tiles">
+                <article class="tile tile-shot">
+                    <h3>Windows</h3>
+                    <p>Over RDP, the protocol behind Windows Remote Desktop.</p>
+                    <img src="/shot-windows.webp" width="1400" height="876" loading="lazy" alt="A Windows 11 desktop in a Remora session">
+                </article>
+                <article class="tile tile-shot">
+                    <h3>Linux</h3>
+                    <p>Over RDP with GNOME Remote Desktop, or over VNC.</p>
+                    <img src="/shot-linux.webp" width="1400" height="876" loading="lazy" alt="A GNOME desktop on Debian in a Remora session">
+                </article>
+                <article class="tile tile-shot">
+                    <h3>Mac</h3>
+                    <p>Over VNC, with Screen Sharing turned on.</p>
+                    <img src="/shot-mac.webp" width="1400" height="876" loading="lazy" alt="A macOS desktop in a Remora session">
+                </article>
+            </div>
+            <div class="points">
+                <div>
+                    <h3>Every session is a tab.</h3>
+                    <p>Keep several machines open at once and move between them with one click.</p>
+                </div>
+                <div>
+                    <h3>Copy there. Paste here.</h3>
+                    <p>Text you copy on one machine pastes on the other.</p>
+                </div>
+                <div>
+                    <h3>Capture any screen.</h3>
+                    <p>Take a screenshot or record a video of any remote desktop.</p>
+                </div>
+            </div>
+        </section>
+
+        <section class="section" id="agents">
+            <h2>Let your AI agent drive.</h2>
+            <div class="tile tile-agents">
+                <div>
+                    <h3>Claude Code, Codex and other agents can see, click and type on your remote desktops.</h3>
+                    <ol class="steps">
+                        <li>Open Settings and choose Command Line.</li>
+                        <li>Install the command-line tool.</li>
+                        <li>Install the skill for your agent.</li>
+                        <li>Ask your agent: "Use Remora to update my Windows PC."</li>
+                    </ol>
+                </div>
+                <picture>
+                    <source media="(prefers-color-scheme: dark)" srcset="/settings-command-line-dark.webp">
+                    <img src="/settings-command-line.webp" width="1224" height="1166" loading="lazy" alt="Remora Settings, Command Line pane, with the command-line tool and the agent skills for Claude Code and other agents installed">
+                </picture>
+            </div>
+        </section>
+
+        <section class="section narrow" id="questions">
+            <h2>Questions and answers.</h2>
+            <div class="faq">
+                <details>
+                    <summary>Is Remora free and open source?</summary>
+                    <p>Yes. Remora is free and open source under the GNU GPL v3. The <a href="https://github.com/sadiksaifi/remora">source code is on GitHub</a>.</p>
+                </details>
+                <details>
+                    <summary>Can I connect to a Windows PC from my Mac?</summary>
+                    <p>Yes. Remora connects to Windows over RDP, the protocol behind Windows Remote Desktop. Turn on Remote Desktop on the PC, then add its address in Remora. The PC needs Windows Pro, Enterprise or Education. Windows Home cannot accept Remote Desktop connections.</p>
+                </details>
+                <details>
+                    <summary>Can I connect to Linux?</summary>
+                    <p>Yes. Remora connects to Linux desktops that serve RDP, such as GNOME Remote Desktop, and to VNC servers.</p>
+                </details>
+                <details>
+                    <summary>Can I connect to another Mac?</summary>
+                    <p>Yes. Turn on Screen Sharing on the other Mac, and Remora connects to it over VNC.</p>
+                </details>
+                <details>
+                    <summary>Which AI agents can use Remora?</summary>
+                    <p>Any agent that can run the remora CLI can use it. Remora installs a skill for Claude Code, Codex, OpenCode, Cursor, or any other agent.</p>
+                </details>
+            </div>
+        </section>
+
+        <section class="closing">
+            <picture>
+                <source media="(prefers-color-scheme: dark)" srcset="/icon-dark.png">
+                <img src="/icon.png" width="88" height="88" loading="lazy" alt="">
+            </picture>
+            <h2>Get Remora.</h2>
+            <p class="intro">Download the disk image, open it, and drag Remora to Applications.</p>
+            <a class="button" href="/download">Download for Mac</a>
+            <p class="fine">Free and open source. Requires macOS 26 on Apple silicon.</p>
+        </section>
+    </main>
+
+    <footer class="footer">
+        <div class="footer-inner">
+            <nav aria-label="Project">
+                <a href="https://github.com/sadiksaifi/remora">Source code</a>
+                <a href="https://github.com/sadiksaifi/remora/releases">Release notes</a>
+                <a href="https://github.com/sadiksaifi/remora/issues">Report a problem</a>
+            </nav>
+            <p>Remora is open source under the <a href="https://github.com/sadiksaifi/remora/blob/main/LICENSE">GNU GPL v3</a>. Mac and macOS are trademarks of Apple Inc. Windows is a trademark of Microsoft Corporation.</p>
+            <p>A <a href="https://peblon.com">Peblon</a> product.</p>
+        </div>
+    </footer>
+
+    <script>
+        // The video starts with the browser's controls, so it can be stopped without this script.
+        // People who ask for reduced motion keep them and get a still frame. Everyone else gets the pause button.
+        const video = document.querySelector("video");
+        if (matchMedia("(prefers-reduced-motion: reduce)").matches) {
+            video.autoplay = false;
+            video.pause();
+        } else {
+            const button = document.querySelector(".playback");
+            video.controls = false;
+            button.hidden = false;
+            button.onclick = () => (video.paused ? video.play() : video.pause());
+            video.onplay = video.onpause = () => button.setAttribute("aria-pressed", video.paused);
+        }
+    </script>
+</body>
+</html>
