@@ -5,8 +5,8 @@
  		goto fail;
  
 -	h264->yuv = yuv_context_new(Compressor, 0);
-+	/* Remora: convert on the decoding thread. Each pooled tile wakes every worker,
-+	 * which cost more CPU than the conversion itself. */
++	/* Remora: convert on the decoding thread. Queuing 512x512 tiles on the WinPR
++	 * pool and waiting for it to drain cost more CPU than the conversion. */
 +	h264->yuv = yuv_context_new(Compressor, THREADING_FLAGS_DISABLE_THREADS);
  	if (!h264->yuv)
  		goto fail;

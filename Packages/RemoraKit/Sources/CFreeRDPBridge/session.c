@@ -81,7 +81,7 @@ static void configure_logging(void) {
     engine_log = os_log_create("com.peblon.remora", "FreeRDP");
     wLog *root = WLog_GetRoot();
     (void)WLog_SetLogLevel(root, WLOG_WARN);
-    /* The backend reports the selected hw device and any software fallback. */
+    /* freerdp-h264-decoder-log.patch reports whether Apple chose the hardware or software H.264 decoder. */
     (void)WLog_SetLogLevel(WLog_Get("com.freerdp.codec"), WLOG_INFO);
     if (WLog_SetLogAppenderType(root, WLOG_APPENDER_CALLBACK)) {
         wLogCallbacks callbacks = { .message = log_message };

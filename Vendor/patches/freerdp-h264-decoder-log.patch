@@ -1,0 +1,12 @@
+--- a/libfreerdp/codec/h264_videotoolbox.m
++++ b/libfreerdp/codec/h264_videotoolbox.m
+@@ -383,7 +383,8 @@
+ 		if (status == noErr)
+ 		{
+ 			h264->hwAccel = (hardware == kCFBooleanTrue);
+-			WLog_Print(h264->log, WLOG_DEBUG, "VideoToolbox H.264 decoder: %s",
++			/* Remora: report the decoder Apple selected in default logs. */
++			WLog_Print(h264->log, WLOG_INFO, "VideoToolbox H.264 decoder: %s",
+ 			           h264->hwAccel ? "hardware" : "software");
+ 		}
+ 		if (hardware)
