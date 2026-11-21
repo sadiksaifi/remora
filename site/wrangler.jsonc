@@ -1,6 +1,8 @@
 // The Remora website: the static files in public/, served at remora.peblon.com.
 // worker.js answers only the requests that match no file, which is how /download reaches it.
 // Cloudflare Workers Builds deploys it from main and gives each pull request a preview URL.
+// Its settings live in the Cloudflare dashboard, on the Worker under Settings, Builds: root directory "site",
+// deploy command "npx wrangler deploy", watch path "site/*". A commit that changes nothing in site/ deploys nothing.
 {
   "name": "remora-site",
   "compatibility_date": "2026-11-01",
@@ -9,5 +11,7 @@
   // peblon.com is a zone on the same Cloudflare account, so the deploy creates the DNS record and certificate.
   "routes": [{ "pattern": "remora.peblon.com", "custom_domain": true }],
   "workers_dev": false,
-  "preview_urls": true
+  "preview_urls": true,
+  // Cloudflare builds each pull request with "npx wrangler preview", which refuses to run without this block.
+  "previews": {}
 }
