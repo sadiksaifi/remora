@@ -1,0 +1,66 @@
+--- a/include/freerdp/codec/h264.h
++++ b/include/freerdp/codec/h264.h
+@@ -115,6 +115,13 @@
+ 	                                    UINT32 nDstWidth, UINT32 nDstHeight,
+ 	                                    const RECTANGLE_16* regionRects, UINT32 numRegionRect);
+ 
++	/* Remora: decode one H.264 picture without converting it to RGB. Returns 1 and a retained
++	 * three-plane I420 CVPixelBufferRef that Metal can read in *image, 0 when the bitstream held
++	 * no picture, or a negative error. The caller releases the image. VideoToolbox only. */
++	WINPR_ATTR_NODISCARD
++	FREERDP_API INT32 h264_decompress_image(H264_CONTEXT* h264, const BYTE* pSrcData,
++	                                        UINT32 SrcSize, void** image);
++
+ 	WINPR_ATTR_NODISCARD
+ 	FREERDP_API INT32 avc444_compress(H264_CONTEXT* h264, const BYTE* pSrcData, DWORD SrcFormat,
+ 	                                  UINT32 nSrcStep, UINT32 nSrcWidth, UINT32 nSrcHeight,
+--- a/libfreerdp/codec/h264_videotoolbox.m
++++ b/libfreerdp/codec/h264_videotoolbox.m
+@@ -343,12 +343,24 @@
+ 		CFRelease(format);
+ 		return FALSE;
+ 	}
+-	const void *keys[] = { kCVPixelBufferPixelFormatTypeKey };
+-	const void *values[] = { pixel };
++	/* Remora: IOSurface-backed images, so Metal reads the decoded planes without a copy. */
++	CFDictionaryRef surface =
++	    CFDictionaryCreate(kCFAllocatorDefault, nullptr, nullptr, 0, &kCFTypeDictionaryKeyCallBacks,
++	                       &kCFTypeDictionaryValueCallBacks);
++	if (!surface)
++	{
++		CFRelease(pixel);
++		CFRelease(format);
++		return FALSE;
++	}
++	const void *keys[] = { kCVPixelBufferPixelFormatTypeKey, kCVPixelBufferIOSurfacePropertiesKey,
++		                   kCVPixelBufferMetalCompatibilityKey };
++	const void *values[] = { pixel, surface, kCFBooleanTrue };
+ 	CFDictionaryRef attributes =
+ 	    CFDictionaryCreate(kCFAllocatorDefault, keys, values, ARRAYSIZE(keys),
+ 	                       &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
+ 	CFRelease(pixel);
++	CFRelease(surface);
+ 	if (!attributes)
+ 	{
+ 		CFRelease(format);
+@@ -1199,6 +1211,20 @@
+ 	return TRUE;
+ }
+ 
++INT32 h264_decompress_image(H264_CONTEXT *h264, const BYTE *pSrcData, UINT32 SrcSize, void **image)
++{
++	if (!h264 || !image || h264->Compressor || !h264->pSystemData ||
++	    (h264->subsystem != &g_Subsystem_VideoToolbox))
++		return -1;
++	*image = nullptr;
++	const int status = videotoolbox_decompress(h264, pSrcData, SrcSize);
++	if (status <= 0)
++		return status;
++	H264_CONTEXT_VIDEOTOOLBOX *sys = h264->pSystemData;
++	*image = (void *)CVPixelBufferRetain(sys->image);
++	return 1;
++}
++
+ const H264_CONTEXT_SUBSYSTEM g_Subsystem_VideoToolbox = { "VideoToolbox", videotoolbox_init,
+ 	                                                      videotoolbox_uninit,
+ 	                                                      videotoolbox_decompress,

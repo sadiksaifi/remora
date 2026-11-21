@@ -44,6 +44,7 @@ final class FrameRenderer: FrameSink, Sendable {
 
     let device: any MTLDevice
     let desktop: MetalDesktop
+    var metalDesktop: MetalDesktop? { desktop }
     private let pipeline: any MTLRenderPipelineState
     private let nearest: any MTLSamplerState
     private let linear: any MTLSamplerState

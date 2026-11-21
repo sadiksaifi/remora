@@ -3,6 +3,7 @@
 #include "clipboard.h"
 #include "display.h"
 #include "reconnect.h"
+#include "video.h"
 
 #define WITH_OPAQUE_SETTINGS
 /* WinPR's own public sspi.h declares fields with deprecated WinPR types. */
@@ -49,6 +50,7 @@ struct RMRDPSession {
     RMInput *input;
     RMClipboard *clipboard;
     RMDisplay *display;
+    RMVideo *video;
     pcRdpgfxSurfaceCommand surface_command;
     UINT32 last_codec;
     bool reconnecting;
@@ -64,6 +66,7 @@ struct RMRDPSession {
 RMInput *rm_rdp_input(RMRDPSession *s) { return s->input; }
 RMClipboard *rm_rdp_clipboard(RMRDPSession *s) { return s->clipboard; }
 RMDisplay *rm_rdp_display(RMRDPSession *s) { return s->display; }
+RMVideo *rm_rdp_video(RMRDPSession *s) { return s->video; }
 
 static rdpContext *context_of(RMRDPSession *s) { return &s->client.context; }
 static RMRDPSession *session_of(rdpContext *context) { return (RMRDPSession *)context; }
@@ -348,11 +351,11 @@ static BOOL post_connect(freerdp *instance) {
 }
 
 static void post_disconnect(freerdp *instance) {
+    rm_video_detach(session_of(instance->context)->video);
     gdi_free(instance); /* Also safe when PostConnect was never reached. */
 }
 
-/* Observe the actual wire codec after client-common installs GDI. Keep its
- * context and decoder callbacks intact; GDI still owns all rendering. */
+/* Observe the actual wire codec after client-common installs GDI and the video module wraps it. */
 static UINT surface_command(RdpgfxClientContext *gfx, const RDPGFX_SURFACE_COMMAND *command) {
     rdpGdi *gdi = gfx->custom;
     RMRDPSession *s = session_of(gdi->context);
@@ -370,6 +373,7 @@ static void graphics_connected(void *context, const ChannelConnectedEventArgs *e
         return;
     RMRDPSession *s = session_of(context);
     RdpgfxClientContext *gfx = event->pInterface;
+    rm_video_attach(s->video, gfx);
     s->surface_command = gfx->SurfaceCommand;
     s->last_codec = UINT32_MAX;
     gfx->SurfaceCommand = surface_command;
@@ -420,6 +424,7 @@ RMRDPSession *rm_rdp_create(const RMRDPConfiguration *config, const RMRDPCallbac
     s->input = rm_input_new(context, callbacks, user, config->iso_keyboard);
     s->clipboard = rm_clipboard_new(callbacks, user);
     s->display = rm_display_new(context, callbacks, user);
+    s->video = rm_video_new(callbacks, user); /* NULL keeps H.264 on FreeRDP's CPU path. */
     if (!s->input || !s->clipboard || !s->display) {
         rm_rdp_free(s);
         return NULL;
@@ -619,10 +624,12 @@ void rm_rdp_free(RMRDPSession *s) {
         RMInput *input = s->input;
         RMClipboard *clipboard = s->clipboard;
         RMDisplay *display = s->display;
+        RMVideo *video = s->video;
         freerdp_client_context_free(context_of(s));
         rm_input_free(input);
         rm_clipboard_free(clipboard);
         rm_display_free(display);
+        rm_video_free(video);
     }
 }
 

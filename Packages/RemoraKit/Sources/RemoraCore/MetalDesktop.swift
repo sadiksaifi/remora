@@ -149,6 +149,77 @@ public final class MetalDesktop: CaptureSource, Sendable {
         return prepared.0
     }
 
+    /// GPU drawing straight into the framebuffer, ordered after every earlier upload and draw.
+    /// `encode` learns whether the framebuffer is new at this size; a new one holds undefined pixels,
+    /// so the caller clears it to zero, as a new CPU framebuffer starts.
+    /// The frame is published like an ingested one once the work is committed.
+    public func draw(
+        width: Int, height: Int, _ encode: (any MTLTexture, any MTLCommandBuffer, _ created: Bool) throws -> Void
+    ) throws {
+        guard width > 0, height > 0, width <= 16_384, height <= 16_384 else {
+            throw CaptureFailure.image("Invalid framebuffer dimensions.")
+        }
+        let created = try state.withLock { state -> Bool in
+            guard state.storage?.width != width || state.storage?.height != height else { return false }
+            let storage = try Storage(device: device, width: width, height: height)
+            state.dropPending()
+            state.storage = storage
+            state.nextSlot = 0
+            return true
+        }
+        _ = try submit { texture, command in try encode(texture, command, created) }
+        state.withLock { state in
+            state.revision += 1
+            state.arrival = ProcessInfo.processInfo.systemUptime
+            for observer in state.observers.values { observer(state.arrival) }
+        }
+    }
+
+    /// Copies framebuffer rectangles as BGRA bytes, after all earlier uploads and draws, in one GPU round trip.
+    /// `pixels` is an image whose top-left pixel is the framebuffer pixel at `originX`, `originY`.
+    public func read(
+        _ rectangles: [DirtyRectangle], into pixels: UnsafeMutableRawPointer, stride: Int, originX: Int = 0, originY: Int = 0
+    ) throws {
+        let rectangles = rectangles.filter { $0.width > 0 && $0.height > 0 }
+        guard !rectangles.isEmpty else { return }
+        // Each rectangle gets its own rows in one shared buffer.
+        var offsets: [Int] = []
+        var length = 0
+        for r in rectangles {
+            offsets.append(length)
+            length += ((r.width * 4 + 255) & ~255) * r.height
+        }
+        guard let buffer = device.makeBuffer(length: length, options: .storageModeShared) else {
+            throw CaptureFailure.image("Could not allocate desktop readback.")
+        }
+        let submission = try submit { texture, command in
+            guard let blit = command.makeBlitCommandEncoder() else { throw CaptureFailure.image("No Metal blit encoder.") }
+            defer { blit.endEncoding() }
+            for (r, offset) in zip(rectangles, offsets) {
+                guard r.x >= 0, r.y >= 0, r.x + r.width <= texture.width, r.y + r.height <= texture.height else {
+                    throw CaptureFailure.image("Readback outside the desktop.")
+                }
+                let rowBytes = (r.width * 4 + 255) & ~255
+                blit.copy(
+                    from: texture, sourceSlice: 0, sourceLevel: 0, sourceOrigin: MTLOrigin(x: r.x, y: r.y, z: 0),
+                    sourceSize: MTLSize(width: r.width, height: r.height, depth: 1),
+                    to: buffer, destinationOffset: offset, destinationBytesPerRow: rowBytes,
+                    destinationBytesPerImage: rowBytes * r.height)
+            }
+        }
+        submission.command.waitUntilCompleted()
+        guard submission.command.status == .completed else {
+            throw CaptureFailure.image(submission.command.error?.localizedDescription ?? "Desktop readback failed.")
+        }
+        for (r, offset) in zip(rectangles, offsets) {
+            let rowBytes = (r.width * 4 + 255) & ~255
+            let destination = pixels + (r.y - originY) * stride + (r.x - originX) * 4
+            for row in 0..<r.height {
+                memcpy(destination + row * stride, buffer.contents() + offset + row * rowBytes, r.width * 4)
+            }
+        }
+    }
+
     /// One readback on demand. Pending hidden-tab uploads are included before the full texture copy.
     public func snapshot() throws -> CaptureFrame {
         var readback: (any MTLBuffer)?
@@ -212,7 +283,7 @@ public final class MetalDesktop: CaptureSource, Sendable {
             bytesPerRow = (width * 4 + 255) & ~255
             let descriptor = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .bgra8Unorm, width: width, height: height, mipmapped: false)
             descriptor.storageMode = .private
-            descriptor.usage = .shaderRead
+            descriptor.usage = [.shaderRead, .shaderWrite]
             guard let texture = device.makeTexture(descriptor: descriptor) else { throw CaptureFailure.image("No desktop texture.") }
             self.texture = texture
             texture.label = "Remote BGRA framebuffer"

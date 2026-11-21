@@ -301,6 +301,12 @@ public struct BorrowedFrame {
 public protocol FrameSink: Sendable {
     /// Called synchronously on an arbitrary background thread. Must be thread-safe.
     func consume(_ frame: BorrowedFrame)
+    /// The framebuffer behind `consume`, when a session may draw into it on the GPU.
+    var metalDesktop: MetalDesktop? { get }
+}
+
+extension FrameSink {
+    public var metalDesktop: MetalDesktop? { nil }
 }
 
 extension RemoteSession {
