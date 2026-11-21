@@ -54,6 +54,29 @@ typedef enum {
 
 typedef enum { RMRDP_CURSOR_IMAGE, RMRDP_CURSOR_HIDDEN, RMRDP_CURSOR_DEFAULT } RMRDPCursorKind;
 
+/* How a decoded H.264 picture reaches the desktop. YUV420 converts it directly. The others first merge it
+ * into the surface's persistent 4:4:4 planes (MS-RDPEGFX 3.3.8.3), then convert those. */
+typedef enum { RMRDP_VIDEO_YUV420, RMRDP_VIDEO_LUMA, RMRDP_VIDEO_CHROMA_V1, RMRDP_VIDEO_CHROMA_V2 } RMRDPVideoLayout;
+typedef struct {
+    uint16_t left, top, right, bottom;
+} RMRDPVideoRectangle;
+typedef struct {
+    RMRDPVideoLayout layout;
+    void *image; /* CVPixelBufferRef: three-plane I420 that Metal can read. */
+    const RMRDPVideoRectangle *rectangles; /* Surface coordinates. */
+    size_t count;
+    uint32_t convert_height; /* Conversion clamps the rectangles to this height; merging does not. */
+} RMRDPVideoPass;
+typedef struct {
+    uint16_t surface;
+    uint32_t surface_width, surface_height;
+    uint32_t origin_x, origin_y;           /* Desktop position of the surface's top-left pixel. */
+    uint32_t visible_width, visible_height; /* Surface area that lands on the desktop. */
+    uint32_t desktop_width, desktop_height;
+    RMRDPVideoPass passes[2]; /* In order. */
+    size_t pass_count;
+} RMRDPVideoFrame;
+
 /* Callbacks are synchronous and may run on different background threads.
  * All callback arguments are borrowed for the duration of that call. */
 typedef struct {
@@ -76,6 +99,16 @@ typedef struct {
     /* old_fingerprint is NULL for a new certificate. true accepts AND stores the certificate. */
     bool (*trust)(void *user, const char *host, uint16_t port, const char *subject,
                   const char *issuer, const char *fingerprint, const char *old_fingerprint);
+    /* Optional, with video_read. Draws H.264 on the GPU into the desktop instead of through frame.
+     * The images are borrowed: retain them to use them after returning. false drops the update. */
+    bool (*video_frame)(void *user, const RMRDPVideoFrame *frame);
+    /* Copies desktop rectangles, as BGRA32, after all earlier drawing, into an image whose top-left
+     * pixel is the desktop pixel at origin_x, origin_y. */
+    bool (*video_read)(void *user, const RMRDPVideoRectangle *rectangles, size_t count, uint32_t origin_x,
+                       uint32_t origin_y, uint8_t *pixels, uint32_t stride);
+    /* The surface ID was created or deleted, so the GPU state kept for it, such as its 4:4:4 planes,
+     * belongs to no surface. A reconnect creates surfaces with the IDs of the old ones. */
+    void (*video_surface_reset)(void *user, uint16_t surface);
 } RMRDPCallbacks;
 
 /* Copies configuration and callbacks. Create/run/free on the owned session thread.
