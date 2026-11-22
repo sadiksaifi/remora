@@ -9,6 +9,7 @@
 #ifndef REMORA_APPLE_ORACLE_H
 #define REMORA_APPLE_ORACLE_H
 
+#include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 
@@ -16,6 +17,8 @@
  * and two calls, first in a child process. Returns NULL when the decoder can
  * be called, or the reason it cannot. */
 const char *apple_oracle_load(void);
+/* Whether this Mac has the framework build the oracle was verified on. Loads it without calling it. */
+bool apple_oracle_verified_build(void);
 /* "ScreenSharing <LC_UUID>, macOS <version> (<build>)", once the image is found. */
 const char *apple_oracle_identity(void);
 

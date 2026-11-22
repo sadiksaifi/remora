@@ -45,7 +45,7 @@ static rfbBool cryptBlocks(EVP_CIPHER_CTX *ctx, uint8_t *bytes, int length) {
     return ctx && EVP_CipherUpdate(ctx, bytes, &written, bytes, length) && written == length;
 }
 
-static rfbBool readKeyUpdate(rfbClient *c, uint8_t material[32], double deadline) {
+static rfbBool readKeyUpdate(rfbClient *c, uint8_t material[32], double deadline, rfbBool *clipboardChanged) {
     uint8_t h[16];
     for (;;) {
         if (!rfbRemoraReadWire(c, (char *)h, 1, deadline)) return FALSE;
@@ -55,6 +55,12 @@ static rfbBool readKeyUpdate(rfbClient *c, uint8_t material[32], double deadline
             if (!rfbRemoraReadWire(c, (char *)h, 3, deadline)) return FALSE;
             unsigned n = get16(h + 1);
             char discard[1024];
+            if (n >= 4) {
+                /* Command 2 announces a pasteboard change. */
+                if (!rfbRemoraReadWire(c, discard, 4, deadline)) return FALSE;
+                if (get16((uint8_t *)discard) == 1 && get16((uint8_t *)discard + 2) == 2) *clipboardChanged = TRUE;
+                n -= 4;
+            }
             while (n) {
                 unsigned chunk = n < sizeof(discard) ? n : sizeof(discard);
                 if (!rfbRemoraReadWire(c, discard, chunk, deadline)) return FALSE;
@@ -74,7 +80,7 @@ static rfbBool readKeyUpdate(rfbClient *c, uint8_t material[32], double deadline
     }
 }
 
-rfbBool rfbRemoraStartRecords(rfbClient *c, const uint8_t wrappingKey[16], double deadline) {
+rfbBool rfbRemoraStartRecords(rfbClient *c, const uint8_t wrappingKey[16], double deadline, rfbBool *clipboardChanged) {
     static const char controls[] = {
         0x12, 0, 0, 1, 0, 1, 0, 1, 0, 0, 0, 1, /* Request AES session keys. */
         0x12, 0, 0, 2, 0, 1, 0, 0              /* Activate. Last clear client write. */
@@ -83,7 +89,7 @@ rfbBool rfbRemoraStartRecords(rfbClient *c, const uint8_t wrappingKey[16], doubl
     EVP_CIPHER_CTX *unwrap = cipher(EVP_aes_128_ecb(), wrappingKey, NULL, 0);
     struct rfbAppleRecords *r = OPENSSL_zalloc(sizeof(*r));
     rfbBool ok = r && unwrap && rfbRemoraWriteWire(c, controls, sizeof(controls)) &&
-        readKeyUpdate(c, material, deadline) && cryptBlocks(unwrap, material, sizeof(material));
+        readKeyUpdate(c, material, deadline, clipboardChanged) && cryptBlocks(unwrap, material, sizeof(material));
     if (ok) {
         r->rx.cipher = cipher(EVP_aes_128_cbc(), material, material + 16, 0);
         r->tx.cipher = cipher(EVP_aes_128_cbc(), material, material + 16, 1);

@@ -1022,8 +1022,12 @@ int main(int argc, char **argv) {
     long fuzz = argc > 1 ? atol(argv[1]) : 200000;
     if (argc > 1 && !strcmp(argv[1], "oracle")) {
         const char *unavailable = apple_oracle_load();
+        if (unavailable && apple_oracle_verified_build()) {
+            printf("oracle FAILED: the verified Screen Sharing build cannot be called: %s\n", unavailable);
+            return 1;
+        }
         if (unavailable) {
-            printf("oracle skipped: Screen Sharing's decoder cannot be called here: %s\n", unavailable);
+            printf("oracle SKIPPED: Screen Sharing's decoder cannot be called here: %s\n", unavailable);
             return 0;
         }
         printf("oracle: comparing with %s\n", apple_oracle_identity());

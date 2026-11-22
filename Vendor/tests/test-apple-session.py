@@ -26,9 +26,10 @@ with tempfile.TemporaryDirectory(prefix='remora-apple-sanitizers-') as temporary
         ('apple-large-records', 1, 'large'), ('apple-no-key', 0, '14'), ('apple-refuse', 0, '14'),
         ('apple-control-encryption', 1, '16'),
         *(('apple-invalid-'+case, 0, '15') for case in ('digest', 'length', 'body-length', 'sequence')),
-        ('apple-clipboard', 3, 'clipboard'),
-        *((case, 1, 'invalid-clipboard') for case in ('apple-clipboard-limit', 'apple-clipboard-wire-limit',
-                                                      'apple-clipboard-length', 'apple-clipboard-malformed')),
+        ('apple-clipboard', 3, 'clipboard'), ('apple-clipboard-limit', 1, 'large-clipboard'),
+        ('apple-clipboard-early', 1, 'early-clipboard'),
+        *((case, 1, 'invalid-clipboard') for case in ('apple-clipboard-wire-limit', 'apple-clipboard-length',
+                                                      'apple-clipboard-malformed')),
         ('apple-multi-invalid', 1), ('apple-session-select', 0), ('apple-reject', 0), ('apple-wrong-banner', 0),
     ]
     for mode, frames, *checks in cases:

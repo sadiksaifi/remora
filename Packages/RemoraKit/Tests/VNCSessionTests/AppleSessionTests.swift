@@ -154,7 +154,23 @@ private final class ApplePixels: FrameSink, @unchecked Sendable {
     #expect(pixels.samples.count == 3)
 }
 
-@Test(arguments: ["limit", "wire-limit", "length", "malformed"])
+@Test @MainActor func appleClipboardOverTheLocalLimitIsSkippedWithoutEndingTheSession() async throws {
+    var statuses: [RemoteClipboard.Status] = []
+    let (_, _, pixels) = try await appleSession("apple-clipboard-limit", onClipboard: { _, status in statuses.append(status) })
+
+    #expect(statuses.prefix(4) == [.unknown, .unavailable, .unavailable, .text("after a large image")])
+    #expect(pixels.samples.count == 1)
+}
+
+@Test @MainActor func appleClipboardChangeDuringEncryptionSetupIsFetchedAfterActivation() async throws {
+    var statuses: [RemoteClipboard.Status] = []
+    let (wire, _, _) = try await appleSession("apple-clipboard-early", onClipboard: { _, status in statuses.append(status) })
+
+    #expect(wire["early_clipboard_fetched"] as? Bool == true)
+    #expect(statuses.prefix(2) == [.unknown, .text("changed during setup")])
+}
+
+@Test(arguments: ["wire-limit", "length", "malformed"])
 @MainActor func appleClipboardRejectsInvalidArchivesWithoutPublishingText(_ mode: String) async throws {
     var statuses: [RemoteClipboard.Status] = []
     let (_, terminals, pixels) = try await appleSession("apple-clipboard-\(mode)", onClipboard: { _, status in statuses.append(status) })

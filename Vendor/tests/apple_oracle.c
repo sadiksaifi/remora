@@ -83,27 +83,44 @@ static apple_mvs *session_new(uint32_t width, uint32_t height) {
     return m;
 }
 
+/* The framework build the oracle was verified on. A skip there is a failure. */
+#define VERIFIED_UUID "EC0B2C20-F816-3FCE-822D-F9403C09EB50"
+
+/* Loads the framework without calling it, and reads its LC_UUID. */
+static const struct mach_header_64 *image(intptr_t *slide, char uuid[40]) {
+    strcpy(uuid, "no LC_UUID");
+    if (!dlopen(FRAMEWORK, RTLD_NOW)) return NULL;
+    const struct mach_header_64 *header = NULL;
+    for (uint32_t i = 0; i < _dyld_image_count(); i++) {
+        if (strcmp(_dyld_get_image_name(i), FRAMEWORK)) continue;
+        header = (const void *)_dyld_get_image_header(i);
+        *slide = _dyld_get_image_vmaddr_slide(i);
+    }
+    if (!header) return NULL;
+    const struct load_command *lc = (const void *)(header + 1);
+    for (uint32_t i = 0; i < header->ncmds; i++, lc = (const void *)((const char *)lc + lc->cmdsize))
+        if (lc->cmd == LC_UUID) uuid_unparse_upper(((const struct uuid_command *)lc)->uuid, uuid);
+    return header;
+}
+
+bool apple_oracle_verified_build(void) {
+    intptr_t slide;
+    char uuid[40];
+    return image(&slide, uuid) && !strcmp(uuid, VERIFIED_UUID);
+}
+
 static const char *load(void) {
 #if !defined(__arm64__)
     return "its session layout is known for arm64 only";
 #endif
-    if (!dlopen(FRAMEWORK, RTLD_NOW)) {
-        snprintf(reason, sizeof reason, "dlopen failed: %s", dlerror());
+    intptr_t slide = 0;
+    char uuid[40], version[32] = "?", build[32] = "?";
+    const struct mach_header_64 *header = image(&slide, uuid);
+    if (!header) {
+        const char *error = dlerror();
+        snprintf(reason, sizeof reason, "the ScreenSharing image could not be loaded: %s", error ? error : "dyld does not list it");
         return reason;
     }
-    const struct mach_header_64 *header = NULL;
-    intptr_t slide = 0;
-    for (uint32_t i = 0; i < _dyld_image_count(); i++) {
-        if (strcmp(_dyld_get_image_name(i), FRAMEWORK)) continue;
-        header = (const void *)_dyld_get_image_header(i);
-        slide = _dyld_get_image_vmaddr_slide(i);
-    }
-    if (!header) return "dyld does not list the ScreenSharing image";
-
-    char uuid[40] = "no LC_UUID", version[32] = "?", build[32] = "?";
-    const struct load_command *lc = (const void *)(header + 1);
-    for (uint32_t i = 0; i < header->ncmds; i++, lc = (const void *)((const char *)lc + lc->cmdsize))
-        if (lc->cmd == LC_UUID) uuid_unparse_upper(((const struct uuid_command *)lc)->uuid, uuid);
     size_t n = sizeof version;
     sysctlbyname("kern.osproductversion", version, &n, NULL, 0);
     n = sizeof build;

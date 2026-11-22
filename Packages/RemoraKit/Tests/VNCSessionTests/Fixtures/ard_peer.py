@@ -232,8 +232,8 @@ def apple_clipboard(outcome, client_message, send, report):
         while client_message() != 0x0b: pass
         request = report['clipboard_requests'][-1]
         if archive is None:
-            plain, compressed = declared
-            send(struct.pack('>BBBBIII', 0x1f, 0, 0, 0, request, plain, compressed))
+            plain, compressed, payload = declared
+            send(struct.pack('>BBBBIII', 0x1f, 0, 0, 0, request, plain, compressed) + payload)
             return
         compressor = zlib.compressobj()
         payload = compressor.compress(archive) + compressor.flush(zlib.Z_SYNC_FLUSH if sync else zlib.Z_FINISH)
@@ -243,9 +243,13 @@ def apple_clipboard(outcome, client_message, send, report):
     def text_item(data): return struct.pack('>I', 1) + packed_flavor(TEXT_UTI, data)
 
     if outcome == 'apple-clipboard-limit':
-        reply(None, declared=(8 * 1024 * 1024 + 1, 1))
+        # Archives over the local limit, such as a copied image, are drained and the session goes on.
+        large = 8 * 1024 * 1024 + 1
+        reply(None, declared=(1, large, bytes(large)))
+        reply(None, declared=(large, 16, bytes(16)))
+        reply(text_item(b'after a large image'))
     elif outcome == 'apple-clipboard-wire-limit':
-        reply(None, declared=(1, 8 * 1024 * 1024 + 1))
+        reply(None, declared=(1, 100 * 1024 * 1024 + 1, b''))
     elif outcome == 'apple-clipboard-length':
         archive = text_item(b'longer than declared')
         reply(archive, declared=len(archive) - 1)
@@ -383,6 +387,7 @@ def apple_frames(outcome, exact, send, report, connection):
         send(struct.pack('>BBH',0,0,2)+struct.pack('>HHHHi',0,0,16,8,0)+bytes(16*8*4)+struct.pack('>HHHHi',0,0,16,8,123456)); return
     if outcome == 'apple-control-encryption':
         update(struct.pack('>I', 2) + bytes(32), 1103, (0,0,0,0)); return
+    if outcome == 'apple-clipboard-early': return
     if outcome.startswith('apple-clipboard'):
         apple_clipboard(outcome, client_message, send, report)
         if outcome == 'apple-clipboard':
@@ -625,7 +630,7 @@ def serve_once(offer_mode, outcome, port):
                     raise ValueError('profile continued after unsupported ServerInit')
                 records = None
                 report['stage'] = 'framebuffer_request'
-                for _ in range(8):
+                for _ in range(10):
                     kind = exact(1)[0]
                     if apple and records is None and kind not in (0x21, 10, 0x15, 0x12):
                         raise ValueError('clear application write before encryption')
@@ -658,7 +663,9 @@ def serve_once(offer_mode, outcome, port):
                             return report
                         # Prefetch a record header alongside the key. Split its ciphertext across TCP reads.
                         first = records.record(bytes([7, 7]))
-                        send(bytes([2, 0x14, 0, 0, 4, 0, 0, 0, 0]) + key_rect + first[:5])
+                        # A pasteboard change before the key must still be fetched after activation.
+                        change = 2 if outcome == 'apple-clipboard-early' else 0
+                        send(bytes([2, 0x14, 0, 0, 4, 0, 1 if change else 0, 0, change]) + key_rect + first[:5])
                         time.sleep(0.015)
                         send(first[5:])
                         exact, send = records.exact, records.send
@@ -669,6 +676,12 @@ def serve_once(offer_mode, outcome, port):
                             connection.shutdown(socket.SHUT_WR)
                             while connection.recv(4096): pass
                             return report
+                    elif kind == 0x0b and outcome == 'apple-clipboard-early':
+                        request = struct.unpack('>BHI', exact(7))[2]
+                        archive = struct.pack('>I', 1) + packed_flavor(TEXT_UTI, b'changed during setup')
+                        payload = zlib.compress(archive)
+                        send(struct.pack('>BBBBIII', 0x1f, 0, 0, 0, request, len(archive), len(payload)) + payload)
+                        report['early_clipboard_fetched'] = True
                     elif kind == 0:
                         exact(19)
                     elif kind == 2:

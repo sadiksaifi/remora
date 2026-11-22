@@ -14,7 +14,8 @@
 
 /* Profile errors are local numeric diagnostics, never server-controlled strings. */
 enum { APPLE_PROFILE = 8, APPLE_DECODE = 9, APPLE_GEOMETRY = 10, APPLE_CLIPBOARD = 17 };
-enum { CLIPBOARD_TEXT_LIMIT = 1024*1024, CLIPBOARD_ARCHIVE_LIMIT = 8*1024*1024 };
+/* Archives above the local limit are drained, not inflated. Apple's server caps both sizes at the wire limit. */
+enum { CLIPBOARD_TEXT_LIMIT = 1024*1024, CLIPBOARD_ARCHIVE_LIMIT = 8*1024*1024, CLIPBOARD_WIRE_LIMIT = 100*1024*1024 };
 static const char clipboardTextType[]="public.utf8-plain-text";
 
 typedef struct {
@@ -77,13 +78,15 @@ rfbBool rfbRemoraAppleSetup(rfbClient *c) {
         WriteToRFBServer(c,mode,sizeof(mode)) &&
         WriteToRFBServer(c,monitor,sizeof(monitor));
 }
+static rfbBool requestClipboard(rfbClient *c);
 rfbBool rfbRemoraAppleEncrypt(rfbClient *c) {
     Apple *a = state(c);
     double deadline = monotonic() + (c->readTimeout ? c->readTimeout : 10);
-    rfbBool ok = rfbRemoraStartRecords(c, a->key, deadline);
+    rfbBool clipboardChanged = FALSE;
+    rfbBool ok = rfbRemoraStartRecords(c, a->key, deadline, &clipboardChanged);
     OPENSSL_cleanse(a->key, sizeof(a->key));
     a->keyValid = FALSE;
-    return ok;
+    return ok && (!clipboardChanged || requestClipboard(c));
 }
 /* The initial full request can go unanswered, or produce only controls/partial
  * coverage. Keep requesting a baseline alongside the push subscription.
@@ -113,20 +116,22 @@ static rfbBool skip(rfbClient *c,uint32_t n) {
     return TRUE;
 }
 
-static rfbBool stateChange(rfbClient *c) {
-    uint8_t h[3],body[4];
-    if(!ReadFromRFBServer(c,(char *)h,sizeof(h))) return FALSE;
-    uint32_t n=be16(h+1);
-    if(n<sizeof(body)) return fail(c,APPLE_PROFILE);
-    if(!ReadFromRFBServer(c,(char *)body,sizeof(body)) || !skip(c,n-sizeof(body))) return FALSE;
-    if(be16(body)!=1 || be16(body+2)!=2) return TRUE;
-
+static rfbBool requestClipboard(rfbClient *c) {
     Apple *a=state(c);
     uint8_t request[8]={0x0b};
     a->clipboardRequestID=a->clipboardRequestID==UINT32_MAX?1:a->clipboardRequestID+1;
     put32(request+4,a->clipboardRequestID);
     a->clipboardPending=TRUE;
     return WriteToRFBServer(c,(char *)request,sizeof(request));
+}
+
+static rfbBool stateChange(rfbClient *c) {
+    uint8_t h[3],body[4];
+    if(!ReadFromRFBServer(c,(char *)h,sizeof(h))) return FALSE;
+    uint32_t n=be16(h+1);
+    if(n<sizeof(body)) return fail(c,APPLE_PROFILE);
+    if(!ReadFromRFBServer(c,(char *)body,sizeof(body)) || !skip(c,n-sizeof(body))) return FALSE;
+    return be16(body)!=1 || be16(body+2)!=2 || requestClipboard(c);
 }
 
 /* Keep one bounded output allocation so we can validate the entire archive
@@ -203,16 +208,31 @@ static rfbBool receiveClipboard(rfbClient *c) {
     uint8_t h[15];
     if(!ReadFromRFBServer(c,(char *)h,sizeof(h))) return FALSE;
     uint32_t length=be32(h+7), compressed=be32(h+11);
-    if(length>CLIPBOARD_ARCHIVE_LIMIT || !compressed || compressed>CLIPBOARD_ARCHIVE_LIMIT)
+    if(length>CLIPBOARD_WIRE_LIMIT || !compressed || compressed>CLIPBOARD_WIRE_LIMIT)
         return fail(c,APPLE_CLIPBOARD);
+    Apple *a=state(c);
+    rfbBool answer=a->clipboardPending && be32(h+3)==a->clipboardRequestID && !(h[1]&1);
+    if(length>CLIPBOARD_ARCHIVE_LIMIT || compressed>CLIPBOARD_ARCHIVE_LIMIT) {
+        /* A large image can exceed the local limit. Drain it and report the transfer as failed. */
+        char buffer[4096];
+        while(compressed) {
+            unsigned chunk=compressed<sizeof(buffer)?compressed:sizeof(buffer);
+            if(!ReadFromRFBServer(c,buffer,chunk)) return FALSE;
+            compressed-=chunk;
+        }
+        if(answer) {
+            a->clipboardPending=FALSE;
+            if(c->GotXCutTextUTF8) c->GotXCutTextUTF8(c,NULL,0);
+        }
+        return TRUE;
+    }
     uint8_t *archive=malloc(length+1);
     if(!archive) return fail(c,APPLE_CLIPBOARD);
     const char *text=length?NULL:"";
     int textLength=0;
     rfbBool ok=inflateClipboard(c,compressed,archive,length);
     if(ok && !clipboardText(archive,length,&text,&textLength)) ok=fail(c,APPLE_CLIPBOARD);
-    Apple *a=state(c);
-    if(ok && a->clipboardPending && be32(h+3)==a->clipboardRequestID && !(h[1]&1)) {
+    if(ok && answer) {
         a->clipboardPending=FALSE;
         if(c->GotXCutTextUTF8) c->GotXCutTextUTF8(c,text,textLength);
     }
