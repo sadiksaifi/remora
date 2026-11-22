@@ -22,10 +22,13 @@ private final class FakeGPU {
     var readSucceeds = true
     /// What a read back writes into the surface, 0xRRGGBB.
     let readColor: UInt32 = 0x112233
+    /// Runs as each frame reaches the GPU, before it is drawn.
+    var onDraw: (() -> Void)?
 
     static func of(_ user: UnsafeMutableRawPointer?) -> FakeGPU { Unmanaged<FakeGPU>.fromOpaque(user!).takeUnretainedValue() }
 
     func draw(_ frame: RMRDPVideoFrame) -> RMRDPVideoResult {
+        onDraw?()
         let passes = withUnsafeBytes(of: frame.passes) { Array($0.bindMemory(to: RMRDPVideoPass.self).prefix(frame.pass_count)) }
         frames.append(
             Frame(
@@ -106,11 +109,18 @@ private final class Desktop {
         #expect(rm_graphics_copy(graphics, from, area.c, to, x, y) == 0)
     }
 
+    func cache(_ id: UInt16, _ area: Area, slot: UInt16) { #expect(rm_graphics_cache(graphics, id, area.c, slot) == 0) }
+
+    func restore(slot: UInt16, to id: UInt16, x: UInt16, y: UInt16) {
+        #expect(rm_graphics_restore(graphics, slot, id, x, y) == 0)
+    }
+
     func startFrame() { #expect(rm_graphics_start_frame(graphics) == 0) }
     func endFrame() { #expect(rm_graphics_end_frame(graphics) == 0) }
     func surfacePixel(_ id: UInt16, _ x: UInt32, _ y: UInt32) -> UInt32 { rm_graphics_surface_pixel(graphics, id, x, y) }
     func desktopPixel(_ x: UInt32, _ y: UInt32) -> UInt32 { rm_graphics_desktop_pixel(graphics, x, y) }
     var refreshes: UInt32 { rm_graphics_refreshes(graphics) }
+    var displayWoken: Bool { rm_graphics_display_woken(graphics) }
 }
 
 /// FreeRDP's CPU conversion of the IDR frame. FreeRDP converts with BT.709 and the encoder took BT.601, so the
@@ -137,6 +147,18 @@ private func expectPicture(_ color: UInt32, sourceLocation: SourceLocation = #_s
         #expect(desktop.surfacePixel(2, 10, 10) == desktop.gpu.readColor)
         desktop.copy(1, Area(0, 0, 16, 16), to: 2, x: 30, y: 30)
         #expect(desktop.gpu.reads.count == 1)
+    }
+
+    /// The server's cache must not keep stale pixels: a GPU-drawn area is read back before it is cached.
+    @Test func gpuDrawnAreaIsReadBackBeforeItIsCached() throws {
+        let desktop = try Desktop()
+        desktop.surface(1, at: (0, 0))
+        desktop.surface(2)
+        desktop.h264(1, RMGRAPHICS_AVC420, [Area(0, 0, 16, 16)])
+        desktop.cache(1, Area(0, 0, 16, 16), slot: 1)
+        #expect(desktop.gpu.reads.map(\.areas) == [[Area(0, 0, 16, 16)]])
+        desktop.restore(slot: 1, to: 2, x: 8, y: 8)
+        #expect(desktop.surfacePixel(2, 10, 10) == desktop.gpu.readColor)
     }
 
     /// Windows mixes H.264 with codecs such as planar. A planar update lands on the surface's read-back pixels,
@@ -202,43 +224,55 @@ private func expectPicture(_ color: UInt32, sourceLocation: SourceLocation = #_s
         expectPicture(desktop.surfacePixel(1, 5, 5))
     }
 
-    /// CPU drawing earlier in the frame reaches the desktop before the GPU picture covers it. Other surfaces keep
-    /// theirs until the end of the frame, so where they overlap, the desktop ends as FreeRDP alone leaves it.
+    /// CPU drawing earlier in the frame reaches the desktop before the GPU draws over it. Other surfaces keep theirs
+    /// until the end of the frame, so where they overlap, the desktop ends as it does with FreeRDP alone.
     @Test func gpuDrawSendsOnlyItsOwnSurfacesEarlierCPUDrawing() throws {
+        func frame(_ desktop: Desktop, gpu: Bool) {
+            desktop.surface(1, at: (0, 0))
+            desktop.surface(2, width: 32, height: 32, at: (100, 0))
+            desktop.surface(3, width: 32, height: 32, at: (116, 0))
+            desktop.startFrame()
+            desktop.fill(2, Area(0, 0, 32, 32), 0xFF0000)
+            desktop.fill(3, Area(0, 0, 32, 32), 0x00FF00)
+            desktop.fill(1, Area(16, 16, 32, 32), 0x0000FF)
+            if gpu { desktop.h264(1, RMGRAPHICS_AVC420, [Area(16, 16, 32, 32)]) }
+            desktop.fill(2, Area(0, 0, 32, 32), 0xFFFF00)
+            desktop.endFrame()
+        }
+        let freeRDP = try Desktop()
+        frame(freeRDP, gpu: false)
         let desktop = try Desktop()
-        desktop.surface(1, at: (0, 0))
-        desktop.surface(2, width: 32, height: 32, at: (100, 0))
-        desktop.surface(3, width: 32, height: 32, at: (116, 0))
+        var underPicture: UInt32?
+        var overlap: UInt32?
+        desktop.gpu.onDraw = { [unowned desktop] in
+            underPicture = desktop.desktopPixel(20, 20)
+            overlap = desktop.desktopPixel(120, 5)
+        }
         let untouched = desktop.desktopPixel(120, 5)
-        desktop.startFrame()
-        desktop.fill(2, Area(0, 0, 32, 32), 0xFF0000)
-        desktop.fill(3, Area(0, 0, 32, 32), 0x00FF00)
-        desktop.fill(1, Area(0, 0, 8, 8), 0x0000FF)
-        desktop.h264(1, RMGRAPHICS_AVC420, [Area(16, 16, 32, 32)])
+        frame(desktop, gpu: true)
         #expect(desktop.gpu.frames.count == 1)
-        #expect(desktop.desktopPixel(2, 2) == 0x0000FF)
-        #expect(desktop.desktopPixel(120, 5) == untouched)
-
-        desktop.fill(2, Area(0, 0, 32, 32), 0xFFFF00)
-        desktop.endFrame()
-        // FreeRDP sends surface 2, then surface 3, so surface 3 covers the overlap.
-        #expect(desktop.desktopPixel(105, 5) == 0xFFFF00)
-        #expect(desktop.desktopPixel(120, 5) == 0x00FF00)
+        #expect(underPicture == 0x0000FF)
+        #expect(overlap == untouched)
+        #expect(desktop.desktopPixel(105, 5) == freeRDP.desktopPixel(105, 5))
+        #expect(desktop.desktopPixel(120, 5) == freeRDP.desktopPixel(120, 5))
     }
 
-    /// Failures count over the session, including GPU errors noticed after the fact, and never end it.
+    /// Failures count over the session and all its surfaces, including GPU errors noticed after the fact, and never
+    /// end it.
     @Test func threeGPUFailuresMoveH264ToTheCPU() throws {
         let desktop = try Desktop()
         desktop.surface(1, at: (0, 0))
+        desktop.surface(2, at: (128, 32))
         desktop.gpu.results = [RMRDP_VIDEO_FAILED, RMRDP_VIDEO_DRAWN, RMRDP_VIDEO_DRAWN_AFTER_LOSS, RMRDP_VIDEO_DRAWN, RMRDP_VIDEO_FAILED]
         var refreshes: [UInt32] = []
-        for _ in 0..<6 {
-            desktop.h264(1)
+        for surface: UInt16 in [1, 2, 1, 2, 2, 1, 2] {
+            desktop.h264(surface)
             refreshes.append(desktop.refreshes)
         }
-        #expect(desktop.gpu.frames.count == 5)
-        #expect(refreshes == [1, 1, 2, 2, 3, 3])
+        #expect(desktop.gpu.frames.map(\.surface) == [1, 2, 1, 2, 2])
+        #expect(refreshes == [1, 1, 2, 2, 3, 3, 3])
         expectPicture(desktop.surfacePixel(1, 5, 5))
+        expectPicture(desktop.surfacePixel(2, 5, 5))
     }
 
     /// GPU drawing from before a GPU error is gone, so only drawing after it is read back.
@@ -279,7 +313,10 @@ private func expectPicture(_ color: UInt32, sourceLocation: SourceLocation = #_s
     /// A redraw request needs no frame to go out, and a server that does not honor Refresh Rect never gets one.
     @Test(arguments: [true, false]) func redrawRequestReachesTheServerWithoutAFrame(refreshRect: Bool) throws {
         let desktop = try Desktop(refreshRect: refreshRect)
+        _ = desktop.refreshes
+        #expect(!desktop.displayWoken)
         rm_rdp_request_refresh(desktop.session)
+        #expect(desktop.displayWoken)
         #expect(desktop.refreshes == (refreshRect ? 1 : 0))
         #expect(desktop.refreshes == (refreshRect ? 1 : 0))
     }

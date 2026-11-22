@@ -21,6 +21,9 @@ uint32_t rm_graphics_map(RMGraphics *graphics, uint16_t surface, uint32_t x, uin
 uint32_t rm_graphics_fill(RMGraphics *graphics, uint16_t surface, RMRDPVideoRectangle area, uint32_t bgr);
 uint32_t rm_graphics_copy(RMGraphics *graphics, uint16_t from, RMRDPVideoRectangle area, uint16_t to, uint16_t x,
                           uint16_t y);
+/* Cache slots run from 1 to 16. */
+uint32_t rm_graphics_cache(RMGraphics *graphics, uint16_t surface, RMRDPVideoRectangle area, uint16_t slot);
+uint32_t rm_graphics_restore(RMGraphics *graphics, uint16_t slot, uint16_t surface, uint16_t x, uint16_t y);
 /* Every picture in the command is the same 64x64 IDR frame, filled with 0x3080C0. AVC444 sends both views. */
 uint32_t rm_graphics_h264(RMGraphics *graphics, uint16_t surface, RMGraphicsCodec codec,
                           const RMRDPVideoRectangle *rectangles, size_t count);
@@ -35,6 +38,8 @@ uint32_t rm_graphics_end_frame(RMGraphics *graphics);
 uint32_t rm_graphics_surface_pixel(RMGraphics *graphics, uint16_t surface, uint32_t x, uint32_t y);
 uint32_t rm_graphics_desktop_pixel(RMGraphics *graphics, uint32_t x, uint32_t y);
 
+/* Whether the session thread has been woken to run the display's step, which clears the wakeup. */
+bool rm_graphics_display_woken(RMGraphics *graphics);
 /* Runs the display's session-thread step, then returns how many Refresh Rect requests the session has sent. */
 unsigned rm_graphics_refreshes(RMGraphics *graphics);
 #endif

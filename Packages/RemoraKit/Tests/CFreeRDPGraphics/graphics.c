@@ -12,6 +12,7 @@
 #pragma clang diagnostic pop
 
 #define MAX_SURFACES 64
+#define MAX_CACHE_SLOTS 16
 
 /* A 64x64 baseline IDR frame of 0x3080C0, from x264 with its SEI removed. */
 static const BYTE idr[] = {
@@ -27,6 +28,7 @@ struct RMGraphics {
     rdpContext *context;
     RdpgfxClientContext gfx;
     void *surfaces[MAX_SURFACES];
+    void *cache[MAX_CACHE_SLOTS];
     unsigned refreshes;
     UINT32 frame;
     RMGraphics *next;
@@ -86,6 +88,18 @@ static UINT surface_ids(RdpgfxClientContext *gfx, UINT16 **ids, UINT16 *count) {
     return CHANNEL_RC_OK;
 }
 
+/* Cache slots start at 1, as in MS-RDPEGFX. */
+static UINT set_cache(RdpgfxClientContext *gfx, UINT16 slot, void *data) {
+    if (slot == 0 || slot > MAX_CACHE_SLOTS)
+        return ERROR_INVALID_INDEX;
+    owner(gfx)->cache[slot - 1] = data;
+    return CHANNEL_RC_OK;
+}
+
+static void *get_cache(RdpgfxClientContext *gfx, UINT16 slot) {
+    return slot > 0 && slot <= MAX_CACHE_SLOTS ? owner(gfx)->cache[slot - 1] : NULL;
+}
+
 RMGraphics *rm_graphics_new(uint32_t width, uint32_t height, bool refresh, const RMRDPCallbacks *callbacks,
                             void *user) {
     const RMRDPConfiguration config = { .host = "localhost", .port = 3389, .username = "", .domain = "",
@@ -116,6 +130,8 @@ RMGraphics *rm_graphics_new(uint32_t width, uint32_t height, bool refresh, const
     g->gfx.GetSurfaceIds = surface_ids;
     g->gfx.SetSurfaceData = set_surface;
     g->gfx.GetSurfaceData = get_surface;
+    g->gfx.SetCacheSlotData = set_cache;
+    g->gfx.GetCacheSlotData = get_cache;
     if (!gdi_graphics_pipeline_init(g->context->gdi, &g->gfx)) {
         rm_graphics_free(g);
         return NULL;
@@ -140,6 +156,11 @@ void rm_graphics_free(RMGraphics *g) {
         }
     pthread_mutex_unlock(&all_lock);
     if (g->gfx.custom) {
+        for (UINT16 slot = 1; slot <= MAX_CACHE_SLOTS; slot++) {
+            const RDPGFX_EVICT_CACHE_ENTRY_PDU evict = { slot };
+            if (g->cache[slot - 1])
+                (void)g->gfx.EvictCacheEntry(&g->gfx, &evict);
+        }
         for (UINT16 id = 0; id < MAX_SURFACES; id++)
             if (g->surfaces[id])
                 (void)rm_graphics_delete_surface(g, id);
@@ -182,6 +203,17 @@ uint32_t rm_graphics_copy(RMGraphics *g, uint16_t from, RMRDPVideoRectangle area
     RDPGFX_POINT16 point = { x, y };
     const RDPGFX_SURFACE_TO_SURFACE_PDU pdu = { from, to, rectangle(area), 1, &point };
     return g->gfx.SurfaceToSurface(&g->gfx, &pdu);
+}
+
+uint32_t rm_graphics_cache(RMGraphics *g, uint16_t surface, RMRDPVideoRectangle area, uint16_t slot) {
+    const RDPGFX_SURFACE_TO_CACHE_PDU pdu = { surface, slot, slot, rectangle(area) };
+    return g->gfx.SurfaceToCache(&g->gfx, &pdu);
+}
+
+uint32_t rm_graphics_restore(RMGraphics *g, uint16_t slot, uint16_t surface, uint16_t x, uint16_t y) {
+    RDPGFX_POINT16 point = { x, y };
+    const RDPGFX_CACHE_TO_SURFACE_PDU pdu = { slot, surface, 1, &point };
+    return g->gfx.CacheToSurface(&g->gfx, &pdu);
 }
 
 uint32_t rm_graphics_h264(RMGraphics *g, uint16_t surface, RMGraphicsCodec codec, const RMRDPVideoRectangle *rectangles,
@@ -275,6 +307,10 @@ uint32_t rm_graphics_desktop_pixel(RMGraphics *g, uint32_t x, uint32_t y) {
     const rdpGdi *gdi = g->context->gdi;
     return x < (uint32_t)gdi->width && y < (uint32_t)gdi->height ? pixel(gdi->primary_buffer, gdi->stride, x, y)
                                                                    : UINT32_MAX;
+}
+
+bool rm_graphics_display_woken(RMGraphics *g) {
+    return WaitForSingleObject(rm_display_event(rm_rdp_display(g->session)), 0) == WAIT_OBJECT_0;
 }
 
 unsigned rm_graphics_refreshes(RMGraphics *g) {
