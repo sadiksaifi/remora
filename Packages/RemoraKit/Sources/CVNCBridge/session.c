@@ -549,7 +549,7 @@ static bool reconcile_resize(RMVNC *s) {
 /* Like WaitForMessage, but queued input or abort also ends the wait. */
 static int wait_for_message_or_input(RMVNC *s, int timeoutMS) {
     rfbClient *c = s->client;
-    if (c->buffered > 0) return 1;
+    if (c->buffered > 0 || rfbRemoraRecordPending(c)) return 1;
     if (c->sock == RFB_INVALID_SOCKET) return WaitForMessage(c, 0);
     struct pollfd fds[2] = {{c->sock, POLLIN, 0}, {s->wake[0], POLLIN, 0}};
     int ready = poll(fds, 2, timeoutMS);
@@ -571,7 +571,7 @@ bool rm_vnc_step(RMVNC *s) {
     memset(p,0,sizeof(*p)); p->sequence = sequence; p->lastRequest = lastRequest;
     p->enabled = os_signpost_enabled(performance_log());
     if (!p->enabled) p->lastRequest = lastRequest = 0;
-    p->prefetched = c->buffered > 0;
+    p->prefetched = c->buffered > 0 || rfbRemoraRecordPending(c);
     int ready=wait_for_message_or_input(s,10);
     if (ready > 0 && p->enabled) {
         p->ready = performance_clock(); p->cpuStart = performance_cpu(); p->requestAtReady = lastRequest;
@@ -637,7 +637,7 @@ const char *rm_vnc_security(RMVNC *s) {
             case rfbVeNCryptX509VNC: return "VeNCrypt X509VNC";
             case rfbVeNCryptX509None: return "VeNCrypt X509None";
         } return "unsupported VeNCrypt subtype";
-        case rfbARD: return "Apple ARD (unencrypted desktop)";
+        case rfbARD: return s->client->remoraRecords ? "Apple ARD (AES-128-CBC session)" : "Apple ARD (unencrypted desktop)";
         case rfbVncAuth: return "VNC authentication (unencrypted desktop)";
         case rfbNoAuth: return "None (unencrypted, unauthenticated desktop)";
         default:return "unsupported security type (RSA-AES is not supported)";

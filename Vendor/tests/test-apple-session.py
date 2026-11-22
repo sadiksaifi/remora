@@ -15,23 +15,28 @@ with tempfile.TemporaryDirectory(prefix='remora-apple-sanitizers-') as temporary
                     '-fno-omit-frame-pointer', '-Wno-deprecated-declarations',
                     '-I'+str(source/'include'), '-I'+str(root/'build/vnc/include'),
                     '-I'+str(root/'build/openssl-install/include'), '-I'+str(source/'src/common'),
-                    str(root/'tests/test_apple_session.c'), str(root/'apple-mvs/apple.c'), str(root/'apple-mvs/mvs.c'),
+                    str(root/'tests/test_apple_session.c'), str(root/'apple-mvs/apple.c'), str(root/'apple-mvs/records.c'), str(root/'apple-mvs/mvs.c'),
                     str(root/'build/vnc-package/libLibVNCClient.a'), str(root/'build/openssl-install/lib/libssl.a'),
                     str(root/'build/openssl-install/lib/libcrypto.a'), '-lz', '-o',exe], check=True,timeout=60)
-    for mode, frames in [('apple-retry-dropped',3),('apple-retry-empty',3),('apple-retry-quant',3),
-                         ('apple-retry-raw',4),('apple-retry-controls',3),
-                         ('apple-sequence',3),('apple-regions',4),('apple-region-uninitialized',1),('apple-demand',4),('apple-damage',6),('apple-no-baseline',0),('apple-bad-cache',1),
-                         ('apple-clipboard',3),('apple-clipboard-limit',1),('apple-clipboard-wire-limit',1),
-                         ('apple-clipboard-length',1),('apple-clipboard-malformed',1),
-                         ('apple-multi-invalid',1),('apple-session-select',0),('apple-reject',0),('apple-wrong-banner',0)]:
+    cases = [
+        ('apple-retry-dropped', 3), ('apple-retry-empty', 3), ('apple-retry-quant', 3),
+        ('apple-retry-raw', 4), ('apple-retry-controls', 3), ('apple-sequence', 3),
+        ('apple-regions', 4, 'regions'), ('apple-region-uninitialized', 1, 'regions'),
+        ('apple-demand', 4, 'demand'), ('apple-damage', 6), ('apple-no-baseline', 0), ('apple-bad-cache', 1),
+        ('apple-large-records', 1, 'large'), ('apple-no-key', 0, '14'), ('apple-refuse', 0, '14'),
+        ('apple-control-encryption', 1, '16'),
+        *(('apple-invalid-'+case, 0, '15') for case in ('digest', 'length', 'body-length', 'sequence')),
+        ('apple-clipboard', 3, 'clipboard'),
+        *((case, 1, 'invalid-clipboard') for case in ('apple-clipboard-limit', 'apple-clipboard-wire-limit',
+                                                      'apple-clipboard-length', 'apple-clipboard-malformed')),
+        ('apple-multi-invalid', 1), ('apple-session-select', 0), ('apple-reject', 0), ('apple-wrong-banner', 0),
+    ]
+    for mode, frames, *checks in cases:
         with subprocess.Popen(['/usr/bin/python3','-u',str(peer_source),'ard-only',mode],stdout=subprocess.PIPE,text=True) as peer:
             try:
                 port = json.loads(peer.stdout.readline())['loopback_port']
                 env = dict(os.environ, ASAN_OPTIONS='abort_on_error=1', UBSAN_OPTIONS='halt_on_error=1:print_stacktrace=1')
-                options = {'apple-demand': 'demand', 'apple-regions': 'regions', 'apple-region-uninitialized': 'regions',
-                           'apple-clipboard': 'clipboard'}
-                option = options.get(mode, 'invalid-clipboard' if mode.startswith('apple-clipboard-') else None)
-                subprocess.run([exe,str(port),str(frames)]+([option] if option else []),check=True,timeout=12,env=env)
+                subprocess.run([exe, str(port), str(frames), *checks], check=True, timeout=12, env=env)
                 report = json.loads(peer.communicate(timeout=2)[0])
                 assert 'error_class' not in report, (mode,report)
                 if mode in ('apple-sequence','apple-no-baseline') or mode.startswith('apple-retry-'):

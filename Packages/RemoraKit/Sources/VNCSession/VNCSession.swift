@@ -252,7 +252,9 @@ public final class VNCSession: AgentInputSession, @unchecked Sendable {
         case 9: "The Apple desktop update could not be decoded."
         case 10: "The Mac did not provide a supported single-display picture."
         case 12: "The VNC server reports multiple displays without a supported display-selection protocol."
-        case 15: "The Apple clipboard archive is invalid or exceeds the size limit."
+        case 15: "The Apple encrypted session record failed validation. Reconnect to start a new session."
+        case 16: "The Mac requested an unsupported encryption key change. Reconnect to start a new session."
+        case 17: "The Apple clipboard archive is invalid or exceeds the size limit."
         default: nil
         }
     }
@@ -399,8 +401,9 @@ public final class VNCSession: AgentInputSession, @unchecked Sendable {
                 promptedCredentials = nil
                 guard connected else {
                     let diagnostic = rm_vnc_diagnostic(created)
+                    let nativeError = rm_vnc_error(created)
                     let reason: DisconnectReason =
-                        switch rm_vnc_error(created) {
+                        switch nativeError {
                         case 1: .hostNotFound
                         case 13: .localNetworkDenied
                         case 2: .connectionRefused
@@ -409,8 +412,9 @@ public final class VNCSession: AgentInputSession, @unchecked Sendable {
                         case 5: .certificateRejected
                         case 8:
                             .protocolError(
-                                "The experimental Apple profile requires RFB 003.889, ARD authentication, and a supported shared desktop without session encryption."
+                                "The experimental Apple profile requires RFB 003.889, ARD authentication, and a supported shared desktop with session encryption."
                             )
+                        case 14: .protocolError("Apple session encryption could not be established. Check that the Mac supports encrypted Screen Sharing.")
                         case 9: .protocolError("The Apple desktop update could not be decoded.")
                         case 10: .protocolError("The Mac did not provide a supported single-display picture.")
                         case 7: .protocolError(unsupportedSizeDetail(width: diagnostic.framebufferWidth, height: diagnostic.framebufferHeight))
@@ -421,7 +425,9 @@ public final class VNCSession: AgentInputSession, @unchecked Sendable {
                                     ? "Remora couldn't negotiate a supported security method with the VNC server."
                                     : "The VNC connection couldn't be set up.")
                         }
-                    state.lock.withLock { if state.reason == nil { state.reason = reason } }
+                    state.lock.withLock {
+                        if state.reason == nil || (nativeError == 14 && state.reason == .connectionTimedOut) { state.reason = reason }
+                    }
                     return
                 }
                 let security = String(cString: rm_vnc_security(created))

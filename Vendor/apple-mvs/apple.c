@@ -5,7 +5,7 @@
  */
 #include "apple.h"
 #include "mvs.h"
-#include "crypto.h"
+#include "records.h"
 #include <openssl/crypto.h>
 #include <stdlib.h>
 #include <string.h>
@@ -13,7 +13,7 @@
 #include <zlib.h>
 
 /* Profile errors are local numeric diagnostics, never server-controlled strings. */
-enum { APPLE_PROFILE = 8, APPLE_DECODE = 9, APPLE_GEOMETRY = 10, APPLE_CLIPBOARD = 15 };
+enum { APPLE_PROFILE = 8, APPLE_DECODE = 9, APPLE_GEOMETRY = 10, APPLE_CLIPBOARD = 17 };
 enum { CLIPBOARD_TEXT_LIMIT = 1024*1024, CLIPBOARD_ARCHIVE_LIMIT = 8*1024*1024 };
 static const char clipboardTextType[]="public.utf8-plain-text";
 
@@ -21,7 +21,6 @@ typedef struct {
     uint8_t key[16];
     rfbBool keyValid, baseline, dirty, demand, subscribed;
     double baselineRequestAt;
-    uint32_t previousInputTime;
     uint32_t left, top, right, bottom;
     mvs_decoder *decoder;
     uint32_t clipboardRequestID;
@@ -51,6 +50,7 @@ rfbBool rfbRemoraAppleRememberKey(rfbClient *c, const uint8_t key[16]) {
 void rfbRemoraAppleCleanup(rfbClient *c) {
     Apple *a=state(c);
     if (!a) return;
+    rfbRemoraFreeRecords(c);
     mvs_destroy(a->decoder);
     OPENSSL_cleanse(a,sizeof(*a)); free(a); c->remoraAppleState=NULL;
 }
@@ -77,6 +77,14 @@ rfbBool rfbRemoraAppleSetup(rfbClient *c) {
         WriteToRFBServer(c,mode,sizeof(mode)) &&
         WriteToRFBServer(c,monitor,sizeof(monitor));
 }
+rfbBool rfbRemoraAppleEncrypt(rfbClient *c) {
+    Apple *a = state(c);
+    double deadline = monotonic() + (c->readTimeout ? c->readTimeout : 10);
+    rfbBool ok = rfbRemoraStartRecords(c, a->key, deadline);
+    OPENSSL_cleanse(a->key, sizeof(a->key));
+    a->keyValid = FALSE;
+    return ok;
+}
 /* The initial full request can go unanswered, or produce only controls/partial
  * coverage. Keep requesting a baseline alongside the push subscription.
  * Called between complete messages, never during a rectangle decode. */
@@ -90,8 +98,8 @@ rfbBool rfbRemoraAppleRetryBaseline(rfbClient *c) {
     return SendFramebufferUpdateRequest(c,0,0,c->width,c->height,FALSE);
 }
 rfbBool rfbRemoraAppleEncodings(rfbClient *c) {
-    uint8_t message[24]={2,0,0,5};
-    put32(message+4,1011); put32(message+8,0); put32(message+12,1105); put32(message+16,(uint32_t)-223); put32(message+20,1101);
+    uint8_t message[28]={2,0,0,6};
+    put32(message+4,1011); put32(message+8,0); put32(message+12,1105); put32(message+16,(uint32_t)-223); put32(message+20,1101); put32(message+24,1103);
     return WriteToRFBServer(c,(char *)message,sizeof(message));
 }
 static rfbBool skip(rfbClient *c,uint32_t n) {
@@ -358,6 +366,10 @@ static void damage(void *context,uint32_t x,uint32_t y,uint32_t w,uint32_t h) {
     a->dirty=TRUE;
 }
 int rfbRemoraAppleRect(rfbClient *c,const rfbFramebufferUpdateRectHeader *r) {
+    if(r->encoding==1103) {
+        rfbRemoraFreeRecords(c);
+        return fail(c,APPLE_REKEY),-1;
+    }
     if(r->encoding==1105) return displayInfo(c)?1:-1;
     if(r->encoding==1101) {
         uint8_t h[8];
@@ -425,33 +437,12 @@ rfbBool rfbRemoraAppleEnd(rfbClient *c) {
     if(a->dirty) c->GotFrameBufferUpdate(c,a->left,a->top,a->right-a->left,a->bottom-a->top);
     return TRUE;
 }
-/* Apple's combined input format shares its elapsed-time counter across keys and pointers. */
-static rfbBool sendInput(rfbClient *c,uint8_t plain[16]) {
-    Apple *a=state(c);
-    if(!a || !a->keyValid || c->remoraDiagnostic.phase!=RFB_REMORA_READY) return fail(c,APPLE_PROFILE);
-    uint8_t wire[18]={0x10,0}; int length=0;
-    struct timespec now; clock_gettime(CLOCK_MONOTONIC,&now);
-    uint32_t timestamp=(uint32_t)((uint64_t)now.tv_sec*1000000+now.tv_nsec/1000);
-    put32(plain+6,timestamp-a->previousInputTime);
-    rfbBool ok=encrypt_aes128ecb(wire+2,&length,a->key,plain,16) && length==16;
-    if(ok) ok=WriteToRFBServer(c,(char *)wire,sizeof(wire));
-    if(ok) a->previousInputTime=timestamp;
-    OPENSSL_cleanse(plain,16); OPENSSL_cleanse(wire,sizeof(wire));
-    return ok;
-}
-rfbBool rfbRemoraAppleKey(rfbClient *c,uint32_t keysym,rfbBool down) {
-    /* Option is Meta for ARD, preserving the source's held-key identity on both transitions. */
-    if(keysym==0xffe9) keysym=0xffe7;
-    if(keysym==0xffea) keysym=0xffe8;
-    uint8_t plain[16]={0xff,down?1:0}; put32(plain+2,keysym);
-    return sendInput(c,plain);
-}
 rfbBool rfbRemoraApplePointer(rfbClient *c,int x,int y,int mask) {
     /* The common source-button state stays in Remora. Only the wire mask changes. */
-    uint8_t plain[16]={0};
-    plain[10]=0xff; plain[11]=(uint8_t)((mask&1)|((mask&4)>>1)|((mask&2)<<1));
-    put16(plain+12,x); put16(plain+14,y);
-    if(!sendInput(c,plain)) return FALSE;
+    if(!c->remoraRecords || c->remoraDiagnostic.phase!=RFB_REMORA_READY) return FALSE;
+    uint8_t pointer[6]={5,(uint8_t)((mask&1)|((mask&4)>>1)|((mask&2)<<1))};
+    put16(pointer+2,x); put16(pointer+4,y);
+    if(!WriteToRFBServer(c,(char *)pointer,sizeof(pointer))) return FALSE;
     /* Native horizontal deltas are positive toward RFB button 0x20 (left). */
     int dx=(mask&64)?-1:(mask&32)?1:0;
     int dy=(mask&8)?1:(mask&16)?-1:0;
