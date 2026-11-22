@@ -79,7 +79,7 @@
      rfbRemoraDiagnosticComplete(client, RFB_REMORA_OFFERS);
      rfbRemoraDiagnosticBegin(client, RFB_REMORA_SELECTION);
 +    if (client->remoraApple889) {
-+        /* The Apple profile sends the password only to the SRP login, whatever else is offered.
++        /* The Apple profile uses the password only in the SRP login, whatever else is offered.
 +         * The login writes the selection itself, together with its first message. */
 +        if (!memchr(offers, rfbRemoraAppleSRP, count)) {
 +            client->remoraAppleError = APPLE_LOGIN_UNAVAILABLE;

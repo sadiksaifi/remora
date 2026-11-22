@@ -460,7 +460,7 @@ public final class VNCSession: AgentInputSession, @unchecked Sendable {
                             )
                         case 18:
                             .protocolError(
-                                "The Mac didn't offer the SRP login, which proves its identity. Apple mode sends the password only through that login."
+                                "The Mac didn't offer the SRP login, which proves its identity. Apple mode requires that login, which never sends the password."
                             )
                         case 19:
                             .protocolError(

@@ -187,6 +187,20 @@ static const uint8_t *counted(const uint8_t **cursor,const uint8_t *end,uint32_t
     return take(cursor,end,*n);
 }
 
+/* Well-formed UTF-8: no overlong forms, surrogates or code points above U+10FFFF. */
+static rfbBool validUTF8(const uint8_t *p,uint32_t n) {
+    for(uint32_t i=0;i<n;) {
+        uint8_t b=p[i];
+        uint32_t more=b<0x80?0:b>=0xc2&&b<0xe0?1:b>=0xe0&&b<0xf0?2:b>=0xf0&&b<0xf5?3:4;
+        if(more==4 || more>n-i-1) return FALSE;
+        for(uint32_t k=1;k<=more;k++) if((p[i+k]&0xc0)!=0x80) return FALSE;
+        if((b==0xe0 && p[i+1]<0xa0) || (b==0xed && p[i+1]>=0xa0) || (b==0xf0 && p[i+1]<0x90) || (b==0xf4 && p[i+1]>=0x90))
+            return FALSE;
+        i+=1+more;
+    }
+    return TRUE;
+}
+
 static rfbBool clipboardItem(const uint8_t *cursor,uint32_t length,unsigned supported,
                              rfbRemoraClipboardFlavor selected[CLIPBOARD_TYPES],int *count) {
     const uint8_t *end=cursor+length;
@@ -215,7 +229,7 @@ static rfbBool clipboardItem(const uint8_t *cursor,uint32_t length,unsigned supp
                 rfbBool text=FALSE;
                 for(int i=0;i<*count;i++) text|=selected[i].uti==clipboardTypes[0];
                 if(!text && *count<CLIPBOARD_TYPES && size<=CLIPBOARD_TEXT_LIMIT && strlen(clipboardTypes[0])==typeLength &&
-                   !memcmp(type,clipboardTypes[0],typeLength))
+                   !memcmp(type,clipboardTypes[0],typeLength) && validUTF8(data,size))
                     selected[(*count)++]=(rfbRemoraClipboardFlavor){clipboardTypes[0],data,size};
                 continue;
             }
@@ -303,6 +317,8 @@ int rfbRemoraSendClipboard(rfbClient *c,const rfbRemoraClipboardFlavor *flavors,
                 message[0]=0x1f;
                 put32(message+8,length); put32(message+12,(uint32_t)z.total_out);
                 result=WriteToRFBServer(c,(char *)message,16+(unsigned)z.total_out)?1:0;
+                /* This item replaces the Mac's pasteboard, so a reply still in flight is older. */
+                if(result==1) state(c)->clipboardPending=FALSE;
             }
             free(message);
         }

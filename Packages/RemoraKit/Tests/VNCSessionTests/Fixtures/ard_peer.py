@@ -399,7 +399,16 @@ def apple_clipboard(outcome, client_message, send, report):
 
     def text_item(data): return struct.pack('>I', 1) + packed_flavor(TEXT_UTI, data)
 
-    if outcome == 'apple-clipboard-limit':
+    if outcome == 'apple-clipboard-stale':
+        # The viewer uploads its own copy while the reply to an older request is still in flight.
+        send(bytes.fromhex('14 00 00 04 00 01 00 02'))
+        while client_message() != 0x0b: pass
+        stale = report['clipboard_requests'][-1]
+        while not report['clipboard_uploads']: client_message()
+        archive = zlib.compress(text_item(b'stale'))
+        send(struct.pack('>BBBBIII', 0x1f, 0, 0, 0, stale, len(text_item(b'stale')), len(archive)) + archive)
+        reply(text_item(b'fresh'))
+    elif outcome == 'apple-clipboard-limit':
         # Archives over the local limit, such as a copied image, are drained and the session goes on.
         large = 8 * 1024 * 1024 + 1
         reply(None, declared=(1, large, bytes(large)))
@@ -409,7 +418,8 @@ def apple_clipboard(outcome, client_message, send, report):
         reply(rich_item(b'Mac', tags=[(b'public.filename-extension', b'test')]), sync=True)
         while not report['clipboard_uploads']: client_message()
         # An item without text takes the text of the item after it, so the CLI can still read text.
-        reply(bytes(4) + rich_item(b'Mac', with_text=False) + text_item(b'separate item'))
+        # Text that is not valid UTF-8 is passed over.
+        reply(bytes(4) + rich_item(b'Mac', with_text=False) + text_item(b'\xc0\xaf') + text_item(b'separate item'))
     elif outcome == 'apple-clipboard-boundary':
         reply(boundary_item())
         while not report['clipboard_uploads']: client_message()
@@ -472,7 +482,7 @@ def apple_frames(outcome, exact, send, report, connection):
             if flags or reserved or request in report['clipboard_requests']:
                 raise ValueError('full clipboard request with a fresh ID required')
             report['clipboard_requests'].append(request)
-        elif kind == 0x1f and outcome in ('apple-clipboard', 'apple-clipboard-rich', 'apple-clipboard-boundary'):
+        elif kind == 0x1f and outcome in ('apple-clipboard', 'apple-clipboard-rich', 'apple-clipboard-boundary', 'apple-clipboard-stale'):
             padding, flags, reserved, request, plain, compressed = struct.unpack('>BBBIII', exact(15))
             if padding or flags or reserved or request or not 0 < compressed <= 8 * 1024 * 1024:
                 raise ValueError('clipboard upload header')

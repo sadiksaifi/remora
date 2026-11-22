@@ -111,7 +111,8 @@ struct RemoraCommand: AsyncParsableCommand {
 struct CommonOptions: ParsableArguments {
     /// Deadlines for the requests that outlast the 10-second default. The help and the request both read this table.
     /// One concrete type serves every command, because ArgumentParser hands a parent's options to a subcommand only when the types match.
-    static let deadlines = ["connect": "30s", "drag": "60s", "input": "60s", "type": "60s"]
+    /// connect outlasts Apple mode's 40-second handshake budget, which covers a rejection that macOS delays.
+    static let deadlines = ["connect": "45s", "drag": "60s", "input": "60s", "type": "60s"]
 
     @Flag(help: "Print one JSON result or error envelope.") var json = false
     @Option(

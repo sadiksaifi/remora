@@ -139,6 +139,18 @@ private final class ApplePixels: FrameSink, @unchecked Sendable {
     return (result, terminals, frames)
 }
 
+@Test @MainActor func appleClipboardDropsAReplyThatALocalUploadReplaced() async throws {
+    var statuses: [RemoteClipboard.Status] = []
+    let (wire, _, _) = try await appleSession(
+        "apple-clipboard-stale",
+        onClipboard: { session, status in
+            statuses.append(status)
+            if statuses == [.unknown, .pending] { session.setLocalClipboard(text: "from viewer 🦀") }
+        })
+    #expect(wire["clipboard_uploads"] as? [String] == ["from viewer 🦀"])
+    #expect(statuses == [.unknown, .pending, .offered([.text("from viewer 🦀")]), .pending, .text("fresh")])
+}
+
 @Test @MainActor func appleClipboardExchangesPlainTextThroughThePublicSession() async throws {
     var statuses: [RemoteClipboard.Status] = []
     let (wire, _, pixels) = try await appleSession(
@@ -421,7 +433,7 @@ private func richFlavors(_ source: String) -> [RemoteClipboard.Flavor] {
     #expect(frames.samples.isEmpty)
     #expect(
         terminals == [
-            .protocolError("The Mac didn't offer the SRP login, which proves its identity. Apple mode sends the password only through that login.")
+            .protocolError("The Mac didn't offer the SRP login, which proves its identity. Apple mode requires that login, which never sends the password.")
         ])
 }
 

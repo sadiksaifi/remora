@@ -8,9 +8,8 @@ private let clipboardLog = Logger(subsystem: "com.peblon.remora", category: "Cli
 @MainActor
 final class ClipboardSync {
     private let session: any RemoteSession
+    /// The Mac pasteboard's change count when Remora last wrote or read it.
     private var changeCount: Int?
-    /// The Mac pasteboard's change count when the remote clipboard last changed.
-    private var pendingChangeCount: Int?
     private var attemptedPrompt = false
     private var connected = false
     private let canSync: () -> Bool
@@ -28,15 +27,10 @@ final class ClipboardSync {
         sendLocalItemIfChanged()
     }
 
-    func remoteChangePending() {
-        pendingChangeCount = NSPasteboard.general.changeCount
-    }
-
     func receiveRemoteItem(_ flavors: [RemoteClipboard.Flavor]) {
         let pasteboard = NSPasteboard.general
-        // A copy on this Mac after the remote change is newer than the remote item, so it stays.
-        defer { pendingChangeCount = nil }
-        guard canSync(), pendingChangeCount.map({ $0 == pasteboard.changeCount }) ?? true else { return }
+        // A copy on this Mac that Remora has not read yet is newer than anything the session offered, so it stays.
+        guard canSync(), changeCount.map({ $0 == pasteboard.changeCount }) ?? true else { return }
         let item = NSPasteboardItem()
         for flavor in flavors {
             item.setData(flavor.data, forType: .init(flavor.format.rawValue))
@@ -58,7 +52,11 @@ final class ClipboardSync {
         case .default, .ask:
             // One potentially prompting read per session attempt, including when
             // the pasteboard has no supported format. Further focus changes must not nag.
-            guard !attemptedPrompt else { return }
+            // Mark the change as seen, so remote items still arrive.
+            guard !attemptedPrompt else {
+                changeCount = pasteboard.changeCount
+                return
+            }
             attemptedPrompt = true
         case .alwaysAllow:
             break
@@ -79,7 +77,9 @@ final class ClipboardSync {
                 return .init(format, data)
             }
             if !flavors.isEmpty {
-                session.setLocalClipboard(flavors: flavors)
+                // An item without text, such as an image, takes the first text of a later item.
+                let text = flavors.contains { $0.format == .text } ? nil : pasteboard.string(forType: .string)
+                session.setLocalClipboard(flavors: flavors + (text.map { [.text($0)] } ?? []))
                 return
             }
         }
