@@ -47,6 +47,9 @@ let package = Package(
         .target(name: "CFreeRDPReference", dependencies: ["FreeRDP"], path: "Tests/CFreeRDPReference"),
         // A session with FreeRDP's GDI and a graphics channel without a server, for the video module's tests.
         .target(name: "CFreeRDPGraphics", dependencies: ["CFreeRDPBridge", "FreeRDP"], path: "Tests/CFreeRDPGraphics"),
+        // An RDP server in the test process, built on FreeRDP's peer API, for RDPSession's tests.
+        .target(name: "CFreeRDPTestServer", dependencies: ["FreeRDP"], path: "Tests/CFreeRDPTestServer"),
+        .testTarget(name: "RDPSessionTests", dependencies: ["RDPSession", "RemoraCore", "CFreeRDPTestServer"]),
         .testTarget(
             name: "RemoraCoreTests",
             dependencies: ["RemoraCore", "CFreeRDPBridge", "CVNCBridge", "CFreeRDPReference", "CFreeRDPGraphics"],
