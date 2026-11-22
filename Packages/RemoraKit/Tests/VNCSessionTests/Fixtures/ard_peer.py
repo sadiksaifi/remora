@@ -666,7 +666,7 @@ def serve_once(offer_mode, outcome, port):
     withheld = outcome.endswith(('init-withheld', 'init-withheld-once'))
     withheld_public = None
     stalled = outcome.startswith('apple-init-stalled-')
-    deadline = time.monotonic() + (30 if outcome in ('apple-slow-reject', 'apple-write-stall', 'runtime-write-stall') else 16 if withheld or stalled or 'display-timeout' in outcome or outcome == 'apple-retry-hidden' else 10)
+    deadline = time.monotonic() + (30 if outcome in ('apple-slow-reject', 'apple-write-stall', 'runtime-write-stall', 'apple-retry-hidden', 'apple-hidden-baseline') else 16 if withheld or stalled or 'display-timeout' in outcome else 10)
     offers = {
         'apple-mixed': OFFERS,
         'ard-only': [30],
