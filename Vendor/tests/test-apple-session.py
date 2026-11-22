@@ -16,6 +16,7 @@ with tempfile.TemporaryDirectory(prefix='remora-apple-sanitizers-') as temporary
                     '-I'+str(source/'include'), '-I'+str(root/'build/vnc/include'),
                     '-I'+str(root/'build/openssl-install/include'), '-I'+str(source/'src/common'),
                     str(root/'tests/test_apple_session.c'), str(root/'apple-mvs/apple.c'), str(root/'apple-mvs/records.c'), str(root/'apple-mvs/mvs.c'),
+                    str(root/'apple-mvs/srp.c'),
                     str(root/'build/vnc-package/libLibVNCClient.a'), str(root/'build/openssl-install/lib/libssl.a'),
                     str(root/'build/openssl-install/lib/libcrypto.a'), '-lz', '-o',exe], check=True,timeout=60)
     cases = [
@@ -31,15 +32,34 @@ with tempfile.TemporaryDirectory(prefix='remora-apple-sanitizers-') as temporary
         *((case, 1, 'invalid-clipboard') for case in ('apple-clipboard-wire-limit', 'apple-clipboard-length',
                                                       'apple-clipboard-malformed')),
         ('apple-multi-invalid', 1), ('apple-session-select', 0), ('apple-reject', 0), ('apple-wrong-banner', 0),
+        # A server that does not offer the SRP login gets no selection and no credentials.
+        *(('apple-policy-reject', 0, '18', offers) for offers in ('ard-only', 'apple-ard', 'tls-ard', 'none-only')),
+        # Unsupported SRP parameters end the login before the proof. A server without the verifier ends it after.
+        *(('apple-srp-'+case, 0, '8') for case in ('group', 'generator', 'public-zero', 'public-modulus', 'iterations-zero',
+                                                    'iterations-excessive', 'options', 'flag', 'trailing')),
+        ('apple-impersonator-proof', 0, '19'), ('apple-impersonator-result', 0, '19'),
     ]
-    for mode, frames, *checks in cases:
-        with subprocess.Popen(['/usr/bin/python3','-u',str(peer_source),'ard-only',mode],stdout=subprocess.PIPE,text=True) as peer:
+    # The last login runs against corecrypto's own SRP server arithmetic. srp_oracle.py describes it.
+    runs = [(peer_source, *case) for case in cases] + [(root/'tests/srp_oracle.py', 'apple-sequence', 3)]
+    for script, mode, frames, *checks in runs:
+        offers = checks.pop() if len(checks) == 2 else 'apple-mixed'
+        with subprocess.Popen(['/usr/bin/python3','-u',str(script),offers,mode],stdout=subprocess.PIPE,text=True) as peer:
             try:
-                port = json.loads(peer.stdout.readline())['loopback_port']
+                hello = json.loads(peer.stdout.readline())
+                if 'oracle_unavailable' in hello:
+                    print(json.dumps(dict(mode=mode, oracle_skipped=hello['oracle_unavailable'])))
+                    continue
+                port = hello['loopback_port']
                 env = dict(os.environ, ASAN_OPTIONS='abort_on_error=1', UBSAN_OPTIONS='halt_on_error=1:print_stacktrace=1')
                 subprocess.run([exe, str(port), str(frames), *checks], check=True, timeout=12, env=env)
                 report = json.loads(peer.communicate(timeout=2)[0])
                 assert 'error_class' not in report, (mode,report)
+                if mode == 'apple-policy-reject': assert report['selector_received'] is False, report
+                if mode.startswith('apple-srp-'): assert report['closed_before_proof'] is True, report
+                if mode.startswith('apple-impersonator-'):
+                    assert report['proof_verified'] is False and report['closed_after_proof'] is True, report
+                if mode == 'apple-reject': assert report['closed_without_input'] is True, report
+                if frames: assert report['credentials_valid'] is True and report['selected_security_id'] == 36, report
                 if mode in ('apple-sequence','apple-no-baseline') or mode.startswith('apple-retry-'):
                     assert report['subscribed_before_baseline'] is True, report
                     assert report['subscriptions'] == [[0,1,0,0,0,16,8]], report
@@ -48,6 +68,6 @@ with tempfile.TemporaryDirectory(prefix='remora-apple-sanitizers-') as temporary
                 if mode=='apple-demand':
                     assert report['subscriptions'] == [[0,1,0,0,0,16,8],[0,1,0xffffffff,0,0,16,8],[0,1,0,0,0,16,8]], report
                     assert report['requests_after_initial'] == 1, report
-                print(json.dumps(dict(mode=mode,frames=frames,sanitizers_pass=True)))
+                print(json.dumps(dict(mode=mode,frames=frames,sanitizers_pass=True,peer=script.name)))
             finally:
                 if peer.poll() is None: peer.terminate(); peer.wait(timeout=2)

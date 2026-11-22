@@ -1,15 +1,16 @@
 --- a/CMakeLists.txt
 +++ b/CMakeLists.txt
-@@ -379,7 +379,12 @@
+@@ -379,7 +379,13 @@
      ${CRYPTO_SOURCES}
  )
  
-+set_source_files_properties(${LIBVNCCLIENT_DIR}/apple.c ${LIBVNCCLIENT_DIR}/records.c ${LIBVNCCLIENT_DIR}/mvs.c PROPERTIES COMPILE_OPTIONS "-std=c17")
++set_source_files_properties(${LIBVNCCLIENT_DIR}/apple.c ${LIBVNCCLIENT_DIR}/records.c ${LIBVNCCLIENT_DIR}/mvs.c ${LIBVNCCLIENT_DIR}/srp.c PROPERTIES COMPILE_OPTIONS "-std=c17")
 +
  set(LIBVNCCLIENT_SOURCES
 +    ${LIBVNCCLIENT_DIR}/apple.c
 +    ${LIBVNCCLIENT_DIR}/records.c
 +    ${LIBVNCCLIENT_DIR}/mvs.c
++    ${LIBVNCCLIENT_DIR}/srp.c
      ${LIBVNCCLIENT_DIR}/cursor.c
      ${LIBVNCCLIENT_DIR}/listen.c
      ${LIBVNCCLIENT_DIR}/rfbclient.c
@@ -35,11 +36,13 @@
  typedef struct _rfbClient {
  	uint8_t* frameBuffer;
  	int width, height;
-@@ -589,7 +602,27 @@
+@@ -589,7 +602,29 @@
          uint16_t remoraLastResizeWidth, remoraLastResizeHeight;
          void (*RemoraDesktopSize)(struct _rfbClient*, rfbBool requested);
          void (*RemoraResizeReply)(struct _rfbClient*, unsigned int result, uint16_t width, uint16_t height);
-+  /* Worker-owned opt-in profile; state is opaque and securely destroyed at cleanup. */
++  /* Worker-owned opt-in profile; state is opaque and securely destroyed at cleanup.
++   * It logs in only with security type 36, Apple's SRP login, which proves the server's identity. */
++#define rfbRemoraAppleSRP 36
 +  rfbBool remoraApple889;
 +  void *remoraAppleState;
 +  struct rfbAppleRecords *remoraRecords;
@@ -71,7 +74,26 @@
  /*
   *  Copyright (C) 2000-2002 Constantin Kaplinsky.  All Rights Reserved.
   *  Copyright (C) 2000 Tridia Corporation.  All Rights Reserved.
-@@ -823,7 +825,7 @@
+@@ -548,6 +550,18 @@
+         client->remoraDiagnostic.offered[offerIndex] = offers[offerIndex];
+     rfbRemoraDiagnosticComplete(client, RFB_REMORA_OFFERS);
+     rfbRemoraDiagnosticBegin(client, RFB_REMORA_SELECTION);
++    if (client->remoraApple889) {
++        /* The Apple profile sends the password only to the SRP login, whatever else is offered.
++         * The login writes the selection itself, together with its first message. */
++        if (!memchr(offers, rfbRemoraAppleSRP, count)) {
++            client->remoraAppleError = APPLE_LOGIN_UNAVAILABLE;
++            rfbRemoraDiagnosticFail(client, RFB_REMORA_POLICY, 0, 0);
++            return FALSE;
++        }
++        client->remoraDiagnostic.selected = *result = rfbRemoraAppleSRP;
++        rfbRemoraDiagnosticComplete(client, RFB_REMORA_SELECTION);
++        return TRUE;
++    }
+     uint8_t selected = 0;
+     rfbBool unknown = FALSE, vnc = FALSE, none = FALSE, ard = FALSE, apple = FALSE;
+     for (unsigned i = 0; i < count; i++) {
+@@ -823,7 +837,7 @@
  HandleARDAuth(rfbClient *client)
  {
    uint8_t gen[2], len[2];
@@ -80,7 +102,7 @@
    uint8_t *mod = NULL, *resp = NULL, *priv = NULL, *pub = NULL, *key = NULL, *shared = NULL;
    uint8_t userpass[128], ciphertext[128];
    int ciphertext_len;
-@@ -893,7 +895,7 @@
+@@ -893,7 +907,7 @@
       This 128-bit (16-byte) value will be used as the AES key. */
    remora_crypto_begin(client, RFB_REMORA_ARD_HASH);
    shared = malloc(MD5_HASH_SIZE);
@@ -89,15 +111,10 @@
        remora_crypto_failed(client);
        rfbClientErr("HandleARDAuth: hashing shared key failed\n");
        goto out;
-@@ -954,9 +956,15 @@
-   if (!rfbHandleAuthResult(client))
-       goto out;
- 
-+  if (!rfbRemoraAppleRememberKey(client, shared)) goto out;
+@@ -957,6 +971,10 @@
    result = TRUE;
  
   out:
-+  if (!result && client->remoraApple889) rfbRemoraAppleCleanup(client);
 +  OPENSSL_cleanse(userpass, sizeof(userpass));
 +  OPENSSL_cleanse(ciphertext, sizeof(ciphertext));
 +  if (mod) OPENSSL_cleanse(mod, keylen*5);
@@ -105,7 +122,7 @@
    if (cred)
      FreeUserCredential(cred);
  
-@@ -1006,6 +1014,9 @@
+@@ -1006,6 +1024,9 @@
  rfbBool
  InitialiseRFBConnection(rfbClient* client)
  {
@@ -115,7 +132,7 @@
    rfbProtocolVersionMsg pv;
    int major,minor;
    uint32_t authScheme;
-@@ -1024,6 +1035,11 @@
+@@ -1024,6 +1045,11 @@
    errorMessageOnReadFailure = TRUE;
  
    pv[sz_rfbProtocolVersionMsg] = 0;
@@ -127,7 +144,7 @@
  
    if (sscanf(pv,rfbProtocolVersionFormat,&major,&minor) != 2) {
      rfbRemoraDiagnosticFail(client, RFB_REMORA_PROTOCOL, 0, 0);
-@@ -1077,11 +1093,12 @@
+@@ -1077,11 +1103,12 @@
  	  major, minor, rfbProtocolMajorVersion, rfbProtocolMinorVersion);
  
    sprintf(pv,rfbProtocolVersionFormat,client->major,client->minor);
@@ -141,20 +158,18 @@
    rfbRemoraDiagnosticComplete(client, RFB_REMORA_VERSION);
  
  
-@@ -1110,6 +1127,12 @@
-   rfbClientLog("Selected Security Scheme %d\n", authScheme);
-   client->authScheme = authScheme;
-   
-+  /* Keep selection and preference intact. This profile derives its wrapping key from ARD. */
-+  if (client->remoraApple889 && authScheme != rfbARD) {
-+    client->remoraAppleError=8;
-+    rfbRemoraDiagnosticFail(client,RFB_REMORA_PROTOCOL,0,0);
-+    return FALSE;
-+  }
-   switch (authScheme) {
+@@ -1147,6 +1174,10 @@
+     if (!HandleARDAuth(client)) return FALSE;
+     break;
  
-   case rfbConnFailed:
-@@ -1264,6 +1287,7 @@
++  case rfbRemoraAppleSRP:
++    if (!rfbRemoraAppleLogin(client) || !rfbHandleAuthResult(client)) return FALSE;
++    break;
++
+   case rfbTLS:
+     if (!HandleAnonTLSAuth(client)) return FALSE;
+     /* After the TLS session is established, sub auth types are expected.
+@@ -1264,6 +1295,7 @@
  
    rfbRemoraDiagnosticBegin(client, RFB_REMORA_CLIENT_INIT);
    ci.shared = (client->appData.shareDesktop ? 1 : 0);
@@ -162,7 +177,7 @@
  
    if (!WriteToRFBServer(client,  (char *)&ci, sz_rfbClientInitMsg)) return FALSE;
  
-@@ -1345,11 +1369,16 @@
+@@ -1345,11 +1377,16 @@
      return FALSE;
  
  
@@ -179,7 +194,7 @@
  
    if (client->appData.encodingsString) {
      const char *encStr = client->appData.encodingsString;
-@@ -1562,6 +1591,7 @@
+@@ -1562,6 +1599,7 @@
  rfbBool
  SendFramebufferUpdateRequest(rfbClient* client, int x, int y, int w, int h, rfbBool incremental)
  {
@@ -187,7 +202,7 @@
    rfbRemoraRuntimeStage(client, RFB_REMORA_WRITE);
    rfbFramebufferUpdateRequestMsg fur;
  
-@@ -1741,6 +1771,7 @@
+@@ -1741,6 +1779,7 @@
  rfbBool
  SendPointerEvent(rfbClient* client,int x, int y, int buttonMask)
  {
@@ -195,7 +210,7 @@
    rfbPointerEventMsg pe;
  
    if (!SupportsClient2Server(client, rfbPointerEvent)) return TRUE;
-@@ -1841,6 +1872,11 @@
+@@ -1841,6 +1880,11 @@
  rfbBool
  SendKeyEvent(rfbClient* client, uint32_t key, rfbBool down)
  {
@@ -207,7 +222,7 @@
    rfbKeyEventMsg ke;
  
    if (!SupportsClient2Server(client, rfbKeyEvent)) return TRUE;
-@@ -2009,6 +2045,7 @@
+@@ -2009,6 +2053,7 @@
  rfbBool
  SendClientCutTextUTF8(rfbClient* client, char *str, int len)
  {
@@ -215,7 +230,7 @@
  #ifdef LIBVNCSERVER_HAVE_LIBZ
      return client->extendedClipboardServerCapabilities && sendExtClientCutTextProvide(client, str, len);
  #else
-@@ -2153,6 +2190,10 @@
+@@ -2153,6 +2198,10 @@
  
    if (!client->remoraRuntime.failure) client->remoraRuntime.messageType = msg.type;
    rfbRemoraRuntimeStage(client, RFB_REMORA_MESSAGE);
@@ -226,7 +241,7 @@
    switch (msg.type) {
  
    case rfbSetColourMapEntries:
-@@ -2202,6 +2243,7 @@
+@@ -2202,6 +2251,7 @@
        return FALSE;
  
      msg.fu.nRects = rfbClientSwap16IfLE(msg.fu.nRects);
@@ -234,7 +249,7 @@
      if (client->remoraPerf.enabled) {
        client->remoraPerf.declaredRects = msg.fu.nRects;
        client->remoraPerf.header = client->RemoraPerformanceClock();
-@@ -2238,6 +2280,11 @@
+@@ -2238,6 +2288,11 @@
          client->remoraRuntime.x = rect.r.x; client->remoraRuntime.y = rect.r.y;
          client->remoraRuntime.width = rect.r.w; client->remoraRuntime.height = rect.r.h;
        }
@@ -246,7 +261,7 @@
        if (rect.encoding == rfbEncodingLastRect) break;
        rfbRemoraRuntimeStage(client, RFB_REMORA_DECODE);
  
-@@ -2314,6 +2361,14 @@
+@@ -2314,6 +2369,14 @@
            }
          }
  
@@ -261,7 +276,7 @@
          /* Status 4 means forwarded, not rejected. It carries requested geometry,
           * not confirmed framebuffer dimensions, and preserves the capability. */
          if (!forwardedResize || screens != 1 || invalidScreen)
-@@ -2730,13 +2785,18 @@
+@@ -2730,13 +2793,18 @@
        /* Now we may discard "soft cursor locks". */
        client->SoftCursorUnlockScreen(client);
  

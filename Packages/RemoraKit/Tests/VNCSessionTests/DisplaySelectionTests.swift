@@ -20,7 +20,7 @@ private final class SelectedFrames: FrameSink, @unchecked Sendable {
     peer.executableURL = URL(fileURLWithPath: "/usr/bin/python3")
     peer.arguments = [
         "-u", try #require(Bundle.module.url(forResource: "ard_peer", withExtension: "py", subdirectory: "Fixtures")).path,
-        "ard-only", (mode == .apple ? "apple-" : "standard-") + (timeout ? "display-timeout" : "displays"),
+        "apple-mixed", (mode == .apple ? "apple-" : "standard-") + (timeout ? "display-timeout" : "displays"),
     ]
     let output = Pipe()
     peer.standardOutput = output

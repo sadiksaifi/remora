@@ -15,7 +15,7 @@ private final class AppleFrames: FrameSink, @unchecked Sendable {
     let peer = Process()
     peer.executableURL = URL(fileURLWithPath: "/usr/bin/python3")
     let script = try #require(Bundle.module.url(forResource: "ard_peer", withExtension: "py", subdirectory: "Fixtures"))
-    peer.arguments = ["-u", script.path, "ard-only", "apple-success"]
+    peer.arguments = ["-u", script.path, "apple-mixed", "apple-success"]
     let output = Pipe()
     peer.standardOutput = output
     try peer.run()
@@ -49,6 +49,7 @@ private final class AppleFrames: FrameSink, @unchecked Sendable {
     peer.waitUntilExit()
     let result = try #require(JSONSerialization.jsonObject(with: output.fileHandleForReading.readDataToEndOfFile()) as? [String: Any])
     #expect(result["version_889"] as? Bool == true)
+    #expect(result["selected_security_id"] as? Int == 36)
     #expect(result["credentials_valid"] as? Bool == true)
     #expect(result["client_init"] as? Int == 0x81)
     #expect(result["control_mode"] as? Bool == true)
@@ -56,7 +57,7 @@ private final class AppleFrames: FrameSink, @unchecked Sendable {
     #expect(result["subscription"] as? [Int] == [0, 1, 0, 0, 0, 16, 16])
     #expect(result["error_class"] == nil)
     #expect(connected)
-    #expect(session.negotiatedSecurity == "Apple ARD (AES-128-CBC session)")
+    #expect(session.negotiatedSecurity == "Apple SRP (AES-128-CBC session)")
     #expect(frames.count == 1)
 }
 
@@ -79,7 +80,7 @@ private final class ApplePixels: FrameSink, @unchecked Sendable {
 }
 
 @MainActor private func appleSession(
-    _ outcome: String, offers: String = "ard-only", updatesEnabled: Bool = true, mode: VNCMode = .apple, password: String? = "fixture-password",
+    _ outcome: String, offers: String = "apple-mixed", updatesEnabled: Bool = true, mode: VNCMode = .apple, password: String? = "fixture-password",
     patience: Duration = .seconds(4), actions: (@MainActor @Sendable (VNCSession, ApplePixels) async throws -> Void)? = nil,
     onClipboard: ((VNCSession, RemoteClipboard.Status) -> Void)? = nil
 ) async throws -> ([String: Any], [DisconnectReason], ApplePixels) {
@@ -232,8 +233,8 @@ private func richFlavors(_ source: String) -> [RemoteClipboard.Flavor] {
 }
 
 @Test @MainActor func appleFullPartialAndCacheUpdatesUseSubscriptionWithoutIncrementalRequests() async throws {
-    let (wire, _, pixels) = try await appleSession("apple-sequence", offers: "apple-mixed")
-    #expect(wire["selected_security_id"] as? Int == 30)
+    let (wire, _, pixels) = try await appleSession("apple-sequence")
+    #expect(wire["selected_security_id"] as? Int == 36)
     #expect(wire["subscribed_before_baseline"] as? Bool == true)
     #expect(wire["requests_after_initial"] as? Int == 0)
     #expect(wire["subscriptions"] as? [[Int]] == [[0, 1, 0, 0, 0, 16, 8]])
@@ -409,25 +410,64 @@ private func richFlavors(_ source: String) -> [RemoteClipboard.Flavor] {
     }
 }
 
-@Test @MainActor func appleSecuritySelectionDoesNotRetryOrUseAProfileWithoutItsARDKey() async throws {
-    for (offers, selected) in [("tls-ard", 19), ("none-only", 1)] {
-        let (wire, terminals, frames) = try await appleSession("apple-profile-reject", offers: offers)
-        #expect(wire["selected_security_id"] as? Int == selected)
-        #expect(wire["profile_rejected"] as? Bool == true)
-        #expect(wire["attempts"] as? Int == 1)
-        #expect(frames.samples.isEmpty)
-        if case .protocolError(let detail) = terminals.first {
-            #expect(detail.contains("ARD authentication"))
-        } else {
-            Issue.record("Expected unsupported Apple profile")
-        }
+@Test(arguments: ["ard-only", "apple-ard", "apple-only", "unknown-ard", "tls-ard", "none-only"])
+@MainActor func appleSendsNoSelectionAndNoCredentialsWithoutTheSRPLogin(_ offers: String) async throws {
+    // An offer without security type 36 is an older Mac, a Mac with SRP turned off, or a downgrade attempt.
+    let (wire, terminals, frames) = try await appleSession("apple-policy-reject", offers: offers)
+    #expect(wire["selector_received"] as? Bool == false)
+    #expect(wire["attempts"] as? Int == 1)
+    #expect(frames.samples.isEmpty)
+    #expect(
+        terminals == [
+            .protocolError("The Mac didn't offer the SRP login, which proves its identity. Apple mode sends the password only through that login.")
+        ])
+}
+
+@Test(arguments: ["apple-vnc", "apple-none"])
+@MainActor func appleSelectsTheSRPLoginWhateverElseIsOffered(_ offers: String) async throws {
+    let (wire, _, pixels) = try await appleSession("apple-sequence", offers: offers)
+    #expect(wire["selected_security_id"] as? Int == 36)
+    #expect(wire["credentials_valid"] as? Bool == true)
+    #expect(pixels.samples.count == 3)
+}
+
+@Test(arguments: ["proof", "result"])
+@MainActor func appleEndsTheLoginWhenTheServerCannotProveItHoldsTheVerifier(_ claim: String) async throws {
+    // The peer has no verifier for the account. It answers with a made-up proof, or with a bare success result.
+    let (wire, terminals, pixels) = try await appleSession("apple-impersonator-\(claim)")
+    // The client's proof told the peer only that its one password guess was wrong.
+    #expect(wire["proof_verified"] as? Bool == false)
+    // The client then closed without ClientInit, records or input.
+    #expect(wire["closed_after_proof"] as? Bool == true)
+    #expect(wire["attempts"] as? Int == 1)
+    #expect(pixels.samples.isEmpty)
+    #expect(
+        terminals == [
+            .protocolError("The computer that answered couldn't prove that it knows this account's password. Someone might be impersonating the Mac.")
+        ])
+}
+
+@Test(arguments: [
+    "group", "generator", "public-zero", "public-modulus", "iterations-zero", "iterations-excessive", "options", "flag", "trailing",
+])
+@MainActor func appleSendsNoProofForUnsupportedSRPParameters(_ fault: String) async throws {
+    let (wire, terminals, pixels) = try await appleSession("apple-srp-\(fault)")
+    #expect(wire["closed_before_proof"] as? Bool == true)
+    #expect(wire["attempts"] as? Int == 1)
+    #expect(pixels.samples.isEmpty)
+    if case .protocolError(let detail) = terminals.first {
+        #expect(detail.contains("the SRP login"))
+    } else {
+        Issue.record("Expected an unsupported Apple profile for \(fault)")
     }
-    for offers in ["apple-only", "unknown-ard", "apple-none"] {
-        let (wire, terminals, frames) = try await appleSession("apple-policy-reject", offers: offers)
-        #expect(wire["selector_received"] as? Bool == false)
-        #expect(frames.samples.isEmpty)
-        if case .protocolError = terminals.first {} else { Issue.record("Expected policy rejection") }
-    }
+}
+
+@Test @MainActor func appleWrongPasswordFailsAuthenticationAtTheGenuineServer() async throws {
+    let (wire, terminals, pixels) = try await appleSession("apple-sequence", password: "wrong-password")
+    #expect(wire["proof_verified"] as? Bool == false)
+    #expect(wire["closed_without_input"] as? Bool == true)
+    #expect(pixels.samples.isEmpty)
+    #expect(terminals == [.authenticationFailed])
 }
 
 @Test @MainActor func appleUnsupportedInitializationAndFailedAuthenticationNeverAdmitInput() async throws {
@@ -445,11 +485,11 @@ private func richFlavors(_ source: String) -> [RemoteClipboard.Flavor] {
 
 @Test(arguments: [false, true])
 @MainActor func appleWithheldServerInitRecoversOnceOnAFreshTransport(_ prompted: Bool) async throws {
-    // The independent peer accepts ARD authentication on its first connection, reads ClientInit and sends nothing.
+    // The independent peer completes the SRP login on its first connection, reads ClientInit and sends nothing.
     // The client waits out its ten-second read deadline. Vendor/apple-mvs/README.md records the Mac that did this.
     let started = Date()
     let (wire, _, pixels) = try await appleSession(
-        "apple-init-withheld", offers: "apple-mixed", password: prompted ? nil : "fixture-password", patience: .seconds(15)
+        "apple-init-withheld", password: prompted ? nil : "fixture-password", patience: .seconds(15)
     ) { session, _ in
         // Both transports report under one attempt ID, and the retired one keeps its failure evidence.
         let attempt = session.handshakeAttemptID
@@ -470,7 +510,7 @@ private func richFlavors(_ source: String) -> [RemoteClipboard.Flavor] {
 
 @Test(arguments: ["prefetched-1", "prefetched-23", "partial", "name"])
 @MainActor func appleDoesNotRetryAfterAnyServerInitPrefix(_ first: String) async throws {
-    // Prefetched cases coalesce ARD success and a header prefix before ClientInit.
+    // Prefetched cases coalesce the login's success result and a header prefix before ClientInit.
     // The other cases send a header prefix or a complete header/partial name after it.
     let (wire, terminals, pixels) = try await appleSession("apple-init-stalled-\(first)", patience: .seconds(15))
     #expect(wire["credentials_valid"] as? Bool == true)
@@ -501,8 +541,8 @@ private func richFlavors(_ source: String) -> [RemoteClipboard.Flavor] {
 }
 
 @MainActor func verifyApplePrecedesStandardSecuritySequence() async throws {
-    let (wire, _, pixels) = try await appleSession("apple-sequence", offers: "apple-ard")
-    #expect(wire["selected_security_id"] as? Int == 30)
+    let (wire, _, pixels) = try await appleSession("apple-sequence")
+    #expect(wire["selected_security_id"] as? Int == 36)
     #expect(wire["credentials_valid"] as? Bool == true)
     #expect(pixels.samples.count == 3)
 }

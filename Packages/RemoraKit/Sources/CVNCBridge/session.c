@@ -477,14 +477,14 @@ static bool connect_socket(RMVNC *s) {
     }
     return false;
 }
-/* Error 11. The Apple-profile server accepted ARD authentication and ClientInit
+/* Error 11. The Apple-profile server completed the SRP login and ClientInit
  * was written. The ServerInit read then reached its deadline without receiving
  * a byte. A partial ServerInit, a stalled name, EOF, and every other mode or
  * phase stay error 6. */
 static bool server_init_withheld(RMVNC *s) {
     const rfbClient *c = s->client;
     const rfbRemoraDiagnostic *d = &c->remoraDiagnostic;
-    return s->apple && c->authScheme == rfbARD && d->failure == RFB_REMORA_TIMEOUT && d->phase == RFB_REMORA_SERVER_INIT &&
+    return s->apple && c->authScheme == rfbRemoraAppleSRP && d->failure == RFB_REMORA_TIMEOUT && d->phase == RFB_REMORA_SERVER_INIT &&
         d->lastSuccess == RFB_REMORA_CLIENT_INIT && !d->serverInitPrefetchedBytes && !c->buffered && !c->desktopName;
 }
 bool rm_vnc_connect(RMVNC *s) {
@@ -642,7 +642,8 @@ const char *rm_vnc_security(RMVNC *s) {
             case rfbVeNCryptX509VNC: return "VeNCrypt X509VNC";
             case rfbVeNCryptX509None: return "VeNCrypt X509None";
         } return "unsupported VeNCrypt subtype";
-        case rfbARD: return s->client->remoraRecords ? "Apple ARD (AES-128-CBC session)" : "Apple ARD (unencrypted desktop)";
+        case rfbRemoraAppleSRP: return "Apple SRP (AES-128-CBC session)";
+        case rfbARD: return "Apple ARD (unencrypted desktop)";
         case rfbVncAuth: return "VNC authentication (unencrypted desktop)";
         case rfbNoAuth: return "None (unencrypted, unauthenticated desktop)";
         default:return "unsupported security type (RSA-AES is not supported)";
