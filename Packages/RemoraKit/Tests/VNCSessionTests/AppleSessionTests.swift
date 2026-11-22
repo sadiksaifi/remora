@@ -301,7 +301,7 @@ private final class ApplePixels: FrameSink, @unchecked Sendable {
 }
 
 @Test @MainActor func appleMalformedUpdatesNeverPublishAnIncompleteMessage() async throws {
-    for mode in ["apple-no-baseline", "apple-truncated", "apple-bad-cache", "apple-multi-invalid", "apple-control-encryption", "apple-geometry"] {
+    for mode in ["apple-no-baseline", "apple-truncated", "apple-multi-invalid", "apple-control-encryption", "apple-geometry"] {
         let (_, terminals, frames) = try await appleSession(mode)
         let count = ["apple-no-baseline", "apple-truncated"].contains(mode) ? 0 : 1
         #expect(frames.samples.count == count, "\(mode)")

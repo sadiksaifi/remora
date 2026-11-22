@@ -140,24 +140,24 @@ static inline unsigned read_bit(bitstream *b) { return read_bits(b, 1); }
 
 /* ---- Rice codes (mvs-rice.js) ---- */
 
-/* Consumes a unary prefix and its closing zero. *rest is a window of the 16 or more bits after them. */
-static inline uint32_t leading_ones(bitstream *b, uint64_t *rest) {
-    for (uint32_t n = 0;; n += 40) {
-        uint64_t w = peek(b);
-        unsigned ones = ~w ? (unsigned)__builtin_clzll(~w) : 64;
-        if (n + ones > MVS_MAX_RICE_PREFIX) {
-            skip(b, MVS_MAX_RICE_PREFIX + 1 - n);
-            fail(b->error, MVS_E_RICE);
-            *rest = peek(b);
-            return 0;
-        }
-        if (ones <= 40) {
-            skip(b, ones + 1);
-            *rest = drop(w, ones + 1);
-            return n + ones;
-        }
-        skip(b, 40);
+/* The longest unary prefix Screen Sharing reads: of a DC code, of an AC code at positions 1 to 5,
+ * and of an AC code at later positions. */
+enum { DC_ONES = 38, NEAR_DC_ONES = 32, AC_ONES = 18 };
+
+/* Consumes a unary prefix of at most `most` ones and its closing zero. *rest is a window of the
+ * 16 or more bits after them. Screen Sharing gives up on a longer prefix two bits past `most`;
+ * the result is then most + 1. */
+static inline uint32_t leading_ones(bitstream *b, unsigned most, uint64_t *rest) {
+    uint64_t w = peek(b);
+    unsigned ones = ~w ? (unsigned)__builtin_clzll(~w) : 64;
+    if (ones > most) {
+        skip(b, most + 2);
+        *rest = 0;
+        return most + 1;
     }
+    skip(b, ones + 1);
+    *rest = drop(w, ones + 1);
+    return ones;
 }
 
 /* Consumes the low bits of a magnitude from the window after its prefix, then a sign unless the magnitude is zero. */
@@ -167,22 +167,20 @@ static inline int32_t magnitude(bitstream *b, uint64_t w, unsigned bits, uint32_
     return drop(w, bits) >> 63 ? -mag : mag;
 }
 
-static int32_t dc_rice(bitstream *b) {
+/* *valid is false after a prefix longer than DC_ONES, and the value is then 0. */
+static int32_t dc_rice(bitstream *b, bool *valid) {
     uint64_t w;
-    uint32_t n = leading_ones(b, &w);
+    uint32_t n = leading_ones(b, DC_ONES, &w);
+    if (!(*valid = n <= DC_ONES)) return 0;
     return magnitude(b, w, n < 3 ? (n ? n : 1) : 3, n < 3 ? n * 2 : n * 8 - 16);
 }
 
-static int32_t ac_rice_standard(bitstream *b) {
-    uint64_t w;
-    uint32_t n = leading_ones(b, &w);
-    return magnitude(b, w, n < 2 ? n + 1 : 3, n < 2 ? n * 2 + 2 : n * 8 - 8);
-}
-
-static int32_t ac_rice_near_dc(bitstream *b) {
-    uint64_t w;
-    uint32_t n = leading_ones(b, &w);
-    return magnitude(b, w, n <= 3 ? 2 : 3, n <= 3 ? n * 4 + 2 : n * 8 - 14);
+/* A DC code of a full update, where a longer prefix fails. */
+static int32_t full_dc_rice(bitstream *b) {
+    bool valid;
+    int32_t value = dc_rice(b, &valid);
+    if (!valid) fail(b->error, MVS_E_RICE);
+    return value;
 }
 
 /* A luma code of a partial tile that fits eight bits, looked up by the next eight bits. A
@@ -200,7 +198,8 @@ static void build_luma_codes(short_code codes[2][2][2][256]) {
                 const uint8_t data = (uint8_t)byte;
                 mvs_error error = MVS_OK;
                 bitstream b = { &data, 1, 0, &error };
-                int32_t whole = fine && !coarse ? (read_bit(&b) ? (read_bit(&b) ? -1 : 1) : 0) : dc_rice(&b);
+                bool valid;
+                int32_t whole = fine && !coarse ? (read_bit(&b) ? (read_bit(&b) ? -1 : 1) : 0) : dc_rice(&b, &valid);
                 codes[fine][coarse][0][byte] =
                     error ? (short_code){ 0, 0 } : (short_code){ (int8_t)whole, (uint8_t)b.position };
                 codes[fine][coarse][1][byte] = (short_code){ (int8_t)(byte >> (8 - growth_bits)), (uint8_t)growth_bits };
@@ -219,32 +218,34 @@ static int32_t quant_step(unsigned pos, unsigned threshold) {
     return pos < threshold ? 8 : 16;
 }
 
-typedef struct { int32_t value; bool eob; unsigned skip; } ac_result;
+/* One AC code of a full update: a value for `pos`, or a count of positions to leave at zero.
+ * `abandoned` ends the block where Screen Sharing stops reading it. */
+typedef struct { int32_t value; unsigned skip; bool abandoned; } ac_result;
 
 static ac_result ac_coefficient(bitstream *b, unsigned pos, unsigned threshold) {
-    ac_result r = { 0, false, 0 };
+    ac_result r = { 0, 0, false };
     if (read_bit(b)) {
-        int32_t raw = pos <= 5 ? ac_rice_near_dc(b) : ac_rice_standard(b);
+        const bool near_dc = pos <= 5;
+        uint64_t w;
+        uint32_t n = leading_ones(b, near_dc ? NEAR_DC_ONES : AC_ONES, &w);
+        int32_t raw = 0;
+        if (near_dc && n > NEAR_DC_ONES) fail(b->error, MVS_E_RICE);
+        else if (near_dc) raw = magnitude(b, w, n <= 3 ? 2 : 3, n <= 3 ? n * 4 + 2 : n * 8 - 14);
+        else if (n > AC_ONES) r.abandoned = true;
+        else raw = magnitude(b, w, n < 2 ? n + 1 : 3, n < 2 ? n * 2 + 2 : n * 8 - 8);
         r.value = raw * quant_step(pos, threshold);
         return r;
     }
     switch (read_bits(b, 2)) {
     case 0: break;
     case 1:
-        if (read_bit(b) == 0) { r.eob = true; break; }
-        {
-            uint32_t ext = read_bits(b, 2);
-            if (ext < 3) { r.skip = ext + 3; break; }
-            unsigned run = 6;
-            for (;;) {
-                uint32_t chunk = read_bits(b, 3);
-                run += chunk;
-                if (chunk < 7) break;
-                if (run + pos >= 64) break;
-                if (*b->error) break;
-            }
-            r.skip = run;
-        }
+        if (read_bit(b) == 0) { r.skip = 64; break; } /* end of block */
+        r.skip = read_bits(b, 2) + 3;
+        if (r.skip < 6) break;
+        /* A long run grows by three-bit chunks while they are 7. It has to end inside the block. */
+        uint32_t chunk;
+        do r.skip += chunk = read_bits(b, 3); while (chunk == 7 && pos + r.skip < 64);
+        if (pos + r.skip >= 64) fail(b->error, MVS_E_ZERO_RUN);
         break;
     case 2: r.value = quant_step(pos, threshold); break;
     case 3: r.value = -quant_step(pos, threshold); break;
@@ -275,18 +276,15 @@ static huffman_table build_table(void) {
 
 static uint8_t huffman_symbol(bitstream *b, const huffman_table *t) {
     uint64_t w = peek(b);
-    unsigned len = 1;
-    for (; len <= 16; len++) {
+    for (unsigned len = 1; len <= 16; len++) {
         int32_t code = (int32_t)(w >> (64 - len));
         if (t->max_code[len] < 0 || code > t->max_code[len]) continue;
-        int32_t index = t->val_ptr[len] + (code - t->min_code[len]);
         skip(b, len);
-        if (index >= 0 && index < (int32_t)sizeof AC_VALUES) return AC_VALUES[index];
-        break;
+        return AC_VALUES[t->val_ptr[len] + (code - t->min_code[len])];
     }
-    if (len > 16) skip(b, 16);
-    fail(b->error, MVS_E_HUFFMAN);
-    return 0; /* end of block, so the caller's loop ends */
+    /* Sixteen ones are no code. Screen Sharing reads one more bit and ends the block. */
+    skip(b, 17);
+    return 0;
 }
 
 static void huffman_ac(bitstream *b, const huffman_table *t, int16_t *coeffs, unsigned offset, unsigned limit) {
@@ -332,73 +330,48 @@ static inline uint8_t range_limit(unsigned m) {
     return t < 256 ? (uint8_t)t : (t < 640 ? 255 : 0);
 }
 
+/* The transform of a block with no AC coefficient, which is flat. */
 uint8_t mvs_idct_flat(int32_t dc) {
     int64_t v = asr((int64_t)dc * (1 << PASS1_BITS) + (1 << (PASS1_BITS + 2)), PASS1_BITS + 3);
     return range_limit((unsigned)v & 0x3ffu);
 }
 
-/* Eight values, which the compiler keeps in SIMD registers where the target has them */
-typedef int32_t lanes __attribute__((vector_size(32)));
-typedef uint32_t unsigned_lanes __attribute__((vector_size(32)));
-typedef int64_t wide_lanes __attribute__((vector_size(64)));
+/* Eight values, which the compiler keeps in SIMD registers where the target has them. Their
+ * arithmetic wraps at 32 bits, which is what Screen Sharing's transform computes. */
+typedef uint32_t lanes __attribute__((vector_size(32)));
 
 /* One dimension of the transform before its descale, on eight lanes at once: x[k] holds
  * frequency k of every lane. */
-#define IDCT_LANES(name, T) \
-    static inline void name(const T x[8], T y[8]) { \
-        T z2 = x[2], z3 = x[6]; \
-        T z1 = (z2 + z3) * FIX_0_541196100; \
-        T tmp2 = z1 - z3 * FIX_1_847759065; \
-        T tmp3 = z1 + z2 * FIX_0_765366865; \
-        T tmp0 = (x[0] + x[4]) * (1 << CONST_BITS); \
-        T tmp1 = (x[0] - x[4]) * (1 << CONST_BITS); \
-        T tmp10 = tmp0 + tmp3, tmp13 = tmp0 - tmp3, tmp11 = tmp1 + tmp2, tmp12 = tmp1 - tmp2; \
-        tmp0 = x[7]; tmp1 = x[5]; tmp2 = x[3]; tmp3 = x[1]; \
-        z1 = tmp0 + tmp3; z2 = tmp1 + tmp2; z3 = tmp0 + tmp2; \
-        T z4 = tmp1 + tmp3; \
-        T z5 = (z3 + z4) * FIX_1_175875602; \
-        tmp0 *= FIX_0_298631336; tmp1 *= FIX_2_053119869; tmp2 *= FIX_3_072711026; tmp3 *= FIX_1_501321110; \
-        z1 *= -FIX_0_899976223; z2 *= -FIX_2_562915447; \
-        z3 = z3 * -FIX_1_961570560 + z5; \
-        z4 = z4 * -FIX_0_390180644 + z5; \
-        tmp0 += z1 + z3; tmp1 += z2 + z4; tmp2 += z2 + z3; tmp3 += z1 + z4; \
-        y[0] = tmp10 + tmp3; y[7] = tmp10 - tmp3; \
-        y[1] = tmp11 + tmp2; y[6] = tmp11 - tmp2; \
-        y[2] = tmp12 + tmp1; y[5] = tmp12 - tmp1; \
-        y[3] = tmp13 + tmp0; y[4] = tmp13 - tmp0; \
-    }
-IDCT_LANES(idct_lanes, lanes)
-IDCT_LANES(idct_lanes_wide, wide_lanes)
-
-/* One pass in 64 bits: y is the transform of x, rounded, divided by 2^shift and wrapped to 32 bits. */
-static void idct_pass_wide(const lanes x[8], lanes y[8], unsigned shift) {
-    wide_lanes wide_x[8], wide_y[8];
-    for (int k = 0; k < 8; k++)
-        for (int i = 0; i < 8; i++) wide_x[k][i] = x[k][i];
-    idct_lanes_wide(wide_x, wide_y);
-    /* wrap32(asr(v, n)) keeps bits n..n+31 of v, which a logical shift keeps too. */
-    for (int k = 0; k < 8; k++)
-        for (int i = 0; i < 8; i++)
-            y[k][i] = wrap32((int64_t)((uint64_t)(wide_y[k][i] + ((int64_t)1 << (shift - 1))) >> shift));
+static inline void idct_lanes(const lanes x[8], lanes y[8]) {
+    lanes z2 = x[2], z3 = x[6];
+    lanes z1 = (z2 + z3) * FIX_0_541196100;
+    lanes tmp2 = z1 - z3 * FIX_1_847759065;
+    lanes tmp3 = z1 + z2 * FIX_0_765366865;
+    lanes tmp0 = (x[0] + x[4]) * (1 << CONST_BITS);
+    lanes tmp1 = (x[0] - x[4]) * (1 << CONST_BITS);
+    lanes tmp10 = tmp0 + tmp3, tmp13 = tmp0 - tmp3, tmp11 = tmp1 + tmp2, tmp12 = tmp1 - tmp2;
+    tmp0 = x[7]; tmp1 = x[5]; tmp2 = x[3]; tmp3 = x[1];
+    z1 = tmp0 + tmp3; z2 = tmp1 + tmp2; z3 = tmp0 + tmp2;
+    lanes z4 = tmp1 + tmp3;
+    lanes z5 = (z3 + z4) * FIX_1_175875602;
+    tmp0 *= FIX_0_298631336; tmp1 *= FIX_2_053119869; tmp2 *= FIX_3_072711026; tmp3 *= FIX_1_501321110;
+    z1 *= FIX_0_899976223; z2 *= FIX_2_562915447;
+    z3 = z5 - z3 * FIX_1_961570560;
+    z4 = z5 - z4 * FIX_0_390180644;
+    tmp0 += z3 - z1; tmp1 += z4 - z2; tmp2 += z3 - z2; tmp3 += z4 - z1;
+    y[0] = tmp10 + tmp3; y[7] = tmp10 - tmp3;
+    y[1] = tmp11 + tmp2; y[6] = tmp11 - tmp2;
+    y[2] = tmp12 + tmp1; y[5] = tmp12 - tmp1;
+    y[3] = tmp13 + tmp0; y[4] = tmp13 - tmp0;
 }
 
-/* The same pass in 32 bits when that is exact. Every intermediate is a sum of inputs whose
- * weights total 61214 at most, so inputs within +-2^15 keep it and its rounding within 32 bits.
- * Inlined, so each caller's shift is a constant. */
+/* One pass: y is the transform of x, rounded and divided by 2^shift. Inlined, so each caller's
+ * shift is a constant. */
 static inline __attribute__((always_inline)) void idct_pass(const lanes x[8], lanes y[8], unsigned shift) {
-    lanes wide = { 0 };
-    int32_t any = 0;
-    for (int k = 0; k < 8; k++) wide |= (x[k] > 32767) | (x[k] < -32767);
-    for (int i = 0; i < 8; i++) any |= wide[i];
-    if (any) {
-        idct_pass_wide(x, y, shift);
-        return;
-    }
     idct_lanes(x, y);
-    /* Floor division without a signed shift */
-    const unsigned_lanes sign = (unsigned_lanes){ 0 } + 0x80000000u;
-    for (int k = 0; k < 8; k++)
-        y[k] = (lanes)((((unsigned_lanes)(y[k] + (1 << (shift - 1))) ^ sign) >> shift) - (sign >> shift));
+    /* Floor division of the signed value the lane holds, without a signed shift */
+    const lanes sign = (lanes){ 0 } + 0x80000000u;
+    for (int k = 0; k < 8; k++) y[k] = (((y[k] + (1u << (shift - 1))) ^ sign) >> shift) - (sign >> shift);
 }
 
 /* Swaps rows and lanes: three rounds of interleaving row i with row i + 4. */
@@ -413,23 +386,38 @@ static void transpose(lanes m[8]) {
     }
 }
 
-void mvs_idct8x8(const int32_t block[64], uint8_t out[64]) {
+void mvs_idct8x8(const int16_t coefficients[64], const uint8_t quant[64], uint8_t out[64]) {
+    typedef int16_t coefficient_row __attribute__((vector_size(16)));
+    typedef uint8_t quant_row __attribute__((vector_size(8)));
+    typedef int32_t signed_lanes __attribute__((vector_size(32)));
     lanes rows[8], columns[8];
+    coefficient_row ac = { 0 }; /* per column, whether any AC coefficient is set */
     uint32_t wrapped[64];
-    memcpy(rows, block, sizeof rows);
+    for (int k = 0; k < 8; k++) {
+        coefficient_row c;
+        quant_row q;
+        memcpy(&c, coefficients + 8 * k, sizeof c);
+        memcpy(&q, quant + 8 * k, sizeof q);
+        rows[k] = (lanes)(__builtin_convertvector(c, signed_lanes) * __builtin_convertvector(q, signed_lanes));
+        if (k) ac |= c;
+    }
     idct_pass(rows, columns, CONST_BITS - PASS1_BITS); /* down each column */
+    /* libjpeg scales a column whose AC coefficients are all zero directly. That differs from
+     * the pass once the pass wraps, so take it for those lanes. */
+    const lanes flat = (lanes)(__builtin_convertvector(ac, signed_lanes) == 0);
+    for (int k = 0; k < 8; k++) columns[k] = (flat & rows[0] * (1 << PASS1_BITS)) | (~flat & columns[k]);
     transpose(columns);
     idct_pass(columns, rows, CONST_BITS + PASS1_BITS + 3); /* along each row */
     transpose(rows);
-    /* The range limit reads ten bits, which the 32-bit wrap keeps. */
+    /* The range limit reads the low ten bits. */
     memcpy(wrapped, rows, sizeof wrapped);
     for (int i = 0; i < 64; i++) out[i] = range_limit(wrapped[i] & 0x3ffu);
 }
 
 /* ---- Decoder state ---- */
 
-/* Per-screen-tile descriptor. Written by full updates only; the baseline
- * that partial updates are coded against. */
+/* Per-screen-tile descriptor. Written by the DCT tiles of full updates only; the baseline
+ * that partial updates are coded against. It outlives any other tile drawn over it. */
 typedef struct {
     int8_t y[64];
     uint64_t initialized; /* One bit per pixel, independent of DCT baseline coefficients. */
@@ -447,9 +435,9 @@ struct mvs_decoder {
     uint32_t tile[64];             /* pixels in the surface format of the current decode */
     unsigned red_shift, green_shift, blue_shift;
     uint32_t alpha;
-    int8_t *cache;                 /* MVS_CACHE_SLOTS entries of 99 bytes; slot 0 unused */
+    int8_t *cache;                 /* entries of 99 bytes; slot 0 unused and the last one never written */
     uint32_t cache_write, cache_last;
-    uint64_t cache_count;
+    uint32_t cache_count;          /* writes, modulo 2^32 as Screen Sharing counts them */
     tile_desc *desc;
     size_t tiles;
     uint32_t fb_width, fb_height, tiles_x;
@@ -463,7 +451,7 @@ struct mvs_decoder {
 static bool checked_mul(size_t a, size_t b, size_t *out) { return !__builtin_mul_overflow(a, b, out); }
 static bool checked_add(size_t a, size_t b, size_t *out) { return !__builtin_add_overflow(a, b, out); }
 
-static size_t cache_bytes(void) { return (size_t)MVS_CACHE_SLOTS * MVS_CACHE_ENTRY_BYTES; }
+static size_t cache_bytes(void) { return (size_t)(MVS_CACHE_SLOTS + 1) * MVS_CACHE_ENTRY_BYTES; }
 
 size_t mvs_descriptor_bytes_for(uint32_t width, uint32_t height, size_t *tiles_out) {
     size_t tx = ((size_t)width + 7) / 8, ty = ((size_t)height + 7) / 8, tiles, bytes;
@@ -480,7 +468,7 @@ static void set_quant(mvs_decoder *d, const uint8_t luma[64], const uint8_t chro
 mvs_decoder *mvs_create(void) {
     mvs_decoder *d = calloc(1, sizeof *d);
     if (!d) return NULL;
-    d->cache = calloc(MVS_CACHE_SLOTS, MVS_CACHE_ENTRY_BYTES);
+    d->cache = calloc(1, cache_bytes());
     if (!d->cache) { free(d); return NULL; }
     set_quant(d, DEFAULT_LUMA_QUANT, DEFAULT_CHROMA_QUANT);
     d->huffman = build_table();
@@ -574,24 +562,34 @@ static void put_tile(mvs_decoder *d, const mvs_surface *s, uint32_t tx, uint32_t
     if (written) written(context, tx, ty, tw, th);
 }
 
-/* Copies a tile within the framebuffer. A source outside the framebuffer
- * leaves the destination as it is, as _copyTile does. */
+/* A tile the stream gives no pixels for stays as it is. Screen Sharing fills such a tile from
+ * memory outside the picture when the rect clips it. */
+static void leave_tile(mvs_decoder *d, uint32_t tw, uint32_t th) {
+    if (d->stats && (tw < 8 || th < 8)) d->stats->unspecified++;
+}
+
+/* Copies a tile within the framebuffer, as much of it as the source has. Rows whose source lies
+ * above the framebuffer stay as they are. Screen Sharing reads on past the right or bottom edge
+ * where that cuts the source short. */
 static void copy_tile(mvs_decoder *d, const mvs_surface *s, int64_t sx, int64_t sy,
                       uint32_t dx, uint32_t dy, uint32_t tw, uint32_t th,
                       mvs_written_fn written, void *context) {
-    if (sx < 0 || sy < 0 || sx >= d->fb_width || sy >= d->fb_height) {
-        if (d->stats) d->stats->copy_skipped++;
-        return;
-    }
-    uint32_t cols = tw < d->fb_width - (uint32_t)sx ? tw : d->fb_width - (uint32_t)sx;
-    uint32_t rows = th < d->fb_height - (uint32_t)sy ? th : d->fb_height - (uint32_t)sy;
-    if (!coverage(d,(uint32_t)sx,(uint32_t)sy,cols,rows,false)) { fail(&d->error,MVS_E_BASELINE); return; }
+    const uint32_t above = sy < 0 ? (uint32_t)-sy : 0;
+    if (sx < 0 || sx >= d->fb_width || sy >= d->fb_height || above >= th) { leave_tile(d, tw, th); return; }
+    if (above) leave_tile(d, tw, th);
+    const uint32_t x = (uint32_t)sx, y = (uint32_t)(sy + above);
+    dy += above;
+    th -= above;
+    const uint32_t cols = tw < d->fb_width - x ? tw : d->fb_width - x;
+    const uint32_t rows = th < d->fb_height - y ? th : d->fb_height - y;
+    if ((cols < tw || rows < th) && d->stats) d->stats->unspecified++;
+    if (!coverage(d,x,y,cols,rows,false)) { fail(&d->error,MVS_E_BASELINE); return; }
     for (uint32_t row = 0; row < rows; row++) {
         memmove(s->pixels + (size_t)(dy + row) * s->stride + (size_t)dx * 4,
-                s->pixels + (size_t)((uint32_t)sy + row) * s->stride + (size_t)sx * 4, (size_t)cols * 4);
+                s->pixels + (size_t)(y + row) * s->stride + (size_t)x * 4, (size_t)cols * 4);
     }
     coverage(d,dx,dy,cols,rows,true);
-    if (written && cols && rows) written(context, dx, dy, cols, rows);
+    if (written) written(context, dx, dy, cols, rows);
 }
 
 /* ---- Dequantize, transform, colour convert (into d->tile) ---- */
@@ -622,15 +620,8 @@ static int transform_plane(mvs_decoder *d, unsigned plane, const uint8_t quant[6
         21, 34, 37, 47, 50, 56, 59, 61,
         35, 36, 48, 49, 57, 58, 62, 63);
     int16_t n[64];
-    int32_t dq[64];
-    bool wide = false;
     memcpy(n, &natural, sizeof n);
-    for (int i = 0; i < 64; i++) {
-        dq[i] = n[i] * quant[i];
-        wide |= dq[i] > 4096 || dq[i] < -4096;
-    }
-    if (wide && d->stats) d->stats->wide_idct++;
-    mvs_idct8x8(dq, out);
+    mvs_idct8x8(n, quant, out);
     return -1;
 }
 
@@ -670,11 +661,11 @@ static void fill_tile(mvs_decoder *d, const uint8_t rgb[3]) {
 
 /* ---- Cache ---- */
 
+/* Renders a slot, or returns false for one Screen Sharing does not draw: slot 0, one past
+ * MVS_CACHE_SLOTS, or one beyond the number of writes. Slot MVS_CACHE_SLOTS itself passes once
+ * that many entries were written, and is an entry of zeros. */
 static bool load_cache(mvs_decoder *d, uint32_t idx) {
-    if (idx == 0 || idx >= MVS_CACHE_SLOTS || idx > d->cache_count) {
-        fail(&d->error, MVS_E_CACHE_SLOT);
-        return false;
-    }
+    if (idx == 0 || idx > MVS_CACHE_SLOTS || idx > d->cache_count) return false;
     const int8_t *e = d->cache + (size_t)idx * MVS_CACHE_ENTRY_BYTES;
     memset(d->coeffs, 0, sizeof d->coeffs);
     for (int i = 0; i < ENTRY_Y; i++) d->coeffs[i] = e[i];
@@ -723,40 +714,48 @@ static void solid_or_two_color(mvs_decoder *d, bitstream *b) {
 static void full_dct(mvs_decoder *d, bitstream *b, unsigned t1, unsigned t2, size_t screen, int64_t prev) {
     int16_t *c = d->coeffs;
     const int16_t *state = d->dpcm;
+    tile_desc *t = &d->desc[screen];
     memset(d->coeffs, 0, sizeof d->coeffs);
     if (read_bit(b)) {
-        if (prev < 0) { fail(&d->error, MVS_E_REPEAT); return; }
-        memcpy(c, state, 64 * sizeof *c);
-        c[CB] = state[CB];
-        c[CR] = state[CR];
-        d->desc[screen] = d->desc[(size_t)prev];
+        /* A repeat with no DCT tile before it in the update is a tile of zeros, and its
+         * descriptor stays. */
+        if (prev >= 0) {
+            const uint64_t initialized = t->initialized;
+            memcpy(c, state, 64 * sizeof *c);
+            c[CB] = state[CB];
+            c[CR] = state[CR];
+            *t = d->desc[(size_t)prev];
+            t->initialized = initialized;
+        }
     } else {
         unsigned dc_mode = read_bit(b);
         unsigned threshold = read_bit(b) ? t2 : t1;
         if (dc_mode == 0) {
-            int32_t cb_rice = dc_rice(b);
+            int32_t cb_rice = full_dc_rice(b);
             c[CB] = wrap16(((int64_t)state[CB] / 2 - cb_rice) * 2);
-            int32_t cr_rice = dc_rice(b);
+            int32_t cr_rice = full_dc_rice(b);
             c[CR] = wrap16(((int64_t)state[CR] / 2 - cr_rice) * 2);
         } else {
             c[CB] = state[CB];
             c[CR] = state[CR];
         }
-        c[0] = wrap16((int64_t)state[0] - dc_rice(b));
-        unsigned pos = 1;
-        while (pos < 64 && !d->error) {
+        c[0] = wrap16((int64_t)state[0] - full_dc_rice(b));
+        bool abandoned = false;
+        for (unsigned pos = 1; pos < 64 && !abandoned && !d->error;) {
             ac_result r = ac_coefficient(b, pos, threshold);
-            if (r.eob) break;
+            abandoned = r.abandoned;
             if (r.skip > 0) pos += r.skip;
             else c[pos++] = wrap16(r.value);
         }
-        tile_desc *t = &d->desc[screen];
-        t->threshold = (uint8_t)threshold;
-        for (int i = 0; i < 64; i++) t->y[i] = wrap8(c[i]);
-        t->cb_valid = 1;
-        t->cb_dc = wrap8(c[CB]);
-        t->cr_valid = 1;
-        t->cr_dc = wrap8(c[CR]);
+        /* Screen Sharing draws an abandoned block from what it read and keeps the old descriptor. */
+        if (!abandoned) {
+            t->threshold = (uint8_t)threshold;
+            for (int i = 0; i < 64; i++) t->y[i] = wrap8(c[i]);
+            t->cb_valid = 1;
+            t->cb_dc = wrap8(c[CB]);
+            t->cr_valid = 1;
+            t->cr_dc = wrap8(c[CR]);
+        }
     }
     memcpy(d->dpcm, c, sizeof d->dpcm);
     dequant_and_render(d);
@@ -778,8 +777,9 @@ static void full_update(mvs_decoder *d, const mvs_surface *s, uint32_t x, uint32
     uint32_t tiles_x = (w + 7) / 8, tiles_y = (h + 7) / 8;
     size_t total = (size_t)tiles_x * tiles_y;
     size_t body_offset = ((size_t)data[3] << 16) | ((size_t)data[4] << 8) | data[5];
-    if (body_offset < 6 || body_offset > length) { fail(&d->error, MVS_E_BODY_OFFSET); return; }
-    bitstream header = { data + 6, body_offset - 6, 0, &d->error };
+    if (body_offset > length) { fail(&d->error, MVS_E_BODY_OFFSET); return; }
+    /* Screen Sharing lets the tile types run on into the body, and the body start anywhere. */
+    bitstream header = { data + 6, length - 6, 0, &d->error };
     bitstream body = { data + body_offset, length - body_offset, 0, &d->error };
 
     read_bit(&header);
@@ -816,7 +816,6 @@ static void full_update(mvs_decoder *d, const mvs_surface *s, uint32_t x, uint32
             tile_desc *t = &d->desc[screen];
             t->frame_seq = d->frame_seq;
             t->ref_index = -1;
-            t->cb_valid = t->cr_valid = 0;
             bool rendered = true;
             if (d->stats) d->stats->full_tiles[type]++;
             switch (type) {
@@ -843,6 +842,7 @@ static void full_update(mvs_decoder *d, const mvs_surface *s, uint32_t x, uint32
             }
             if (d->error) return;
             if (rendered) put_tile(d, s, tx, ty, tw, th, written, context);
+            else if (type >= 6) leave_tile(d, tw, th);
             prev_x = tx;
             prev_y = ty;
         }
@@ -862,8 +862,10 @@ static int8_t chroma_dc_delta(bitstream *b, int8_t baseline) {
 }
 
 /* Luma of a partial tile. Below the threshold the baseline is finer; a threshold of zero codes
- * position 0 from baseline 1. Seven codes of eight bits fit one window, so the window stays in a
- * register between refills and each code costs one table load. */
+ * position 0 from baseline 1, and its position 63 from the byte Screen Sharing keeps after the
+ * baselines, which is 1 in a valid descriptor. A Rice prefix that is too long reads as 0. Seven
+ * codes of eight bits fit one window, so the window stays in a register between refills and
+ * each code costs one table load. */
 static void partial_luma(mvs_decoder *d, bitstream *b, const tile_desc *t, int8_t *entry) {
     const unsigned threshold = t->threshold, shifted = threshold == 0, count = read_bits(b, 6) + shifted;
     uint64_t w = 0;
@@ -876,16 +878,17 @@ static void partial_luma(mvs_decoder *d, bitstream *b, const tile_desc *t, int8_
             room = 7;
         }
         unsigned pos = i - shifted;
-        int32_t prev = i < 64 ? t->y[i] : 0, value;
+        int32_t prev = i < 64 ? t->y[i] : t->cr_valid, value;
         const short_code code = d->luma_codes[pos < threshold][threshold < 15][prev != 0][w >> 56];
         if (code.length) {
             value = prev >= 0 ? prev + code.value : prev - code.value;
             w = drop(w, code.length);
             used += code.length;
         } else {
+            bool valid;
             skip(b, used);
             used = 0;
-            value = dc_rice(b);
+            value = dc_rice(b, &valid);
             room = 1;
         }
         d->coeffs[pos] = entry[i] = wrap8(value);
@@ -915,7 +918,7 @@ static void partial_dct(mvs_decoder *d, bitstream *b, size_t screen, unsigned cr
 
     dequant_and_render(d);
     if (++d->cache_write == MVS_CACHE_SLOTS) d->cache_write = 1;
-    d->cache_count++;
+    d->cache_count = (uint32_t)(((uint64_t)d->cache_count + 1) & UINT32_MAX);
     memcpy(d->cache + (size_t)d->cache_write * MVS_CACHE_ENTRY_BYTES, entry, sizeof entry);
 }
 
@@ -941,20 +944,20 @@ static void partial_update(mvs_decoder *d, const mvs_surface *s, uint32_t x, uin
                 int64_t ref = t->ref_index;
                 if (ref >= 0 && (size_t)ref < d->tiles && t->frame_seq == d->desc[ref].frame_seq)
                     copy_tile(d, s, t->match_x, t->match_y, tx, ty, tw, th, written, context);
-                else if (d->stats) d->stats->copy_skipped++;
+                else leave_tile(d, tw, th);
                 break;
             }
             case 3: {
                 uint32_t idx = read_bit(&b) ? (d->cache_last + 1) & 0xffff : read_bits(&b, 16);
-                if (!d->error && load_cache(d, idx)) put_tile(d, s, tx, ty, tw, th, written, context);
+                if (d->error) break;
+                if (load_cache(d, idx)) put_tile(d, s, tx, ty, tw, th, written, context);
+                else leave_tile(d, tw, th);
                 break;
             }
             }
         }
     }
-    if (d->error) return;
-    uint32_t m = read_bits(&b, 8), v = read_bits(&b, 8), sx = read_bits(&b, 8);
-    if (!d->error && (m != 0x6d || v != 0x76 || sx != 0x73)) fail(&d->error, MVS_E_PARTIAL_MARKER);
+    /* Screen Sharing reads the "mvs" that ends the tiles and accepts anything there. */
 }
 
 /* ---- Entry point ---- */
