@@ -455,7 +455,6 @@ def stop_reading(connection, report, pending=0):
 def apple_frames(outcome, exact, send, report, connection):
     import select
     import time
-    began = time.monotonic()
     def marker(text): return ''.join(format(c, '08b') for c in text.encode('ascii'))
     header = mvs_bits('0', '101 1 0000', marker('m'))
     body = mvs_bits('0 0 0', '00', '00', '1110 010 1', '0 01 0', '1', marker('m'))
@@ -574,7 +573,7 @@ def apple_frames(outcome, exact, send, report, connection):
         for _ in range(64):
             if client_message()==3 and report['requests_after_initial']==retries: break
         else: raise ValueError('missing baseline retry')
-        report['baseline_retry_ms'] = round((time.monotonic()-began)*1000)
+        report['baseline_retry_at_ns'] = time.clock_gettime_ns(time.CLOCK_UPTIME_RAW)
         if outcome == 'apple-retry-hidden': time.sleep(0.1)
     update(full)
     if outcome == 'apple-write-stall':
@@ -585,7 +584,7 @@ def apple_frames(outcome, exact, send, report, connection):
         for _ in range(64):
             if client_message()==3: break
         else: raise ValueError('missing resume refresh')
-        report['baseline_retry_ms'] = round((time.monotonic()-began)*1000)
+        report['baseline_retry_at_ns'] = time.clock_gettime_ns(time.CLOCK_UPTIME_RAW)
     if outcome == 'apple-geometry':
         update(b'',-223,(0,0,32,8)); return
     if outcome == 'apple-multi-invalid':
@@ -667,7 +666,7 @@ def serve_once(offer_mode, outcome, port):
     withheld = outcome.endswith(('init-withheld', 'init-withheld-once'))
     withheld_public = None
     stalled = outcome.startswith('apple-init-stalled-')
-    deadline = time.monotonic() + (30 if outcome in ('apple-slow-reject', 'apple-write-stall', 'runtime-write-stall') else 16 if withheld or stalled or 'display-timeout' in outcome or outcome == 'apple-retry-hidden' else 10)
+    deadline = time.monotonic() + (30 if outcome in ('apple-slow-reject', 'apple-write-stall', 'runtime-write-stall', 'apple-retry-hidden', 'apple-hidden-baseline') else 16 if withheld or stalled or 'display-timeout' in outcome else 10)
     offers = {
         'apple-mixed': OFFERS,
         'ard-only': [30],

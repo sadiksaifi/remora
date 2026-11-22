@@ -1,0 +1,28 @@
+--- a/winpr/libwinpr/synch/init.c
++++ b/winpr/libwinpr/synch/init.c
+@@ -55,7 +55,9 @@
+ {
+ 	for (;;)
+ 	{
+-		switch ((ULONG_PTR)InitOnce->Ptr & 3)
++		/* Remora: acquire pairs with the release below, so a caller that sees completion also sees
++		 * everything the init function wrote. Plain accesses allowed reordering on ARM64. */
++		switch ((ULONG_PTR)__atomic_load_n(&InitOnce->Ptr, __ATOMIC_ACQUIRE) & 3)
+ 		{
+ 			case 2:
+ 				/* already completed successfully */
+@@ -75,12 +77,12 @@
+ 				if (InitFn(InitOnce, Parameter, Context))
+ 				{
+ 					/* success */
+-					InitOnce->Ptr = (PVOID)2;
++					__atomic_store_n(&InitOnce->Ptr, (PVOID)2, __ATOMIC_RELEASE);
+ 					return TRUE;
+ 				}
+ 
+ 				/* the init function returned an error,  reset the status */
+-				InitOnce->Ptr = (PVOID)0;
++				__atomic_store_n(&InitOnce->Ptr, (PVOID)0, __ATOMIC_RELEASE);
+ 				return FALSE;
+ 
+ 			case 1:

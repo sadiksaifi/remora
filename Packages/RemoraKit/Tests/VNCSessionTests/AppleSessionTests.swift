@@ -329,12 +329,25 @@ private func richFlavors(_ source: String) -> [RemoteClipboard.Flavor] {
 @MainActor func appleBaselineRetriesPauseWhileHiddenAndResumeWithOneFullRequest(_ baselineWhileHidden: Bool) async throws {
     let outcome = baselineWhileHidden ? "apple-hidden-baseline" : "apple-retry-hidden"
     let hiddenMilliseconds = baselineWhileHidden ? 1300 : 11_000
-    let (wire, _, pixels) = try await appleSession(outcome, updatesEnabled: false, patience: .seconds(15)) { session, frames in
+    // The peer stamps the request's arrival with the same system-wide clock, so the order holds however slowly either side starts.
+    let resumed = OSAllocatedUnfairLock<UInt64?>(initialState: nil)
+    // A slow runner can take seconds to start either side. The fixture's deadline for these outcomes is also 30 seconds.
+    let (wire, _, pixels) = try await appleSession(outcome, updatesEnabled: false, patience: .seconds(30)) { session, frames in
+        if baselineWhileHidden {
+            // The hidden time starts at the baseline, so it spans a retry interval however late the baseline arrives.
+            let deadline = ContinuousClock.now + .seconds(10)
+            while frames.samples.isEmpty {
+                try #require(ContinuousClock.now < deadline, "The baseline never arrived.")
+                try await Task.sleep(for: .milliseconds(10))
+            }
+        }
         try await Task.sleep(for: .milliseconds(hiddenMilliseconds))
         #expect(frames.samples.count == (baselineWhileHidden ? 1 : 0))
+        resumed.withLock { $0 = clock_gettime_nsec_np(CLOCK_UPTIME_RAW) }
         session.setDisplayUpdatesEnabled(true)
     }
-    #expect(try #require(wire["baseline_retry_ms"] as? Int) >= hiddenMilliseconds - 100)
+    let retried = try #require(wire["baseline_retry_at_ns"] as? Int)
+    #expect(UInt64(retried) >= (try #require(resumed.withLock { $0 })), "The full request arrived while the desktop was hidden.")
     #expect(wire["requests_after_initial"] as? Int == 1)
     #expect(wire["subscriptions"] as? [[Int]] == [[0, 1, 0, 0, 0, 16, 8], [0, 1, 4_294_967_295, 0, 0, 16, 8], [0, 1, 0, 0, 0, 16, 8]])
     #expect(pixels.samples.count == 3)
