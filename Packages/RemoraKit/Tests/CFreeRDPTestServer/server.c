@@ -159,17 +159,9 @@ static void release(RMTestRDPServer *s) {
     free(s);
 }
 
-/* FreeRDP builds these BIO methods on first use without a lock. They are hidden in the library, but a static build
- * links them. Only the call matters here, so the OpenSSL type is left out. */
-void *BIO_s_simple_socket(void);
-void *BIO_s_buffered_socket(void);
-
-/* Runs before the first server, so before any client or peer thread in the process. */
+/* Runs before the first server, so before any client thread in the process. FreeRDP sends even a loopback
+ * connection through a proxy from the environment. */
 static void prepare_process(void) {
-    /* A peer thread and a client thread both create socket BIOs during the first handshake. */
-    (void)BIO_s_simple_socket();
-    (void)BIO_s_buffered_socket();
-    /* FreeRDP sends even a loopback connection through a proxy from the environment. */
     unsetenv("https_proxy");
     unsetenv("HTTPS_PROXY");
 }
