@@ -259,6 +259,8 @@ public protocol RemoteSession: AnyObject, Sendable {
     func releaseHumanInput()
     /// Whether the session can exchange clipboard text.
     var supportsClipboardSynchronization: Bool { get }
+    var clipboardFormats: [RemoteClipboard.Format] { get }
+    func setLocalClipboard(flavors: [RemoteClipboard.Flavor])
     func setLocalClipboard(text: String)
 }
 
@@ -310,6 +312,11 @@ extension FrameSink {
 }
 
 extension RemoteSession {
+    public var clipboardFormats: [RemoteClipboard.Format] { [.text] }
+    public func setLocalClipboard(flavors: [RemoteClipboard.Flavor]) {
+        if let text = RemoteClipboard.plainText(in: flavors) { setLocalClipboard(text: text) }
+    }
+
     public var displays: SessionDisplays { SessionDisplays() }
     @discardableResult
     public func selectDisplay(_ id: UInt32) -> Result<Void, DisplaySelectionFailure> { .failure(.unsupported) }

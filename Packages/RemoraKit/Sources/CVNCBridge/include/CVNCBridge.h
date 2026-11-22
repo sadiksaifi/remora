@@ -3,6 +3,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include <stddef.h>
+#include <rfb/rfbclient.h>
 typedef struct RMVNC RMVNC;
 /* Fixed numeric handshake summary. Only the owning worker reads this record. */
 typedef struct {
@@ -42,6 +43,7 @@ typedef struct {
     /* Counted text bytes. NULL indicates a pasteboard without supported text, and NULL with -1 a remote
      * change whose text has not arrived. */
     void (*clipboard)(void *, const char *, int, bool utf8);
+    void (*clipboardItem)(void *, const rfbRemoraClipboardFlavor *, int);
     bool (*credentials)(void *, bool, char **, char **);
     bool (*trust)(void *, const char *, const uint8_t *, size_t);
     /* Fill 32 bytes if this endpoint has a pin. */
@@ -68,7 +70,8 @@ int rm_vnc_error(RMVNC *); /* 1 DNS, 2 refused, 3 timeout, 4 auth, 5 certificate
  * 11 Apple ServerInit withheld after accepted authentication (one fresh context may retry),
  * 12 reported generic multi-display layout without display selection, 13 Local Network policy denied DNS resolution,
  * 14 Apple encryption negotiation failed, 15 invalid encrypted record, 16 unsupported encryption key change,
- * 17 malformed or oversized Apple clipboard archive */
+ * 17 malformed or oversized Apple clipboard archive, 18 Apple profile server did not offer the SRP login,
+ * 19 Apple profile server did not prove that it holds the account's SRP verifier */
 const char *rm_vnc_security(RMVNC *);
 bool rm_vnc_resize_supported(RMVNC *);
 bool rm_vnc_resize(RMVNC *, uint16_t, uint16_t);
@@ -80,6 +83,7 @@ bool rm_vnc_display_selection_required(RMVNC *);
 uint32_t rm_vnc_unicode_keysym(uint32_t scalar);
 bool rm_vnc_key(RMVNC *, uint32_t keysym, uint32_t qnum, bool down);
 bool rm_vnc_pointer(RMVNC *, uint16_t, uint16_t, uint8_t mask);
+int rm_vnc_clipboard_item(RMVNC *, const rfbRemoraClipboardFlavor *, unsigned count);
 bool rm_vnc_clipboard_utf8(RMVNC *);
 bool rm_vnc_clipboard(RMVNC *, const char *, int, bool utf8);
 #endif

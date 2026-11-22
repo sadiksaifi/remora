@@ -184,7 +184,7 @@ struct ConnectionEditor: View {
                     } footer: {
                         Text(
                             vncMode == .apple
-                                ? "Apple mode uses Apple Screen Sharing’s encrypted connection and its faster, lossy encoding. It works only with Macs. It can’t verify the Mac’s identity, so use it on networks you trust. Display resizing is unavailable."
+                                ? "Apple mode uses Apple Screen Sharing’s encrypted connection and its faster, lossy encoding. It works only with Macs. The Mac must prove that it has your account’s password on record before the session starts. Display resizing is unavailable."
                                 : "Remora scales the remote screen to fit the window. Servers that allow resizing match the window’s size."
                         )
                         .foregroundStyle(.secondary)

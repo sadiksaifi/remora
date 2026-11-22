@@ -333,6 +333,10 @@ static void cursor(rfbClient *c, int x, int y, int w, int h, int bpp) {
     s->cb.cursor(s->user, pixels, w, h, x, y);
     free(pixels);
 }
+static void clipboard_item(rfbClient *c,const rfbRemoraClipboardFlavor *flavors,int count) {
+    RMVNC *s=owner(c);
+    s->cb.clipboardItem(s->user,flavors,count);
+}
 static void clipboard(rfbClient *c, const char *text, int length) {
     RMVNC *s = owner(c);
     if (length >= 0 && length <= 1048576 && s->cb.clipboard) s->cb.clipboard(s->user, text, length, false);
@@ -473,14 +477,14 @@ static bool connect_socket(RMVNC *s) {
     }
     return false;
 }
-/* Error 11. The Apple-profile server accepted ARD authentication and ClientInit
+/* Error 11. The Apple-profile server completed the SRP login and ClientInit
  * was written. The ServerInit read then reached its deadline without receiving
  * a byte. A partial ServerInit, a stalled name, EOF, and every other mode or
  * phase stay error 6. */
 static bool server_init_withheld(RMVNC *s) {
     const rfbClient *c = s->client;
     const rfbRemoraDiagnostic *d = &c->remoraDiagnostic;
-    return s->apple && c->authScheme == rfbARD && d->failure == RFB_REMORA_TIMEOUT && d->phase == RFB_REMORA_SERVER_INIT &&
+    return s->apple && c->authScheme == rfbRemoraAppleSRP && d->failure == RFB_REMORA_TIMEOUT && d->phase == RFB_REMORA_SERVER_INIT &&
         d->lastSuccess == RFB_REMORA_CLIENT_INIT && !d->serverInitPrefetchedBytes && !c->buffered && !c->desktopName;
 }
 bool rm_vnc_connect(RMVNC *s) {
@@ -504,6 +508,7 @@ bool rm_vnc_connect(RMVNC *s) {
     c->RemoraDisplays=displays_changed; c->RemoraFrameComplete=complete_frame;
     c->RemoraUpdateAllowed=update_allowed;
     c->MallocFrameBuffer=allocate; c->GotFrameBufferUpdate=frame; c->GotCursorShape=cursor;
+    if(s->apple && s->cb.clipboardItem) c->RemoraClipboard=clipboard_item;
     c->GotXCutText=clipboard; c->GotXCutTextUTF8=clipboard_utf8;
     c->GetPassword=password; c->GetCredential=credential; c->GetX509CertFingerprintMismatchDecision=trust;
     c->appData.encodingsString="tight zrle hextile copyrect raw";
@@ -637,7 +642,8 @@ const char *rm_vnc_security(RMVNC *s) {
             case rfbVeNCryptX509VNC: return "VeNCrypt X509VNC";
             case rfbVeNCryptX509None: return "VeNCrypt X509None";
         } return "unsupported VeNCrypt subtype";
-        case rfbARD: return s->client->remoraRecords ? "Apple ARD (AES-128-CBC session)" : "Apple ARD (unencrypted desktop)";
+        case rfbRemoraAppleSRP: return "Apple SRP (AES-128-CBC session)";
+        case rfbARD: return "Apple ARD (unencrypted desktop)";
         case rfbVncAuth: return "VNC authentication (unencrypted desktop)";
         case rfbNoAuth: return "None (unencrypted, unauthenticated desktop)";
         default:return "unsupported security type (RSA-AES is not supported)";
@@ -686,6 +692,12 @@ bool rm_vnc_pointer(RMVNC *s,uint16_t x,uint16_t y,uint8_t mask) {
     s->inputBusy++;
     bool sent = SendPointerEvent(s->client,x,y,mask);
     s->inputBusy--; performance_input(s,2,sent); return sent;
+}
+int rm_vnc_clipboard_item(RMVNC *s,const rfbRemoraClipboardFlavor *flavors,unsigned count) {
+    rfbRemoraRuntimeMessage(s->client, RFB_REMORA_WRITE);
+    s->inputBusy++;
+    int result=rfbRemoraSendClipboard(s->client,flavors,count);
+    s->inputBusy--; return result;
 }
 bool rm_vnc_clipboard_utf8(RMVNC *s) { return s->apple || s->client->extendedClipboardServerCapabilities != 0; }
 bool rm_vnc_clipboard(RMVNC *s,const char *text,int len,bool utf8) {

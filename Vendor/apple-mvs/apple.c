@@ -12,11 +12,12 @@
 #include <time.h>
 #include <zlib.h>
 
-/* Profile errors are local numeric diagnostics, never server-controlled strings. */
-enum { APPLE_PROFILE = 8, APPLE_DECODE = 9, APPLE_GEOMETRY = 10, APPLE_CLIPBOARD = 17 };
 /* Archives above the local limit are drained, not inflated. Apple's server caps both sizes at the wire limit. */
 enum { CLIPBOARD_TEXT_LIMIT = 1024*1024, CLIPBOARD_ARCHIVE_LIMIT = 8*1024*1024, CLIPBOARD_WIRE_LIMIT = 100*1024*1024 };
 static const char clipboardTextType[]="public.utf8-plain-text";
+
+static const char *const clipboardTypes[]={clipboardTextType,"public.png","public.tiff","public.rtf","public.html"};
+enum { CLIPBOARD_TYPES=sizeof(clipboardTypes)/sizeof(clipboardTypes[0]) };
 
 typedef struct {
     uint8_t key[16];
@@ -41,7 +42,6 @@ static rfbBool fail(rfbClient *c, int error) {
     return FALSE;
 }
 rfbBool rfbRemoraAppleRememberKey(rfbClient *c, const uint8_t key[16]) {
-    if (!c->remoraApple889) return TRUE;
     if (!state(c)) c->remoraAppleState=calloc(1,sizeof(Apple));
     Apple *a=state(c);
     if (!a) return fail(c,APPLE_PROFILE);
@@ -58,7 +58,7 @@ void rfbRemoraAppleCleanup(rfbClient *c) {
 rfbBool rfbRemoraAppleSetup(rfbClient *c) {
     Apple *a=state(c);
     const uint8_t *n=(const uint8_t *)c->desktopName;
-    if (!a || !a->keyValid || c->authScheme!=30 || !n || c->si.nameLength<22 || n[0]!=0 ||
+    if (!a || !a->keyValid || c->authScheme!=rfbRemoraAppleSRP || !n || c->si.nameLength<22 || n[0]!=0 ||
         (be32(n+2)&4) || c->format.bitsPerPixel!=32 || c->format.bigEndian ||
         c->format.redShift!=16 || c->format.greenShift!=8 || c->format.blueShift!=0)
         return fail(c,APPLE_PROFILE);
@@ -116,14 +116,23 @@ static rfbBool skip(rfbClient *c,uint32_t n) {
     return TRUE;
 }
 
+static void publishClipboard(rfbClient *c,const rfbRemoraClipboardFlavor *flavors,int count) {
+    if(c->RemoraClipboard) {
+        c->RemoraClipboard(c,flavors,count);
+    } else if(c->GotXCutTextUTF8) {
+        /* Text-only callers ask the parser to select only the UTF-8 flavor. */
+        if(count>0) c->GotXCutTextUTF8(c,(const char *)flavors[0].data,(int)flavors[0].length);
+        else c->GotXCutTextUTF8(c,NULL,count);
+    }
+}
+
 static rfbBool requestClipboard(rfbClient *c) {
     Apple *a=state(c);
     uint8_t request[8]={0x0b};
     a->clipboardRequestID=a->clipboardRequestID==UINT32_MAX?1:a->clipboardRequestID+1;
     put32(request+4,a->clipboardRequestID);
     a->clipboardPending=TRUE;
-    /* Length -1 tells the viewer the remote text changed and the old text is stale. */
-    if(c->GotXCutTextUTF8) c->GotXCutTextUTF8(c,NULL,-1);
+    publishClipboard(c,NULL,-1);
     return WriteToRFBServer(c,(char *)request,sizeof(request));
 }
 
@@ -137,7 +146,7 @@ static rfbBool stateChange(rfbClient *c) {
 }
 
 /* Keep one bounded output allocation so we can validate the entire archive
- * before publishing text. The compressed input is consumed in fixed chunks. */
+ * before publishing any flavors. The compressed input is consumed in fixed chunks. */
 static rfbBool inflateClipboard(rfbClient *c,uint32_t compressed,uint8_t *archive,uint32_t length) {
     z_stream z={0};
     if(inflateInit(&z)!=Z_OK) return fail(c,APPLE_CLIPBOARD);
@@ -178,13 +187,31 @@ static const uint8_t *counted(const uint8_t **cursor,const uint8_t *end,uint32_t
     return take(cursor,end,*n);
 }
 
-static rfbBool clipboardText(const uint8_t *cursor,uint32_t length,const char **text,int *textLength) {
+/* Well-formed UTF-8: no overlong forms, surrogates or code points above U+10FFFF. */
+static rfbBool validUTF8(const uint8_t *p,uint32_t n) {
+    for(uint32_t i=0;i<n;) {
+        uint8_t b=p[i];
+        uint32_t more=b<0x80?0:b>=0xc2&&b<0xe0?1:b>=0xe0&&b<0xf0?2:b>=0xf0&&b<0xf5?3:4;
+        if(more==4 || more>n-i-1) return FALSE;
+        for(uint32_t k=1;k<=more;k++) if((p[i+k]&0xc0)!=0x80) return FALSE;
+        if((b==0xe0 && p[i+1]<0xa0) || (b==0xed && p[i+1]>=0xa0) || (b==0xf0 && p[i+1]<0x90) || (b==0xf4 && p[i+1]>=0x90))
+            return FALSE;
+        i+=1+more;
+    }
+    return TRUE;
+}
+
+static rfbBool clipboardItem(const uint8_t *cursor,uint32_t length,unsigned supported,
+                             rfbRemoraClipboardFlavor selected[CLIPBOARD_TYPES],int *count) {
     const uint8_t *end=cursor+length;
     while(cursor<end) {
         const uint8_t *item=take(&cursor,end,4);
         if(!item) return FALSE;
         uint32_t flavors=be32(item);
         if(flavors>(size_t)(end-cursor)/16) return FALSE;
+        /* Keep flavors together. Once an item has been selected, only validate later items. */
+        rfbBool select=*count==0;
+        unsigned seen=0;
         for(uint32_t f=0;f<flavors;f++) {
             uint32_t typeLength;
             const uint8_t *type=counted(&cursor,end,&typeLength);
@@ -197,9 +224,21 @@ static rfbBool clipboardText(const uint8_t *cursor,uint32_t length,const char **
             }
             const uint8_t *data=counted(&cursor,end,&size);
             if(!data) return FALSE;
-            if(!*text && size<=CLIPBOARD_TEXT_LIMIT && typeLength==sizeof(clipboardTextType)-1 &&
-               !memcmp(type,clipboardTextType,typeLength)) {
-                *text=(const char *)data; *textLength=(int)size;
+            if(!select) {
+                /* An item without text, such as an image, takes the first text of a later item. */
+                rfbBool text=FALSE;
+                for(int i=0;i<*count;i++) text|=selected[i].uti==clipboardTypes[0];
+                if(!text && *count<CLIPBOARD_TYPES && size<=CLIPBOARD_TEXT_LIMIT && strlen(clipboardTypes[0])==typeLength &&
+                   !memcmp(type,clipboardTypes[0],typeLength) && validUTF8(data,size))
+                    selected[(*count)++]=(rfbRemoraClipboardFlavor){clipboardTypes[0],data,size};
+                continue;
+            }
+            for(unsigned k=0;k<supported;k++) {
+                if((seen & (1u<<k)) || strlen(clipboardTypes[k])!=typeLength || memcmp(type,clipboardTypes[k],typeLength)) continue;
+                if(k==0 ? size>CLIPBOARD_TEXT_LIMIT : size==0) continue;
+                selected[(*count)++]=(rfbRemoraClipboardFlavor){clipboardTypes[k],data,size};
+                seen|=1u<<k;
+                break;
             }
         }
     }
@@ -224,59 +263,75 @@ static rfbBool receiveClipboard(rfbClient *c) {
         }
         if(answer) {
             a->clipboardPending=FALSE;
-            if(c->GotXCutTextUTF8) c->GotXCutTextUTF8(c,NULL,0);
+            publishClipboard(c,NULL,0);
         }
         return TRUE;
     }
     uint8_t *archive=malloc(length+1);
     if(!archive) return fail(c,APPLE_CLIPBOARD);
-    const char *text=length?NULL:"";
-    int textLength=0;
+    rfbRemoraClipboardFlavor selected[CLIPBOARD_TYPES]={{clipboardTextType,(const uint8_t *)"",0}};
+    int count=length?0:1;
     rfbBool ok=inflateClipboard(c,compressed,archive,length);
-    if(ok && !clipboardText(archive,length,&text,&textLength)) ok=fail(c,APPLE_CLIPBOARD);
+    if(ok && !clipboardItem(archive,length,c->RemoraClipboard?CLIPBOARD_TYPES:1,selected,&count)) ok=fail(c,APPLE_CLIPBOARD);
     if(ok && answer) {
         a->clipboardPending=FALSE;
-        if(c->GotXCutTextUTF8) c->GotXCutTextUTF8(c,text,textLength);
+        publishClipboard(c,selected,count);
     }
     free(archive);
     return ok;
 }
 
-rfbBool rfbRemoraAppleClipboard(rfbClient *c,const char *text,int length) {
-    if(!state(c) || c->remoraDiagnostic.phase!=RFB_REMORA_READY || length<0 ||
-       length>CLIPBOARD_TEXT_LIMIT || (length && !text)) return FALSE;
-    enum { TYPE_LENGTH=sizeof(clipboardTextType)-1 };
-    uint8_t prefix[20+TYPE_LENGTH]={0};
-    unsigned prefixLength=4;
-    if(length) {
-        put32(prefix,1);
-        put32(prefix+4,TYPE_LENGTH);
-        memcpy(prefix+8,clipboardTextType,TYPE_LENGTH);
-        put32(prefix+16+TYPE_LENGTH,(uint32_t)length);
-        prefixLength=sizeof(prefix);
+int rfbRemoraSendClipboard(rfbClient *c,const rfbRemoraClipboardFlavor *flavors,unsigned count) {
+    if(!c->remoraApple889 || !state(c) || c->remoraDiagnostic.phase!=RFB_REMORA_READY || count>CLIPBOARD_TYPES || (count && !flavors)) return -1;
+    uint32_t length=4;
+    for(unsigned i=0;i<count;i++) {
+        const rfbRemoraClipboardFlavor *f=&flavors[i];
+        if(!f->uti || !f->length || !f->data) return -1;
+        unsigned k=0;
+        while(k<CLIPBOARD_TYPES && strcmp(f->uti,clipboardTypes[k])) k++;
+        if(k==CLIPBOARD_TYPES || (k==0 && f->length>CLIPBOARD_TEXT_LIMIT)) return -1;
+        uint32_t overhead=16+(uint32_t)strlen(f->uti);
+        if(overhead>CLIPBOARD_ARCHIVE_LIMIT-length || f->length>CLIPBOARD_ARCHIVE_LIMIT-length-overhead) return -1;
+        length+=overhead+f->length;
     }
-    /* A zero-flavor item clears the pasteboard. An empty flavor is a promise. */
+    uint8_t *archive=calloc(1,length);
+    if(!archive) return -1;
+    put32(archive,count); /* A zero-flavor item clears the pasteboard. */
+    uint8_t *p=archive+4;
+    for(unsigned i=0;i<count;i++) {
+        const rfbRemoraClipboardFlavor *f=&flavors[i];
+        uint32_t n=(uint32_t)strlen(f->uti);
+        put32(p,n); memcpy(p+4,f->uti,n); p+=12+n; /* flags=0, no tags */
+        put32(p,f->length); memcpy(p+4,f->data,f->length); p+=4+f->length;
+    }
     z_stream z={0};
-    if(deflateInit(&z,Z_DEFAULT_COMPRESSION)!=Z_OK) return FALSE;
-    uint32_t archiveLength=prefixLength+(uint32_t)length;
-    unsigned capacity=(unsigned)deflateBound(&z,archiveLength)+6;
-    uint8_t *message=malloc(16+capacity);
-    rfbBool ok=FALSE;
-    if(message) {
-        z.next_out=message+16; z.avail_out=capacity;
-        z.next_in=prefix; z.avail_in=prefixLength;
-        if(deflate(&z,Z_NO_FLUSH)==Z_OK && !z.avail_in) {
-            z.next_in=(Bytef *)text; z.avail_in=(unsigned)length;
+    int result=-1;
+    if(deflateInit(&z,Z_DEFAULT_COMPRESSION)==Z_OK) {
+        unsigned capacity=(unsigned)deflateBound(&z,length)+6;
+        if(capacity>CLIPBOARD_ARCHIVE_LIMIT+1) capacity=CLIPBOARD_ARCHIVE_LIMIT+1;
+        uint8_t *message=calloc(1,16+capacity);
+        if(message) {
+            z.next_out=message+16; z.avail_out=capacity;
+            z.next_in=archive; z.avail_in=length;
             if(deflate(&z,Z_SYNC_FLUSH)==Z_OK && !z.avail_in && z.avail_out) {
-                memset(message,0,16); message[0]=0x1f;
-                put32(message+8,archiveLength); put32(message+12,(uint32_t)z.total_out);
-                ok=WriteToRFBServer(c,(char *)message,16+(unsigned)z.total_out);
+                message[0]=0x1f;
+                put32(message+8,length); put32(message+12,(uint32_t)z.total_out);
+                result=WriteToRFBServer(c,(char *)message,16+(unsigned)z.total_out)?1:0;
+                /* This item replaces the Mac's pasteboard, so a reply still in flight is older. */
+                if(result==1) state(c)->clipboardPending=FALSE;
             }
+            free(message);
         }
+        deflateEnd(&z);
     }
-    deflateEnd(&z);
-    free(message);
-    return ok;
+    free(archive);
+    return result;
+}
+
+rfbBool rfbRemoraAppleClipboard(rfbClient *c,const char *text,int length) {
+    if(length<0) return FALSE;
+    rfbRemoraClipboardFlavor flavor={clipboardTextType,(const uint8_t *)text,(uint32_t)length};
+    return rfbRemoraSendClipboard(c,&flavor,length?1:0)==1;
 }
 
 rfbBool rfbRemoraDisplayReset(rfbClient *c) {

@@ -696,8 +696,8 @@ final class SessionViewController: NSViewController {
                 announce(SessionStatusView.title(for: reason))
             }
         case .clipboardChanged(let revision, let status):
-            if remoteClipboard.update(revision: revision, status: status), case .text(let text) = status {
-                clipboardSync?.receiveRemoteText(text)
+            if remoteClipboard.update(revision: revision, status: status), case .received(let flavors) = status {
+                clipboardSync?.receiveRemoteItem(flavors)
             }
         case .desktopSizeChanged(let size, _):
             if desktopSize != size { inputGeometryRevision += 1 }

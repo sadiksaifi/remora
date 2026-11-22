@@ -2,14 +2,19 @@
 
 RFB type 30 framing: rfbproto/rfbproto, Diffie-Hellman Authentication.
 DH test group: RFC 2409 section 6.2. AES: system CommonCrypto, NIST KAT.
+RFB type 36 is Apple's SRP login. Vendor/apple-mvs/README.md, "Login", gives its
+layouts and derivation. This server side uses RFC 5054's 4096-bit group with
+Python integers and hashlib.
 No Remora imports, saved settings, credentials, or OpenSSL calls.
 """
 import ctypes
 import hashlib
 import json
 import os
+import random
 import struct
 import sys
+import time
 import zlib
 
 PRIME_HEX = (
@@ -27,6 +32,29 @@ USERNAME = b'fixture-user'
 PASSWORD = b'fixture-password'
 OFFERS = [30, 33, 36, 2, 35]
 SERVER_EXPONENT = int.from_bytes(hashlib.sha256(b'ARD synthetic server exponent').digest(), 'big')
+# RFC 5054 appendix A, 4096-bit group. The modulus is the RFC 3526 group 16 prime. The generator is 5.
+SRP_N = int(
+    'FFFFFFFFFFFFFFFFC90FDAA22168C234C4C6628B80DC1CD129024E088A67CC74'
+    '020BBEA63B139B22514A08798E3404DDEF9519B3CD3A431B302B0A6DF25F1437'
+    '4FE1356D6D51C245E485B576625E7EC6F44C42E9A637ED6B0BFF5CB6F406B7ED'
+    'EE386BFB5A899FA5AE9F24117C4B1FE649286651ECE45B3DC2007CB8A163BF05'
+    '98DA48361C55D39A69163FA8FD24CF5F83655D23DCA3AD961C62F356208552BB'
+    '9ED529077096966D670C354E4ABC9804F1746C08CA18217C32905E462E36CE3B'
+    'E39E772C180E86039B2783A2EC07A28FB5C55DF06F4C52C9DE2BCBF695581718'
+    '3995497CEA956AE515D2261898FA051015728E5A8AAAC42DAD33170D04507A33'
+    'A85521ABDF1CBA64ECFB850458DBEF0A8AEA71575D060C7DB3970F85A6E1E4C7'
+    'ABF5AE8CDB0933D71E8C94E04A25619DCEE3D2261AD2EE6BF12FFA06D98A0864'
+    'D87602733EC86A64521F2B18177B200CBBE117577A615D6C770988C0BAD946E2'
+    '08E24FA074E5AB3143DB5BFCE0FD108E4B82D120A92108011A723C12A787E6D7'
+    '88719A10BDBA5B2699C327186AF4E23C1A946834B6150BDA2583E9CA2AD44CE8'
+    'DBBBC2DB04DE8EF92E8EFC141FBECAA6287C59474E6BC05D99B2964FA090C3A2'
+    '233BA186515BE7ED1F612970CEE2D7AFB81BDD762170481CD0069127D5B05AA9'
+    '93B4EA988D8FDDC186FFB7DC90A6C08F4DF435C934063199FFFFFFFFFFFFFFFF', 16)
+SRP_G = 5
+SRP_SIZE = 512
+SRP_SALT = hashlib.sha256(b'ARD synthetic SRP salt').digest()
+SRP_ITERATIONS = 2048
+SRP_OPTIONS = b'mda=SHA-512,replay_detection,conf+int=ChaCha20-Poly1305,kdf=SALTED-SHA512-PBKDF2'
 
 
 def synthetic_zrle(dimension, compressor=None):
@@ -77,6 +105,117 @@ def known_answer_check():
         raise ValueError('NIST AES ECB known-answer mismatch')
     if P.bit_length() != 1024 or len(bytes.fromhex(PRIME_HEX)) != SIZE:
         raise ValueError('RFC group size mismatch')
+    # SHA-256 of the modulus that macOS 26.6.2 sent in its type 36 challenge.
+    if hashlib.sha256(srp_pad(SRP_N)).hexdigest() != '4ee95187682bcb230ad26a95205f6920e84708f6251b3894329b09ec23919e33':
+        raise ValueError('SRP group mismatch')
+
+
+def srp_pad(value):
+    return value.to_bytes(SRP_SIZE, 'big')
+
+
+def srp_hash(*parts):
+    return hashlib.sha512(b''.join(parts)).digest()
+
+
+def srp_verifier(password, salt, iterations):
+    """What macOS stores for an account: g^x, with x from the PBKDF2-stretched password and an empty identity."""
+    stretched = hashlib.pbkdf2_hmac('sha512', password, salt, iterations, 128)
+    return pow(SRP_G, int.from_bytes(srp_hash(salt, srp_hash(b':', stretched)), 'big'), SRP_N)
+
+
+def srp_pack(layout, *values):
+    """m: number with a two-byte length. o: octets with a one-byte length. s: text with a two-byte length."""
+    body = b''
+    for kind, value in zip(layout, values):
+        if kind == 'm': value = value.to_bytes((value.bit_length() + 7) // 8, 'big')
+        body += len(value).to_bytes(1 if kind == 'o' else 2, 'big') + value
+    return body
+
+
+def srp_frame(body):
+    return struct.pack('>II', len(body) + 4, len(body)) + body
+
+
+def srp_unpack(layout, exact):
+    outer, inner = struct.unpack('>II', exact(8))
+    if outer != inner + 4 or inner > 4096: raise ValueError('SRP message length')
+    body, values = exact(inner), []
+    for kind in layout:
+        prefix = 1 if kind == 'o' else 2
+        size = int.from_bytes(body[:prefix], 'big')
+        value, body = body[prefix:prefix+size], body[prefix+size:]
+        if len(value) != size: raise ValueError('SRP field length')
+        values.append(int.from_bytes(value, 'big') if kind == 'm' else value)
+    if body: raise ValueError('SRP trailing bytes')
+    return values
+
+
+def srp_login(outcome, exact, send, report):
+    """Server side of security type 36. Returns the record wrapping key and A, or None when the login ended."""
+    def expect_close(flag):
+        # A client that closes with the peer's last bytes unread resets the connection.
+        try: exact(1)
+        except (EOFError, ConnectionResetError): report[flag] = True
+        else: raise ValueError('client data after the login ended')
+    authorization, user, session, extension = srp_unpack('ssso', exact)
+    if authorization or session or extension: raise ValueError('SRP first message')
+    known = user == USERNAME
+    # macOS answers an unknown account with a random salt.
+    salt = SRP_SALT if known else os.urandom(32)
+    iterations = SRP_ITERATIONS
+    # The impersonator has no verifier for the account. It commits to one password guess.
+    impersonator = outcome.startswith('apple-impersonator-')
+    verifier = srp_verifier(b'impersonator guess' if impersonator else PASSWORD, salt, iterations)
+    k = int.from_bytes(srp_hash(srp_pad(SRP_N), srp_pad(SRP_G)), 'big')
+    b = int.from_bytes(os.urandom(64), 'big')
+    B = (k * verifier + pow(SRP_G, b, SRP_N)) % SRP_N
+    N, g, options, flag = SRP_N, SRP_G, SRP_OPTIONS, 0
+    if outcome == 'apple-srp-group': N = P
+    elif outcome == 'apple-srp-generator': g = 2
+    elif outcome == 'apple-srp-public-zero': B = 0
+    elif outcome == 'apple-srp-public-modulus': B = SRP_N
+    elif outcome == 'apple-srp-iterations-zero': iterations = 0
+    elif outcome == 'apple-srp-iterations-excessive': iterations = 1 << 40
+    elif outcome == 'apple-srp-options': options = options.replace(b'kdf=SALTED-SHA512-PBKDF2', b'kdf=SALTED-SHA512')
+    elif outcome == 'apple-srp-flag': flag = 1
+    report['stage'] = 'srp_challenge'
+    challenge = bytes([flag]) + srp_pack('mmom', N, g, salt, B) + struct.pack('>Q', iterations) + srp_pack('s', options)
+    send(srp_frame(challenge + (b'\x00' if outcome == 'apple-srp-trailing' else b'')))
+    if outcome.startswith('apple-srp-'):
+        # Unsupported parameters end the login before the client sends anything derived from the password.
+        expect_close('closed_before_proof')
+        return None
+    A, proof, selected, nonce = srp_unpack('moso', exact)
+    if A % SRP_N == 0 or selected != SRP_OPTIONS or len(nonce) != 16: raise ValueError('SRP answer')
+    u = int.from_bytes(srp_hash(srp_pad(A), srp_pad(B)), 'big')
+    K = srp_hash(srp_pad(pow(A * pow(verifier, u, SRP_N), b, SRP_N)))
+    mask = bytes(x ^ y for x, y in zip(srp_hash(srp_pad(SRP_N)), srp_hash(srp_pad(SRP_G))))
+    report['proof_verified'] = proof == srp_hash(mask, srp_hash(b''), salt, srp_pad(A), srp_pad(B), K)
+    report['credentials_valid'] = known and report['proof_verified'] and not impersonator
+    report['stage'] = 'security_result'
+    if impersonator:
+        # Its one guess failed, so it cannot compute the client's K. It claims success anyway.
+        if report['proof_verified']: raise ValueError('impersonator verified the proof')
+        if outcome == 'apple-impersonator-proof':
+            send(srp_frame(srp_pack('oos', srp_hash(srp_pad(A), proof, K), os.urandom(16), b'') + bytes(4)))
+        send(struct.pack('>I', 0))
+        expect_close('closed_after_proof')
+        return None
+    if not report['credentials_valid'] or outcome == 'apple-reject':
+        # macOS delays each rejection longer than the last, past 20 seconds after several.
+        if outcome == 'apple-slow-reject': time.sleep(22)
+        send(struct.pack('>I', 1))
+        expect_close('closed_without_input')
+        report['security_result'] = 1
+        return None
+    if outcome == 'apple-proof-truncated':
+        # A correct M2 without the IV, session ID and TTL that follow it.
+        send(srp_frame(srp_pack('o', srp_hash(srp_pad(A), proof, K))) + struct.pack('>I', 0))
+        expect_close('closed_after_proof')
+        return None
+    send(srp_frame(srp_pack('oos', srp_hash(srp_pad(A), proof, K), os.urandom(16), b'') + bytes(4)))
+    return hashlib.sha256(K).digest()[:16], A
 
 
 class AppleRecords:
@@ -226,6 +365,24 @@ def packed_flavor(uti, data, tags=()):
 TEXT_UTI = b'public.utf8-plain-text'
 
 
+# One item, with PNG, TIFF, RTF, HTML and an optional plain-text alternative.
+def rich_item(prefix, with_text=True, tags=()):
+    flavors = [(b'public.png', b'\x89PNG\r\n\x1a\n' + prefix),
+               (b'public.tiff', b'II*\0' + prefix), (b'public.rtf', b'{\\rtf1 ' + prefix + b'}'),
+               (b'public.html', b'<b>' + prefix + b'</b>')]
+    if with_text: flavors.append((TEXT_UTI, prefix))
+    return struct.pack('>I', len(flavors)) + b''.join(packed_flavor(uti, data, tags) for uti, data in flavors)
+
+
+def boundary_item():
+    uti = b'public.html'
+    size = 8 * 1024 * 1024 - 20 - len(uti)
+    # 3 MiB of fixed random bytes keep the compressed archive above 3 MiB in both directions.
+    noise = random.Random(1).randbytes(3 * 1024 * 1024)
+    data = b'<b>' + noise + b'x' * (size - 7 - len(noise)) + b'</b>'
+    return struct.pack('>I', 1) + packed_flavor(uti, data)
+
+
 def apple_clipboard(outcome, client_message, send, report):
     def reply(archive, sync=False, declared=None):
         send(bytes.fromhex('14 00 00 04 00 01 00 02'))
@@ -242,12 +399,30 @@ def apple_clipboard(outcome, client_message, send, report):
 
     def text_item(data): return struct.pack('>I', 1) + packed_flavor(TEXT_UTI, data)
 
-    if outcome == 'apple-clipboard-limit':
+    if outcome == 'apple-clipboard-stale':
+        # The viewer uploads its own copy while the reply to an older request is still in flight.
+        send(bytes.fromhex('14 00 00 04 00 01 00 02'))
+        while client_message() != 0x0b: pass
+        stale = report['clipboard_requests'][-1]
+        while not report['clipboard_uploads']: client_message()
+        archive = zlib.compress(text_item(b'stale'))
+        send(struct.pack('>BBBBIII', 0x1f, 0, 0, 0, stale, len(text_item(b'stale')), len(archive)) + archive)
+        reply(text_item(b'fresh'))
+    elif outcome == 'apple-clipboard-limit':
         # Archives over the local limit, such as a copied image, are drained and the session goes on.
         large = 8 * 1024 * 1024 + 1
         reply(None, declared=(1, large, bytes(large)))
         reply(None, declared=(large, 16, bytes(16)))
         reply(text_item(b'after a large image'))
+    elif outcome == 'apple-clipboard-rich':
+        reply(rich_item(b'Mac', tags=[(b'public.filename-extension', b'test')]), sync=True)
+        while not report['clipboard_uploads']: client_message()
+        # An item without text takes the text of the item after it, so the CLI can still read text.
+        # Text that is not valid UTF-8 is passed over.
+        reply(bytes(4) + rich_item(b'Mac', with_text=False) + text_item(b'\xc0\xaf') + text_item(b'separate item'))
+    elif outcome == 'apple-clipboard-boundary':
+        reply(boundary_item())
+        while not report['clipboard_uploads']: client_message()
     elif outcome == 'apple-clipboard-wire-limit':
         reply(None, declared=(1, 100 * 1024 * 1024 + 1, b''))
     elif outcome == 'apple-clipboard-length':
@@ -257,12 +432,12 @@ def apple_clipboard(outcome, client_message, send, report):
         # A complete text item followed by a flavor with a truncated UTI.
         reply(text_item(b'do not publish') + struct.pack('>II', 1, 100) + b'x')
     else:
-        rich = packed_flavor(b'public.rtf', hashlib.shake_256(b'fixture').digest(1_100_000),
+        rich = packed_flavor(b'org.example.other', hashlib.shake_256(b'fixture').digest(1_100_000),
                              [(b'public.mime-type', b'text/rtf')])
         reply(struct.pack('>I', 2) + rich + packed_flavor(TEXT_UTI, 'from Mac ✓\0'.encode()), sync=True)
         while len(report['clipboard_uploads']) < 2: client_message()
         reply(text_item(b'\xff'))
-        reply(struct.pack('>I', 1) + packed_flavor(b'public.png', b'image bytes'))
+        reply(struct.pack('>I', 1) + packed_flavor(b'org.example.other', b'other bytes'))
         reply(text_item(b'x' * (1024 * 1024 + 1)))
 
 
@@ -307,19 +482,26 @@ def apple_frames(outcome, exact, send, report, connection):
             if flags or reserved or request in report['clipboard_requests']:
                 raise ValueError('full clipboard request with a fresh ID required')
             report['clipboard_requests'].append(request)
-        elif kind == 0x1f and outcome == 'apple-clipboard':
+        elif kind == 0x1f and outcome in ('apple-clipboard', 'apple-clipboard-rich', 'apple-clipboard-boundary', 'apple-clipboard-stale'):
             padding, flags, reserved, request, plain, compressed = struct.unpack('>BBBIII', exact(15))
-            if padding or flags or reserved or request or not 0 < compressed <= 2 * 1024 * 1024:
+            if padding or flags or reserved or request or not 0 < compressed <= 8 * 1024 * 1024:
                 raise ValueError('clipboard upload header')
             inflater = zlib.decompressobj()
-            archive = inflater.decompress(exact(compressed), 2 * 1024 * 1024)
+            archive = inflater.decompress(exact(compressed), 8 * 1024 * 1024)
             if len(archive) != plain or inflater.unused_data or inflater.unconsumed_tail:
                 raise ValueError('clipboard upload length')
             index = len(report['clipboard_uploads'])
             wanted = 'from viewer 🦀'.encode() if index == 0 else b''
             expected = struct.pack('>I', 1) + packed_flavor(TEXT_UTI, wanted) if wanted else bytes(4)
+            if outcome == 'apple-clipboard-rich':
+                expected = rich_item(b'viewer')
+                wanted = b'rich'
+            elif outcome == 'apple-clipboard-boundary':
+                expected = boundary_item()
+                wanted = b'boundary'
             if archive != expected: raise ValueError('clipboard upload archive')
             report['clipboard_uploads'].append(wanted.decode())
+            report['clipboard_upload_compressed'] = max(report.get('clipboard_upload_compressed', 0), compressed)
         elif kind == 3:
             request = struct.unpack('>BHHHH', exact(9))
             if request != (0,0,0,16,8): raise ValueError('full non-incremental request required')
@@ -468,7 +650,7 @@ def serve_once(offer_mode, outcome, port):
     withheld = outcome.endswith(('init-withheld', 'init-withheld-once'))
     withheld_public = None
     stalled = outcome.startswith('apple-init-stalled-')
-    deadline = time.monotonic() + (16 if withheld or stalled or 'display-timeout' in outcome or outcome == 'apple-retry-hidden' else 10)
+    deadline = time.monotonic() + (30 if outcome == 'apple-slow-reject' else 16 if withheld or stalled or 'display-timeout' in outcome or outcome == 'apple-retry-hidden' else 10)
     offers = {
         'apple-mixed': OFFERS,
         'ard-only': [30],
@@ -488,8 +670,10 @@ def serve_once(offer_mode, outcome, port):
             for connection in accepted(listener, report, deadline):
                 if outcome in ('fragmented-small', 'fragmented-large'):
                     connection.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+                held = bytearray()
                 def exact(count):
-                    data = bytearray()
+                    data = bytearray(held[:count])
+                    del held[:count]
                     while len(data) < count:
                         remaining = deadline - time.monotonic()
                         if remaining <= 0:
@@ -528,57 +712,59 @@ def serve_once(offer_mode, outcome, port):
                         report['selector_received'] = False
                         return report
                     raise ValueError('unexpected selector after mixed offer')
+                if apple:
+                    # macOS reads security type 36 and the first SRP message from one delivery.
+                    connection.settimeout(max(0.001, deadline - time.monotonic()))
+                    held.extend(connection.recv(4096))
                 selection = exact(1)[0]
                 report['selected_security_id'] = selection
-                if outcome == 'apple-profile-reject':
-                    try: exact(1)
-                    except EOFError:
-                        report['profile_rejected'] = True; return report
-                    raise ValueError('profile used unsupported authentication')
-                if selection != 30:
-                    raise ValueError('fixture implements only ARD 30')
-                if outcome == 'close-after-selection':
-                    report['stage'] = 'intentional_close_after_selection'
-                    return report
-                if outcome == 'crypto-failure':
-                    report['stage'] = 'synthetic_invalid_dh_sent'
-                    # 256-bit declared modulus is below OpenSSL's 512-bit minimum.
-                    # It intentionally fails local key generation before credentials.
-                    small_modulus = (2 ** 255 - 19).to_bytes(32, 'big')
-                    send(struct.pack('>HH', G, 32) + small_modulus + (4).to_bytes(32, 'big'))
-                    try:
-                        exact(1)
-                    except EOFError:
-                        report['client_closed'] = True
+                if apple:
+                    if selection != 36 or len(held) < 4 or len(held) != 4 + int.from_bytes(held[:4], 'big'):
+                        raise ValueError('Apple mode must send type 36 and its first message in one write')
+                    login = srp_login(outcome, exact, send, report)
+                    if login is None: return report
+                    wrapping_key, client_public = login
+                elif selection == 30:
+                    if outcome == 'close-after-selection':
+                        report['stage'] = 'intentional_close_after_selection'
                         return report
-                    raise ValueError('unexpected response after invalid DH group')
-                report['stage'] = 'ard_challenge_response'
-                server_public = pow(G, SERVER_EXPONENT, P)
-                send(struct.pack('>HH', G, SIZE) + fixed(P) + fixed(server_public))
-                if outcome == 'close-after-challenge':
-                    report['stage'] = 'intentional_close_after_challenge'
-                    return report
-                ciphertext, client_public = exact(128), int.from_bytes(exact(SIZE), 'big')
-                if not 1 < client_public < P - 1:
-                    raise ValueError('invalid client public value')
+                    if outcome == 'crypto-failure':
+                        report['stage'] = 'synthetic_invalid_dh_sent'
+                        # 256-bit declared modulus is below OpenSSL's 512-bit minimum.
+                        # It intentionally fails local key generation before credentials.
+                        small_modulus = (2 ** 255 - 19).to_bytes(32, 'big')
+                        send(struct.pack('>HH', G, 32) + small_modulus + (4).to_bytes(32, 'big'))
+                        try:
+                            exact(1)
+                        except EOFError:
+                            report['client_closed'] = True
+                            return report
+                        raise ValueError('unexpected response after invalid DH group')
+                    report['stage'] = 'ard_challenge_response'
+                    server_public = pow(G, SERVER_EXPONENT, P)
+                    send(struct.pack('>HH', G, SIZE) + fixed(P) + fixed(server_public))
+                    if outcome == 'close-after-challenge':
+                        report['stage'] = 'intentional_close_after_challenge'
+                        return report
+                    ciphertext, client_public = exact(128), int.from_bytes(exact(SIZE), 'big')
+                    if not 1 < client_public < P - 1:
+                        raise ValueError('invalid client public value')
+                    shared = fixed(pow(client_public, SERVER_EXPONENT, P))
+                    plaintext = aes(hashlib.md5(shared).digest(), ciphertext, True)
+                    fields = [plaintext[:64], plaintext[64:]]
+                    valid = all(b'\x00' in field for field in fields)
+                    valid = valid and fields[0].split(b'\x00', 1)[0] == USERNAME and fields[1].split(b'\x00', 1)[0] == PASSWORD
+                    report['credentials_valid'] = bool(valid)
+                    report['stage'] = 'security_result'
+                    if not valid or outcome == 'reject':
+                        reason = b'synthetic fixture rejection'
+                        send(struct.pack('>II', 1, len(reason)) + reason)
+                        report['security_result'] = 1
+                        return report
+                else:
+                    raise ValueError('fixture implements ARD 30 outside Apple mode')
                 if withheld_public is not None:
                     report['fresh_exchange'] = client_public != withheld_public
-                shared = fixed(pow(client_public, SERVER_EXPONENT, P))
-                plaintext = aes(hashlib.md5(shared).digest(), ciphertext, True)
-                fields = [plaintext[:64], plaintext[64:]]
-                valid = all(b'\x00' in field for field in fields)
-                valid = valid and fields[0].split(b'\x00', 1)[0] == USERNAME and fields[1].split(b'\x00', 1)[0] == PASSWORD
-                report['credentials_valid'] = bool(valid)
-                report['stage'] = 'security_result'
-                if not valid or outcome in ('reject','apple-reject'):
-                    reason = b'synthetic fixture rejection'
-                    send(struct.pack('>II', 1, len(reason)) + reason)
-                    if outcome=='apple-reject':
-                        try: exact(1)
-                        except EOFError: report['closed_without_input'] = True
-                        else: raise ValueError('client data after failed authentication')
-                    report['security_result'] = 1
-                    return report
                 name = (bytes(2)+struct.pack('>I',4 if outcome=='apple-session-select' else 0)+bytes(16) if apple and outcome!='apple-no-extension' else b'') + b'synthetic-ard-peer'
                 dimension = 256 if outcome == 'fragmented-large' else 16
                 height = 8 if apple and outcome != 'apple-success' else dimension
@@ -659,7 +845,7 @@ def serve_once(offer_mode, outcome, port):
                         if exact(8) != bytes.fromhex('1200 0002 0001 0000'): raise ValueError('SetEncryption activation')
                         records = AppleRecords(exact, send)
                         key_rect = struct.pack('>BBHHHHHiI', 0, 0, 1, 0, 0, 0, 0, 1103, 1)
-                        key_rect += aes(hashlib.md5(shared).digest(), records.key + records.iv)
+                        key_rect += aes(wrapping_key, records.key + records.iv)
                         if outcome == 'apple-no-key':
                             try: exact(1)
                             except EOFError: return report

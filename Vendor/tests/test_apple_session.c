@@ -50,6 +50,32 @@ static void clipboard(rfbClient *c,const char *text,int length) {
     default: failures++; break;
     }
 }
+#define FLAVOR(uti, bytes) {uti,(const uint8_t *)(bytes),sizeof(bytes)-1}
+static void richClipboard(rfbClient *c,const rfbRemoraClipboardFlavor *flavors,int count) {
+    (void)c;
+    if(count==-1) { clipboardChanges++; return; }
+    const rfbRemoraClipboardFlavor wanted[]={
+        FLAVOR("public.png","\211PNG\r\n\032\nMac"), FLAVOR("public.tiff","II*\0Mac"),
+        FLAVOR("public.rtf","{\\rtf1 Mac}"), FLAVOR("public.html","<b>Mac</b>"), FLAVOR("public.utf8-plain-text","Mac")
+    };
+    /* The second item has no text, so the client adds the text of the item after it. */
+    int second=clipboardMessages++>0;
+    if(count!=5) { failures++; return; }
+    if(second && (strcmp(flavors[4].uti,"public.utf8-plain-text") || flavors[4].length!=13 ||
+                  memcmp(flavors[4].data,"separate item",13))) failures++;
+    for(int i=0;i<(second?4:5);i++) {
+        if(strcmp(wanted[i].uti,flavors[i].uti) || flavors[i].length!=wanted[i].length ||
+            memcmp(wanted[i].data,flavors[i].data,wanted[i].length)) failures++;
+    }
+}
+
+static int uploadRich(rfbClient *c) {
+    const rfbRemoraClipboardFlavor flavors[]={
+        FLAVOR("public.png","\211PNG\r\n\032\nviewer"), FLAVOR("public.tiff","II*\0viewer"),
+        FLAVOR("public.rtf","{\\rtf1 viewer}"), FLAVOR("public.html","<b>viewer</b>"), FLAVOR("public.utf8-plain-text","viewer")
+    };
+    return rfbRemoraSendClipboard(c,flavors,5)==1;
+}
 static void frame(rfbClient *c,int x,int y,int w,int h) {
     if(expected==3 && frames<3) {
         int left=frames==2?8:0, width=frames==0?16:8;
@@ -86,6 +112,7 @@ int main(int argc,char **argv) {
     if(argc!=3 && argc!=4) return 2;
     int demand=argc==4 && !strcmp(argv[3],"demand"), demandTested=0;
     int clipboardExchange=argc==4 && !strcmp(argv[3],"clipboard");
+    int richExchange=argc==4 && !strcmp(argv[3],"rich-clipboard");
     int invalidClipboard=argc==4 && !strcmp(argv[3],"invalid-clipboard");
     largeClipboard=argc==4 && !strcmp(argv[3],"large-clipboard");
     earlyClipboard=argc==4 && !strcmp(argv[3],"early-clipboard");
@@ -97,6 +124,7 @@ int main(int argc,char **argv) {
     c->format.bigEndian=FALSE; c->format.redShift=16; c->format.greenShift=8; c->format.blueShift=0;
     c->MallocFrameBuffer=allocate; c->GotFrameBufferUpdate=frame;
     if(clipboardExchange || invalidClipboard || largeClipboard || earlyClipboard) c->GotXCutTextUTF8=clipboard;
+    if(richExchange || invalidClipboard) c->RemoraClipboard=richClipboard;
     c->readTimeout=2; c->connectTimeout=2;
     const uint32_t schemes[]={19,30,2,1}; SetClientAuthSchemes(c,schemes,4);
     int ready=ConnectToRFBServer(c,"127.0.0.1",atoi(argv[1])) && rfbClientInitialise(c);
@@ -110,6 +138,10 @@ int main(int argc,char **argv) {
         for(unsigned i=0;i<64;i++) {
             int n=WaitForMessage(c,100000);
             if(n<0 || (n>0 && !HandleRFBServerMessage(c))) break;
+            if(richExchange && !uploaded && clipboardMessages==1) {
+                if(!uploadRich(c)) return 3;
+                uploaded=1;
+            }
             if(clipboardExchange && !uploaded && clipboardMessages==1) {
                 char text[]="from viewer 🦀";
                 if(!SendClientCutTextUTF8(c,text,sizeof(text)-1) || !SendClientCutTextUTF8(c,NULL,0)) return 3;
@@ -125,6 +157,7 @@ int main(int argc,char **argv) {
         }
     }
     if(clipboardExchange && (clipboardMessages!=4 || clipboardChanges!=4 || !uploaded || c->remoraAppleError)) failures++;
+    if(richExchange && (clipboardMessages!=2 || clipboardChanges!=2 || !uploaded || c->remoraAppleError)) failures++;
     if(invalidClipboard && (clipboardMessages || c->remoraAppleError!=17)) failures++;
     if(largeClipboard && (clipboardMessages!=3 || clipboardChanges!=3 || c->remoraAppleError)) failures++;
     if(earlyClipboard && (clipboardMessages!=1 || c->remoraAppleError)) failures++;

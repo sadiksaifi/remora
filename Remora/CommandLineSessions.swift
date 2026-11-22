@@ -206,7 +206,7 @@ extension CommandLineController {
     }
 
     func handleSession(_ request: ControlRequest) async throws -> ControlValue {
-        let timeout = request.timeout ?? (request.command == "connect" ? 30 : 10)
+        let timeout = request.timeout ?? (request.command == "connect" ? 45 : 10)
         let deadline = ProcessInfo.processInfo.systemUptime + timeout
         switch request.command {
         case "prompt.list":
