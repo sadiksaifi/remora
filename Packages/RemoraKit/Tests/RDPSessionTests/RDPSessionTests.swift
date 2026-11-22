@@ -24,21 +24,27 @@ private final class DesktopSink: FrameSink, @unchecked Sendable {
     init() throws {
         directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
-        let certificate = directory.appendingPathComponent("certificate.pem").path
-        let key = directory.appendingPathComponent("key.pem").path
-        let openssl = Process()
-        openssl.executableURL = URL(fileURLWithPath: "/usr/bin/openssl")
-        openssl.arguments = [
-            "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-sha256", "-days", "1", "-subj", "/CN=localhost",
-            "-keyout", key, "-out", certificate,
-        ]
-        openssl.standardOutput = FileHandle.nullDevice
-        openssl.standardError = FileHandle.nullDevice
-        try openssl.run()
-        openssl.waitUntilExit()
-        try #require(openssl.terminationStatus == 0)
-        server = try #require(rm_test_rdp_server_start(certificate, key))
-        desktop = try MetalDesktop(device: #require(MTLCreateSystemDefaultDevice()))
+        do {
+            desktop = try MetalDesktop(device: #require(MTLCreateSystemDefaultDevice()))
+            let certificate = directory.appendingPathComponent("certificate.pem").path
+            let key = directory.appendingPathComponent("key.pem").path
+            let openssl = Process()
+            openssl.executableURL = URL(fileURLWithPath: "/usr/bin/openssl")
+            openssl.arguments = [
+                "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-sha256", "-days", "1", "-subj", "/CN=localhost",
+                "-keyout", key, "-out", certificate,
+            ]
+            openssl.standardOutput = FileHandle.nullDevice
+            openssl.standardError = FileHandle.nullDevice
+            try openssl.run()
+            openssl.waitUntilExit()
+            try #require(openssl.terminationStatus == 0)
+            // The server starts last, so a failure above leaves no thread or socket behind.
+            server = try #require(rm_test_rdp_server_start(certificate, key))
+        } catch {
+            try? FileManager.default.removeItem(at: directory)
+            throw error
+        }
         session = RDPSession(
             configuration: .init(
                 host: "127.0.0.1", port: rm_test_rdp_server_port(server), username: "synthetic", password: "test-only",
@@ -49,25 +55,34 @@ private final class DesktopSink: FrameSink, @unchecked Sendable {
 
     var refreshes: UInt32 { rm_test_rdp_server_refreshes(server) }
 
-    /// Connects, trusts the test identity, runs `connected`, and returns the terminal reason after the session ends.
+    /// Connects, trusts the test identity, runs `connected` once the server has activated the connection, and
+    /// returns the terminal reason after the session ends. `connected` must end the session.
     func run(_ connected: @escaping @MainActor () async throws -> Void) async throws -> DisconnectReason? {
-        let fallback = Task {
-            try? await Task.sleep(for: .seconds(20))
+        let fallback = Task { [session] () -> Bool in
+            guard (try? await Task.sleep(for: .seconds(20))) != nil else { return false }
             session.disconnect()
+            return true
         }
-        defer { fallback.cancel() }
         var work: Task<Void, Error>?
         var reason: DisconnectReason?
         session.connect()
         for await event in session.events {
             switch event {
             case .trustChallenge(let challenge): challenge.responder.respond(.trust)
-            case .stateChanged(.connected): work = Task { try await connected() }
+            case .stateChanged(.connected):
+                work = Task {
+                    // The client can finish connecting just before the server's activation callback returns.
+                    try #require(try await eventually(within: .seconds(5)) { rm_test_rdp_server_activated(self.server) })
+                    try await connected()
+                }
             case .stateChanged(.disconnected(let terminal)): reason = terminal
             default: break
             }
         }
-        try await work?.value
+        fallback.cancel()
+        let timedOut = await fallback.value
+        try #require(!timedOut, "The session was still open after 20 seconds.")
+        try await #require(work, "The session never connected.").value
         return reason
     }
 
@@ -108,9 +123,6 @@ private final class DesktopSink: FrameSink, @unchecked Sendable {
     var before: UInt32 = 0
     var after: UInt32 = 0
     let reason = try await connection.run {
-        // The client can finish connecting just before the server's activation callback returns.
-        let activated = try await eventually(within: .seconds(5)) { rm_test_rdp_server_activated(connection.server) }
-        #expect(activated)
         // Let any request the connection itself sends arrive first.
         try await Task.sleep(for: .milliseconds(300))
         before = connection.refreshes
@@ -124,12 +136,18 @@ private final class DesktopSink: FrameSink, @unchecked Sendable {
     #expect(reason == .cancelledByUser)
 }
 
-/// The session removes its loss observer when it ends. A later loss sends nothing and does not crash.
+/// The session removes its loss observer before it reports the end. A later loss sends nothing and does not crash.
 @Test @MainActor func aGPULossAfterTheSessionEndsSendsNothing() async throws {
     let connection = try Connection()
     defer { connection.close() }
-    let reason = try await connection.run { connection.session.disconnect() }
+    var observedWhileConnected = 0
+    let reason = try await connection.run {
+        observedWhileConnected = connection.desktop.lossObserverCount
+        connection.session.disconnect()
+    }
     #expect(reason == .cancelledByUser)
+    #expect(observedWhileConnected == 1)
+    #expect(connection.desktop.lossObserverCount == 0)
     let ended = try await eventually(within: .seconds(5)) { rm_test_rdp_server_ended(connection.server) }
     #expect(ended)
     let before = connection.refreshes

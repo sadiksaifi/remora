@@ -49,6 +49,7 @@ public final class MetalDesktop: CaptureSource, Sendable {
     }
 
     public func removeLossObserver(_ id: UUID) { _ = state.withLock { $0.lossObservers.removeValue(forKey: id) } }
+    var lossObserverCount: Int { state.withLock { $0.lossObservers.count } }
 
     /// Only the renderer's original dirty-rectangle copies. No capture work unless an observer is installed.
     @discardableResult

@@ -24,6 +24,10 @@ struct RMTestRDPServer {
     /* The pipe wakes the accept wait. The event wakes the connection loop. */
     int wake[2];
     HANDLE stop;
+    /* A duplicate of the accepted socket. Stop shuts it down to end a read that FreeRDP blocks in. */
+    pthread_mutex_t lock;
+    bool stopping;
+    int connection;
     pthread_t thread;
     char *certificate, *key;
     atomic_uint refreshes;
@@ -109,8 +113,17 @@ static void *serve(void *argument) {
     struct pollfd waits[2] = { { s->listener, POLLIN, 0 }, { s->wake[0], POLLIN, 0 } };
     if (poll(waits, 2, -1) > 0 && (waits[0].revents & POLLIN) && !(waits[1].revents & POLLIN)) {
         const int connection = accept(s->listener, NULL, NULL);
-        if (connection >= 0)
-            serve_connection(s, connection);
+        if (connection >= 0) {
+            pthread_mutex_lock(&s->lock);
+            const bool stopping = s->stopping;
+            if (!stopping)
+                s->connection = dup(connection);
+            pthread_mutex_unlock(&s->lock);
+            if (stopping)
+                close(connection);
+            else
+                serve_connection(s, connection);
+        }
     }
     atomic_store(&s->ended, true);
     return NULL;
@@ -122,8 +135,11 @@ static void release(RMTestRDPServer *s) {
     for (int i = 0; i < 2; i++)
         if (s->wake[i] >= 0)
             close(s->wake[i]);
+    if (s->connection >= 0)
+        close(s->connection);
     if (s->stop)
         (void)CloseHandle(s->stop);
+    pthread_mutex_destroy(&s->lock);
     free(s->certificate);
     free(s->key);
     free(s);
@@ -135,7 +151,8 @@ RMTestRDPServer *rm_test_rdp_server_start(const char *certificate_path, const ch
     RMTestRDPServer *s = calloc(1, sizeof(*s));
     if (!s)
         return NULL;
-    s->listener = s->wake[0] = s->wake[1] = -1;
+    s->listener = s->wake[0] = s->wake[1] = s->connection = -1;
+    pthread_mutex_init(&s->lock, NULL);
     s->certificate = strdup(certificate_path);
     s->key = strdup(key_path);
     s->stop = CreateEvent(NULL, TRUE, FALSE, NULL);
@@ -164,6 +181,11 @@ void rm_test_rdp_server_stop(RMTestRDPServer *s) {
         return;
     (void)write(s->wake[1], "x", 1);
     (void)SetEvent(s->stop);
+    pthread_mutex_lock(&s->lock);
+    s->stopping = true;
+    if (s->connection >= 0)
+        (void)shutdown(s->connection, SHUT_RDWR);
+    pthread_mutex_unlock(&s->lock);
     pthread_join(s->thread, NULL);
     release(s);
 }
