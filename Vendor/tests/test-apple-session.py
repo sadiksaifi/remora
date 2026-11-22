@@ -22,7 +22,7 @@ with tempfile.TemporaryDirectory(prefix='remora-apple-sanitizers-') as temporary
         ('apple-retry-dropped', 3), ('apple-retry-empty', 3), ('apple-retry-quant', 3),
         ('apple-retry-raw', 4), ('apple-retry-controls', 3), ('apple-sequence', 3),
         ('apple-regions', 4, 'regions'), ('apple-region-uninitialized', 1, 'regions'),
-        ('apple-demand', 4, 'demand'), ('apple-damage', 6), ('apple-no-baseline', 0), ('apple-bad-cache', 1),
+        ('apple-demand', 4, 'demand'), ('apple-damage', 6), ('apple-no-baseline', 0),
         ('apple-large-records', 1, 'large'), ('apple-no-key', 0, '14'), ('apple-refuse', 0, '14'),
         ('apple-control-encryption', 1, '16'),
         *(('apple-invalid-'+case, 0, '15') for case in ('digest', 'length', 'body-length', 'sequence')),

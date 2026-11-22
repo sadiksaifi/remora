@@ -43,7 +43,7 @@ wait_for = ["build"]
 run = 'swift test --package-path Packages/RemoraKit ${CI:+--no-parallel} ${usage_filter:+--filter "$usage_filter"}'
 
 [tasks."test:mvs"]
-description = "Run the Apple MVS decoder tests under ASan and UBSan, including the golden output hash."
+description = "Run the Apple MVS decoder tests under ASan and UBSan, including the golden output hash, then compare the decoder with Screen Sharing's own."
 run = "Vendor/tests/test-apple-mvs.sh"
 
 [tasks.format]
