@@ -441,6 +441,17 @@ def apple_clipboard(outcome, client_message, send, report):
         reply(text_item(b'x' * (1024 * 1024 + 1)))
 
 
+def stop_reading(connection, report, pending=0):
+    """Read nothing while the client's write deadline passes, then drain to the client's close."""
+    import time
+    time.sleep(19)
+    connection.settimeout(5)
+    drained = pending
+    while part := connection.recv(65536): drained += len(part)
+    report['stalled_bytes'] = drained
+    report['closed_after_stall'] = True
+
+
 def apple_frames(outcome, exact, send, report, connection):
     import select
     import time
@@ -502,6 +513,8 @@ def apple_frames(outcome, exact, send, report, connection):
             if archive != expected: raise ValueError('clipboard upload archive')
             report['clipboard_uploads'].append(wanted.decode())
             report['clipboard_upload_compressed'] = max(report.get('clipboard_upload_compressed', 0), compressed)
+        elif kind == 0x1f and outcome == 'apple-write-stall':
+            report['stalled_upload_declared'] = struct.unpack('>BBBIII', exact(15))[5]
         elif kind == 3:
             request = struct.unpack('>BHHHH', exact(9))
             if request != (0,0,0,16,8): raise ValueError('full non-incremental request required')
@@ -564,6 +577,10 @@ def apple_frames(outcome, exact, send, report, connection):
         report['baseline_retry_ms'] = round((time.monotonic()-began)*1000)
         if outcome == 'apple-retry-hidden': time.sleep(0.1)
     update(full)
+    if outcome == 'apple-write-stall':
+        while client_message() != 0x1f: pass
+        stop_reading(connection, report, len(exact.__self__.pending))
+        return
     if outcome == 'apple-hidden-baseline':
         for _ in range(64):
             if client_message()==3: break
@@ -650,7 +667,7 @@ def serve_once(offer_mode, outcome, port):
     withheld = outcome.endswith(('init-withheld', 'init-withheld-once'))
     withheld_public = None
     stalled = outcome.startswith('apple-init-stalled-')
-    deadline = time.monotonic() + (30 if outcome == 'apple-slow-reject' else 16 if withheld or stalled or 'display-timeout' in outcome or outcome == 'apple-retry-hidden' else 10)
+    deadline = time.monotonic() + (30 if outcome in ('apple-slow-reject', 'apple-write-stall', 'runtime-write-stall') else 16 if withheld or stalled or 'display-timeout' in outcome or outcome == 'apple-retry-hidden' else 10)
     offers = {
         'apple-mixed': OFFERS,
         'ard-only': [30],
@@ -665,6 +682,9 @@ def serve_once(offer_mode, outcome, port):
     try:
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
             listener.bind(('127.0.0.1', port))
+            if outcome.endswith('write-stall'):
+                # A fixed receive buffer turns off autotuning, which could otherwise absorb the whole upload.
+                listener.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 65536)
             listener.listen(1)
             print(json.dumps({'loopback_port': listener.getsockname()[1]}), flush=True)
             for connection in accepted(listener, report, deadline):
@@ -941,6 +961,15 @@ def serve_once(offer_mode, outcome, port):
                                 report['subscribed_before_baseline'] = True
                                 send(bytes([0x51])+display_info(16, 16))
                             send(struct.pack('>BBHHHHHi', 0, 0, 1, 0, 0, 16, 16, 0) + bytes(16 * 16 * 4))
+                            if outcome == 'runtime-write-stall':
+                                while (kind := exact(1)[0]) != 6:
+                                    if kind == 3: exact(9)
+                                    elif kind == 0: exact(19)
+                                    elif kind == 2:
+                                        head = exact(3); exact(int.from_bytes(head[1:], 'big') * 4)
+                                    else: raise ValueError('unexpected message before the upload')
+                                report['stalled_upload_declared'] = int.from_bytes(exact(7)[3:], 'big')
+                                stop_reading(connection, report)
                             if outcome == 'runtime-success':
                                 while True:
                                     kind=exact(1)[0]

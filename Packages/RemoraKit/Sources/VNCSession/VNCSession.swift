@@ -390,6 +390,15 @@ public final class VNCSession: AgentInputSession, @unchecked Sendable {
                     let address = String(cString: rm_vnc_failure_address(handle))
                     if !address.isEmpty { failureAddress = address }
                     logRuntimeFailure(handle)
+                    // A write that missed its deadline is the cause, whichever caller reported the failed write.
+                    if rm_vnc_write_timed_out(handle) {
+                        state.lock.withLock {
+                            if state.reason != .cancelledByUser {
+                                state.reason = .connectionTimedOut
+                                state.writeTimedOut = true
+                            }
+                        }
+                    }
                     rm_vnc_free(handle)
                 }
                 finish(failureAddress: failureAddress)
@@ -554,14 +563,18 @@ public final class VNCSession: AgentInputSession, @unchecked Sendable {
     }
 
     private func finish(failureAddress: String) {
-        let original = state.lock.withLock {
+        let (original, writeTimedOut) = state.lock.withLock {
             state.networkDeadline = nil
             state.watchdog?.cancel()
-            return state.reason
+            return (state.reason, state.writeTimedOut)
         }
-        let reason = failureDiagnosis.diagnose(
-            original, host: failureAddress, port: configuration.port,
-            isCancelled: { self.state.lock.withLock { self.state.reason == .cancelledByUser } })
+        // A write timeout happened on a connected transport, so the Local Network probe has nothing to add.
+        let reason =
+            writeTimedOut
+            ? original
+            : failureDiagnosis.diagnose(
+                original, host: failureAddress, port: configuration.port,
+                isCancelled: { self.state.lock.withLock { self.state.reason == .cancelledByUser } })
         state.lock.withLock {
             guard !state.ended else { return }
             state.ended = true
@@ -800,6 +813,8 @@ extension VNCSession {
         var started = false, ended = false, stopping = false, connected = false, resizeSupported = false
         var handle: OpaquePointer?
         var reason: DisconnectReason?
+        /// A write missed its deadline on an established transport.
+        var writeTimedOut = false
         var commands: [Command] = []
         var receipts: [Receipt] = []
         var clipboard: [RemoteClipboard.Flavor]?, resize: DesktopSize?, refresh = false

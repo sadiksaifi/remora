@@ -36,7 +36,7 @@
  typedef struct _rfbClient {
  	uint8_t* frameBuffer;
  	int width, height;
-@@ -589,7 +602,29 @@
+@@ -589,7 +602,43 @@
          uint16_t remoraLastResizeWidth, remoraLastResizeHeight;
          void (*RemoraDesktopSize)(struct _rfbClient*, rfbBool requested);
          void (*RemoraResizeReply)(struct _rfbClient*, unsigned int result, uint16_t width, uint16_t height);
@@ -47,6 +47,10 @@
 +  void *remoraAppleState;
 +  struct rfbAppleRecords *remoraRecords;
 +  int remoraAppleError;
++  /* One monotonic deadline covers each whole message write. After any failed write the
++   * transport is shut down, so no later bytes follow a partly sent message or record. */
++  double remoraWriteDeadline;
++  rfbBool remoraWriteClosed, remoraWriteTimedOut;
 +  rfbRemoraDisplay remoraDisplays[64];
 +  uint32_t remoraDisplayCount, remoraDisplayID;
 +  /* Borrowed until return. -1 pending, 0 unavailable, positive count for one item. */
@@ -63,6 +67,16 @@
 +rfbBool rfbRemoraDisplayReady(rfbClient *);
 +rfbBool rfbRemoraDisplayRaw(rfbClient *, int x, int y, int w, int h);
 +rfbBool rfbRemoraAppleRetryBaseline(rfbClient *);
++/* Starts one write deadline for a message of this many bytes that LibVNCClient writes in parts.
++ * Every WriteToRFBServer call until rfbRemoraEndMessage shares it. */
++void rfbRemoraBeginMessage(rfbClient *, size_t bytes);
++void rfbRemoraEndMessage(rfbClient *);
++/* Writes the two parts of one message under one deadline. */
++rfbBool rfbRemoraWriteParts(rfbClient *, const char *, unsigned int, const char *, unsigned int);
++/* FALSE, with the timeout recorded, once the current write deadline has passed. */
++rfbBool rfbRemoraWriteInTime(rfbClient *);
++/* Waits for the socket until the current write deadline. FALSE records a timeout or wait failure. */
++rfbBool rfbRemoraWaitWritable(rfbClient *, rfbBool wantRead);
  
  /* A first failure freezes its phase, last completed stage, and numeric errors. */
  void rfbRemoraRuntimeStage(rfbClient*, uint32_t stage);
@@ -93,7 +107,44 @@
      uint8_t selected = 0;
      rfbBool unknown = FALSE, vnc = FALSE, none = FALSE, ard = FALSE, apple = FALSE;
      for (unsigned i = 0; i < count; i++) {
-@@ -823,7 +837,7 @@
+@@ -649,30 +663,13 @@
+   ulensw = rfbClientSwap32IfLE(ulen);
+   plen = (cred->userCredential.password ? strlen(cred->userCredential.password) : 0);
+   plensw = rfbClientSwap32IfLE(plen);
+-  if (!WriteToRFBServer(client, (char *)&ulensw, 4) ||
+-      !WriteToRFBServer(client, (char *)&plensw, 4))
+-  {
+-    FreeUserCredential(cred);
+-    return FALSE;
+-  }
+-  if (ulen > 0)
+-  {
+-    if (!WriteToRFBServer(client, cred->userCredential.username, ulen))
+-    {
+-      FreeUserCredential(cred);
+-      return FALSE;
+-    }
+-  }
+-  if (plen > 0)
+-  {
+-    if (!WriteToRFBServer(client, cred->userCredential.password, plen))
+-    {
+-      FreeUserCredential(cred);
+-      return FALSE;
+-    }
+-  }
+-
++  /* The lengths and both credentials are one message under one write deadline. */
++  rfbRemoraBeginMessage(client, 8 + (size_t)ulen + plen);
++  rfbBool sent = rfbRemoraWriteParts(client, (char *)&ulensw, 4, (char *)&plensw, 4) &&
++      rfbRemoraWriteParts(client, cred->userCredential.username, ulen, cred->userCredential.password, plen);
++  rfbRemoraEndMessage(client);
+   FreeUserCredential(cred);
++  if (!sent) return FALSE;
+ 
+   /* Handle the SecurityResult message */
+   if (!rfbHandleAuthResult(client)) return FALSE;
+@@ -823,7 +820,7 @@
  HandleARDAuth(rfbClient *client)
  {
    uint8_t gen[2], len[2];
@@ -102,7 +153,7 @@
    uint8_t *mod = NULL, *resp = NULL, *priv = NULL, *pub = NULL, *key = NULL, *shared = NULL;
    uint8_t userpass[128], ciphertext[128];
    int ciphertext_len;
-@@ -893,7 +907,7 @@
+@@ -893,7 +890,7 @@
       This 128-bit (16-byte) value will be used as the AES key. */
    remora_crypto_begin(client, RFB_REMORA_ARD_HASH);
    shared = malloc(MD5_HASH_SIZE);
@@ -111,7 +162,18 @@
        remora_crypto_failed(client);
        rfbClientErr("HandleARDAuth: hashing shared key failed\n");
        goto out;
-@@ -957,6 +971,10 @@
+@@ -943,9 +940,7 @@
+ 
+   /* Step 7: Write the ciphertext from step 6 to the stream.
+      Write the generated DH public key to the stream. */
+-  if (!WriteToRFBServer(client, (char *)ciphertext, sizeof(ciphertext)))
+-      goto out;
+-  if (!WriteToRFBServer(client, (char *)pub, keylen))
++  if (!rfbRemoraWriteParts(client, (char *)ciphertext, sizeof(ciphertext), (char *)pub, keylen))
+       goto out;
+ 
+   rfbRemoraDiagnosticComplete(client, RFB_REMORA_ARD_WRITE);
+@@ -957,6 +952,10 @@
    result = TRUE;
  
   out:
@@ -122,7 +184,7 @@
    if (cred)
      FreeUserCredential(cred);
  
-@@ -1006,6 +1024,9 @@
+@@ -1006,6 +1005,9 @@
  rfbBool
  InitialiseRFBConnection(rfbClient* client)
  {
@@ -132,7 +194,7 @@
    rfbProtocolVersionMsg pv;
    int major,minor;
    uint32_t authScheme;
-@@ -1024,6 +1045,11 @@
+@@ -1024,6 +1026,11 @@
    errorMessageOnReadFailure = TRUE;
  
    pv[sz_rfbProtocolVersionMsg] = 0;
@@ -144,7 +206,7 @@
  
    if (sscanf(pv,rfbProtocolVersionFormat,&major,&minor) != 2) {
      rfbRemoraDiagnosticFail(client, RFB_REMORA_PROTOCOL, 0, 0);
-@@ -1077,11 +1103,12 @@
+@@ -1077,11 +1084,12 @@
  	  major, minor, rfbProtocolMajorVersion, rfbProtocolMinorVersion);
  
    sprintf(pv,rfbProtocolVersionFormat,client->major,client->minor);
@@ -158,7 +220,7 @@
    rfbRemoraDiagnosticComplete(client, RFB_REMORA_VERSION);
  
  
-@@ -1147,6 +1174,10 @@
+@@ -1147,6 +1155,10 @@
      if (!HandleARDAuth(client)) return FALSE;
      break;
  
@@ -169,7 +231,7 @@
    case rfbTLS:
      if (!HandleAnonTLSAuth(client)) return FALSE;
      /* After the TLS session is established, sub auth types are expected.
-@@ -1264,6 +1295,7 @@
+@@ -1264,6 +1276,7 @@
  
    rfbRemoraDiagnosticBegin(client, RFB_REMORA_CLIENT_INIT);
    ci.shared = (client->appData.shareDesktop ? 1 : 0);
@@ -177,7 +239,7 @@
  
    if (!WriteToRFBServer(client,  (char *)&ci, sz_rfbClientInitMsg)) return FALSE;
  
-@@ -1345,11 +1377,16 @@
+@@ -1345,11 +1358,16 @@
      return FALSE;
  
  
@@ -194,7 +256,7 @@
  
    if (client->appData.encodingsString) {
      const char *encStr = client->appData.encodingsString;
-@@ -1562,6 +1599,7 @@
+@@ -1562,6 +1580,7 @@
  rfbBool
  SendFramebufferUpdateRequest(rfbClient* client, int x, int y, int w, int h, rfbBool incremental)
  {
@@ -202,7 +264,7 @@
    rfbRemoraRuntimeStage(client, RFB_REMORA_WRITE);
    rfbFramebufferUpdateRequestMsg fur;
  
-@@ -1741,6 +1779,7 @@
+@@ -1741,6 +1760,7 @@
  rfbBool
  SendPointerEvent(rfbClient* client,int x, int y, int buttonMask)
  {
@@ -210,7 +272,17 @@
    rfbPointerEventMsg pe;
  
    if (!SupportsClient2Server(client, rfbPointerEvent)) return TRUE;
-@@ -1841,6 +1880,11 @@
+@@ -1816,8 +1836,7 @@
+     screen.width = rfbClientSwap16IfLE(width);
+     screen.height = rfbClientSwap16IfLE(height);
+ 
+-    if (!WriteToRFBServer(client, (char *)&sdm, sz_rfbSetDesktopSizeMsg)) return FALSE;
+-    if (!WriteToRFBServer(client, (char *)&screen, sz_rfbExtDesktopScreen)) return FALSE;
++    if (!rfbRemoraWriteParts(client, (char *)&sdm, sz_rfbSetDesktopSizeMsg, (char *)&screen, sz_rfbExtDesktopScreen)) return FALSE;
+ 
+     client->remoraLastResizeWidth = width;
+     client->remoraLastResizeHeight = height;
+@@ -1841,6 +1860,11 @@
  rfbBool
  SendKeyEvent(rfbClient* client, uint32_t key, rfbBool down)
  {
@@ -222,7 +294,36 @@
    rfbKeyEventMsg ke;
  
    if (!SupportsClient2Server(client, rfbKeyEvent)) return TRUE;
-@@ -2009,6 +2053,7 @@
+@@ -1895,9 +1919,7 @@
+                                                 | rfbExtendedClipboard_Text); /*text and notify*/
+   cct.type = rfbClientCutText;
+   cct.length = rfbClientSwap32IfLE(-((uint32_t)sizeof(be_flags)));/*flag*/
+-  rfbBool ret = WriteToRFBServer(client, (char *)&cct, sz_rfbClientCutTextMsg)
+-                && WriteToRFBServer(client, (char *)&be_flags, sizeof(be_flags));
+-  return ret;
++  return rfbRemoraWriteParts(client, (char *)&cct, sz_rfbClientCutTextMsg, (char *)&be_flags, sizeof(be_flags));
+ }
+ 
+ /**
+@@ -1980,8 +2002,7 @@
+   cct.type = rfbClientCutText;
+   cct.length = rfbClientSwap32IfLE(-(sizeof(be_flags) + csz));/*flag, compressed*/
+   rfbBool ret = sendExtClientCutTextNotify(client)
+-                && WriteToRFBServer(client, (char *)&cct, sz_rfbClientCutTextMsg)
+-                && WriteToRFBServer(client, (char *)cbuf, sizeof(be_flags) + csz);
++                && rfbRemoraWriteParts(client, (char *)&cct, sz_rfbClientCutTextMsg, (char *)cbuf, sizeof(be_flags) + csz);
+   free(buf);
+   free(cbuf);
+   return ret;
+@@ -2002,13 +2023,13 @@
+   memset(&cct, 0, sizeof(cct));
+   cct.type = rfbClientCutText;
+   cct.length = rfbClientSwap32IfLE(len);
+-  return  (WriteToRFBServer(client, (char *)&cct, sz_rfbClientCutTextMsg) &&
+-	   WriteToRFBServer(client, str, len));
++  return rfbRemoraWriteParts(client, (char *)&cct, sz_rfbClientCutTextMsg, str, len);
+ }
+ 
  rfbBool
  SendClientCutTextUTF8(rfbClient* client, char *str, int len)
  {
@@ -230,7 +331,7 @@
  #ifdef LIBVNCSERVER_HAVE_LIBZ
      return client->extendedClipboardServerCapabilities && sendExtClientCutTextProvide(client, str, len);
  #else
-@@ -2153,6 +2198,10 @@
+@@ -2153,6 +2174,10 @@
  
    if (!client->remoraRuntime.failure) client->remoraRuntime.messageType = msg.type;
    rfbRemoraRuntimeStage(client, RFB_REMORA_MESSAGE);
@@ -241,7 +342,7 @@
    switch (msg.type) {
  
    case rfbSetColourMapEntries:
-@@ -2202,6 +2251,7 @@
+@@ -2202,6 +2227,7 @@
        return FALSE;
  
      msg.fu.nRects = rfbClientSwap16IfLE(msg.fu.nRects);
@@ -249,7 +350,7 @@
      if (client->remoraPerf.enabled) {
        client->remoraPerf.declaredRects = msg.fu.nRects;
        client->remoraPerf.header = client->RemoraPerformanceClock();
-@@ -2238,6 +2288,11 @@
+@@ -2238,6 +2264,11 @@
          client->remoraRuntime.x = rect.r.x; client->remoraRuntime.y = rect.r.y;
          client->remoraRuntime.width = rect.r.w; client->remoraRuntime.height = rect.r.h;
        }
@@ -261,7 +362,7 @@
        if (rect.encoding == rfbEncodingLastRect) break;
        rfbRemoraRuntimeStage(client, RFB_REMORA_DECODE);
  
-@@ -2314,6 +2369,14 @@
+@@ -2314,6 +2345,14 @@
            }
          }
  
@@ -276,7 +377,7 @@
          /* Status 4 means forwarded, not rejected. It carries requested geometry,
           * not confirmed framebuffer dimensions, and preserves the capability. */
          if (!forwardedResize || screens != 1 || invalidScreen)
-@@ -2730,13 +2793,18 @@
+@@ -2730,13 +2769,18 @@
        /* Now we may discard "soft cursor locks". */
        client->SoftCursorUnlockScreen(client);
  
@@ -299,7 +400,14 @@
  
 --- a/src/libvncclient/sockets.c
 +++ b/src/libvncclient/sockets.c
-@@ -42,6 +42,8 @@
+@@ -36,12 +36,15 @@
+ #include <errno.h>
+ #include <time.h>
+ #include <fcntl.h>
++#include <poll.h>
+ #include <assert.h>
+ #include <rfb/rfbclient.h>
+ #include "sockets.h"
  #include "tls.h"
  #include "sasl.h"
  
@@ -308,7 +416,7 @@
  void PrintInHex(char *buf, int len);
  
  rfbBool errorMessageOnReadFailure = TRUE;
-@@ -86,8 +88,22 @@
+@@ -86,8 +89,22 @@
  rfbBool
  ReadFromRFBServer(rfbClient* client, char *out, unsigned int n)
  {
@@ -332,7 +440,7 @@
    rfbRemoraRuntimeOperation(client, RFB_REMORA_READ_OP);
    double readDeadline;
  #undef DEBUG_READ_EXACT
-@@ -144,18 +160,21 @@
+@@ -144,18 +161,21 @@
      return (fread(out,1,n,rec->file) != n ? FALSE : TRUE);
    }
    
@@ -356,7 +464,7 @@
    memcpy(out, client->bufoutptr, client->buffered);
  
    out += client->buffered;
-@@ -189,7 +208,7 @@
+@@ -189,7 +209,7 @@
        if (i <= 0) {
  	if (i < 0) {
  	  if (errno == EWOULDBLOCK || errno == EAGAIN) {
@@ -365,7 +473,7 @@
  		monotonic_seconds() >= readDeadline)
  	    {
  	      rfbRemoraDiagnosticFail(client, RFB_REMORA_TIMEOUT, 0, 0);
-@@ -243,7 +262,7 @@
+@@ -243,7 +263,7 @@
  	  errno=WSAGetLastError();
  #endif
  	  if (errno == EWOULDBLOCK || errno == EAGAIN) {
@@ -374,7 +482,7 @@
  		monotonic_seconds() >= readDeadline)
  	    {
  		rfbRemoraDiagnosticFail(client, RFB_REMORA_TIMEOUT, 0, 0);
-@@ -273,7 +292,6 @@
+@@ -273,7 +293,6 @@
      }
    }
  
@@ -382,22 +490,146 @@
  #ifdef DEBUG_READ_EXACT
  hexdump:
    { unsigned int ii;
-@@ -294,6 +312,14 @@
+@@ -291,10 +310,105 @@
+  * Write an exact number of bytes, and don't return until you've sent them.
+  */
+ 
++static rfbBool write_wire(rfbClient* client, const char *buf, unsigned int n);
++
++/* A whole message gets a fixed allowance plus its size at 1 Mbit/s, so a
++ * stalled peer releases the worker even during an 8 MiB clipboard upload. */
++void rfbRemoraBeginMessage(rfbClient* client, size_t bytes)
++{
++  client->remoraWriteDeadline = monotonic_seconds() + 10 + bytes / 131072.0;
++}
++
++void rfbRemoraEndMessage(rfbClient* client)
++{
++  client->remoraWriteDeadline = 0;
++}
++
++/* Stops all later writes and wakes any read, so the session ends at the first failure. */
++static rfbBool close_writes(rfbClient* client)
++{
++  client->remoraWriteClosed = TRUE;
++  if (client->sock != RFB_INVALID_SOCKET) shutdown(client->sock, SHUT_RDWR);
++  return FALSE;
++}
++
  rfbBool
  WriteToRFBServer(rfbClient* client, const char *buf, unsigned int n)
  {
-+  if (client->remoraAppleError) return FALSE;
-+  if (client->remoraRecords) return rfbRemoraWriteRecords(client, buf, n);
-+  return rfbRemoraWriteWire(client, buf, n);
+-  fd_set fds;
++  rfbBool ok, owned = !client->remoraWriteDeadline;
++  if (client->remoraAppleError || client->remoraWriteClosed) return FALSE;
++  if (owned) rfbRemoraBeginMessage(client, n);
++  ok = client->remoraRecords ? rfbRemoraWriteRecords(client, buf, n) : rfbRemoraWriteWire(client, buf, n);
++  if (owned) rfbRemoraEndMessage(client);
++  return ok;
++}
++
++rfbBool
++rfbRemoraWriteParts(rfbClient* client, const char *first, unsigned int firstLength, const char *second, unsigned int secondLength)
++{
++  rfbBool ok, owned = !client->remoraWriteDeadline;
++  if (owned) rfbRemoraBeginMessage(client, (size_t)firstLength + secondLength);
++  /* An empty part is skipped, as the TLS writer treats zero bytes as a failure. */
++  ok = (!firstLength || WriteToRFBServer(client, first, firstLength)) &&
++      (!secondLength || WriteToRFBServer(client, second, secondLength));
++  if (owned) rfbRemoraEndMessage(client);
++  return ok;
++}
++
++/* Seconds left before the write deadline. At or after it, records the timeout and returns 0. */
++static double write_remaining(rfbClient* client)
++{
++  double remaining = client->remoraWriteDeadline - monotonic_seconds();
++  if (remaining > 0) return remaining;
++  client->remoraWriteTimedOut = TRUE;
++  rfbRemoraDiagnosticFail(client, RFB_REMORA_TIMEOUT, ETIMEDOUT, 0);
++  rfbClientErr("write timed out\n");
++  return 0;
++}
++
++rfbBool
++rfbRemoraWriteInTime(rfbClient* client)
++{
++  return write_remaining(client) > 0;
++}
++
++rfbBool
++rfbRemoraWaitWritable(rfbClient* client, rfbBool wantRead)
++{
++  struct pollfd fd = { client->sock, wantRead ? POLLIN : POLLOUT, 0 };
++  for (;;) {
++    if (client->sock == RFB_INVALID_SOCKET) {
++      rfbRemoraDiagnosticFail(client, RFB_REMORA_IO, EBADF, 0);
++      return FALSE;
++    }
++    /* One clock sample, so poll never gets a negative timeout, which waits forever. */
++    double remaining = write_remaining(client);
++    if (remaining <= 0) return FALSE;
++    int ready = poll(&fd, 1, (int)(remaining * 1000) + 1);
++    if (ready > 0) return TRUE;
++    if (ready < 0 && errno != EINTR) {
++      rfbRemoraDiagnosticFail(client, RFB_REMORA_IO, errno, 0);
++      return FALSE;
++    }
++  }
 +}
 +
 +rfbBool
 +rfbRemoraWriteWire(rfbClient* client, const char *buf, unsigned int n)
 +{
-   fd_set fds;
++  rfbBool ok;
++  /* Clear-text controls before encrypted records arrive here outside WriteToRFBServer. */
++  rfbBool owned = !client->remoraWriteDeadline;
++  if (client->remoraWriteClosed) return FALSE;
++  if (owned) rfbRemoraBeginMessage(client, n);
++  ok = write_wire(client, buf, n);
++  if (owned) rfbRemoraEndMessage(client);
++  return ok ? TRUE : close_writes(client);
++}
++
++static rfbBool
++write_wire(rfbClient* client, const char *buf, unsigned int n)
++{
    rfbRemoraRuntimeOperation(client, RFB_REMORA_WRITE_OP);
    int i = 0;
-@@ -914,7 +940,7 @@
+   int j;
+@@ -331,6 +445,8 @@
+ #endif /* LIBVNCSERVER_HAVE_SASL */
+ 
+   while (i < n) {
++    /* A wakeup after the deadline must not send the rest of the message. */
++    if (!rfbRemoraWriteInTime(client)) return FALSE;
+     j = write(client->sock, obuf + i, (n - i));
+     if (j <= 0) {
+       if (j < 0) {
+@@ -342,21 +458,7 @@
+ 		errno == ENOENT ||
+ #endif
+ 		errno == EAGAIN) {
+-          if(client->sock == RFB_INVALID_SOCKET) {
+-              errno = EBADF;
+-              rfbRemoraDiagnosticFail(client, RFB_REMORA_IO, errno, 0);
+-              rfbClientErr("socket invalid\n");
+-              return FALSE;
+-          }
+-
+-	  FD_ZERO(&fds);
+-	  FD_SET(client->sock,&fds);
+-
+-	  if (select(client->sock+1, NULL, &fds, NULL, NULL) <= 0) {
+-	    rfbRemoraDiagnosticFail(client, RFB_REMORA_IO, errno, 0);
+-              rfbClientErr("select\n");
+-	    return FALSE;
+-	  }
++	  if (!rfbRemoraWaitWritable(client, FALSE)) return FALSE;
+ 	  j = 0;
+ 	} else {
+ 	  rfbRemoraDiagnosticFail(client, RFB_REMORA_IO, errno, 0);
+@@ -914,7 +1016,7 @@
      return 1;
  
    /* Check if we have buffered data available */
@@ -406,6 +638,57 @@
      return 1;
    }
  
+--- a/src/libvncclient/tls_openssl.c
++++ b/src/libvncclient/tls_openssl.c
+@@ -335,6 +335,9 @@
+   }
+ 
+   SSL_CTX_set_min_proto_version(ssl_ctx, TLS1_2_VERSION);
++  /* A TLS 1.2 renegotiation inside SSL_write could verify a new certificate and wait for a trust
++   * answer past the write deadline. Refuse renegotiation. */
++  SSL_CTX_set_options(ssl_ctx, SSL_OP_NO_RENEGOTIATION);
+   param = X509_VERIFY_PARAM_new();
+ 
+   /* Setup verification if not anonymous */
+@@ -655,8 +658,7 @@
+     return FALSE;
+   }
+ 
+-  if (!WriteToRFBServer(client, (char *)&major, 1) ||
+-      !WriteToRFBServer(client, (char *)&minor, 1) ||
++  if (!rfbRemoraWriteParts(client, (char *)&major, 1, (char *)&minor, 1) ||
+       !ReadFromRFBServer(client, (char *)&status, 1))
+   {
+     return FALSE;
+@@ -782,20 +784,24 @@
+ 
+   while (offset < n)
+   {
++    if (!rfbRemoraWriteInTime(client)) return -1;
+     LOCK(client->tlsRwMutex);
+     if (client->remoraDiagnostic.phase == RFB_REMORA_READY) ERR_clear_error();
+     ret = SSL_write (client->tlsSession, buf + offset, (size_t)(n-offset));
+     savedErrno = errno;
+ 
+-    if (ret < 0)
++    if (ret <= 0)
+       ssl_error = SSL_get_error (client->tlsSession, ret);
+     UNLOCK(client->tlsRwMutex);
+ 
+-    if (ret == 0) continue;
+-    if (ret < 0)
++    if (ret <= 0)
+     {
+       errno = ssl_error_to_errno(ssl_error);
+-      if (errno == EAGAIN || errno == EWOULDBLOCK) continue;
++      /* Wait for the socket instead of spinning, and stop at the message's write deadline. */
++      if (errno == EAGAIN || errno == EWOULDBLOCK) {
++        if (rfbRemoraWaitWritable(client, ssl_error == SSL_ERROR_WANT_READ)) continue;
++        return -1;
++      }
+       if (client->remoraDiagnostic.phase == RFB_REMORA_READY && !client->remoraRuntime.failure)
+         client->remoraRuntime.sslError = ssl_error;
+       rfbRemoraRuntimeFail(client, RFB_REMORA_IO, ssl_error == SSL_ERROR_SYSCALL ? savedErrno : errno, ERR_peek_last_error());
 --- a/src/libvncclient/vncviewer.c
 +++ b/src/libvncclient/vncviewer.c
 @@ -1,3 +1,5 @@

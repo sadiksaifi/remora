@@ -634,6 +634,7 @@ int rm_vnc_error(RMVNC *s) {
     if (s->error && s->error!=6) return s->error;
     return s->client && s->client->remoraAppleError ? s->client->remoraAppleError : s->error;
 }
+bool rm_vnc_write_timed_out(RMVNC *s) { return s->client && s->client->remoraWriteTimedOut; }
 const char *rm_vnc_security(RMVNC *s) {
     if (!s->client) return "unnegotiated";
     switch(s->client->authScheme) {
