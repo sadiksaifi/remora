@@ -1,5 +1,5 @@
 /*
- * Remora Apple MVS decoder. Experimental production profile.
+ * Remora Apple MVS decoder.
  *
  * C port of noVNC-ARD's MVS (encoding 1011) decoder. Provenance, licence and
  * the differences from the JavaScript decoder are in mvs.h.

@@ -83,9 +83,11 @@ static apple_mvs *session_new(uint32_t width, uint32_t height) {
     return m;
 }
 
-/* The framework build the oracle was verified on, and the macOS build that ships it. A skip there is a failure. */
-#define VERIFIED_UUID "EC0B2C20-F816-3FCE-822D-F9403C09EB50"
-#define VERIFIED_MACOS_BUILD "26A434"
+/* Framework builds the oracle was verified on, and the macOS builds that ship them. A skip there is a failure. */
+static const struct { const char *uuid, *macos; } verified[] = {
+    { "EC0B2C20-F816-3FCE-822D-F9403C09EB50", "26A434" }, /* macOS 27.0.1 */
+    { "CFAE26CC-B46F-3629-9461-F5540C0E8D3D", "25G83" },  /* macOS 26.6.2 */
+};
 
 /* Loads the framework without calling it, and reads its LC_UUID. */
 static const struct mach_header_64 *image(intptr_t *slide, char uuid[40]) {
@@ -107,12 +109,20 @@ static const struct mach_header_64 *image(intptr_t *slide, char uuid[40]) {
 bool apple_oracle_verified_build(void) {
     intptr_t slide;
     char uuid[40];
-    if (image(&slide, uuid)) return !strcmp(uuid, VERIFIED_UUID);
+    const size_t count = sizeof verified / sizeof *verified;
+    if (image(&slide, uuid)) {
+        for (size_t i = 0; i < count; i++)
+            if (!strcmp(uuid, verified[i].uuid)) return true;
+        return false;
+    }
     /* Without a readable image, the macOS build stands in for the framework's. */
 #if defined(__arm64__)
     char build[32] = "";
     size_t n = sizeof build;
-    return !sysctlbyname("kern.osversion", build, &n, NULL, 0) && !strcmp(build, VERIFIED_MACOS_BUILD);
+    if (sysctlbyname("kern.osversion", build, &n, NULL, 0)) return false;
+    for (size_t i = 0; i < count; i++)
+        if (!strcmp(build, verified[i].macos)) return true;
+    return false;
 #else
     return false;
 #endif

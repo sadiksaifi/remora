@@ -1,5 +1,5 @@
 /*
- * Remora Apple MVS decoder. Experimental production profile.
+ * Remora Apple MVS decoder.
  *
  * Decoder for Apple Remote Desktop / Screen Sharing encoding 1011 ("MVS").
  *
