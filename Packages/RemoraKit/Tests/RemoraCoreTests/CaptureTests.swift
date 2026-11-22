@@ -480,12 +480,14 @@ private func animatesThroughout(_ times: [Double], from start: Double, to end: D
     #expect(animatesThroughout(times, from: moveAt, to: humanAt))
     // The cursor travels between resting centers near x 84-96 and 504-514. Frames between them are in each
     // leg's travel order. In at least one leg, two of them are more than 20 px apart and the leg covers 200 px.
+    // Compression moves a still cursor's measured center by up to about 0.25 px, and a slow encoder can record
+    // the same position twice, so the order allows 1 px back. A moving cursor's frames are 5 px or more apart.
     let between = zip(legs, centers).map { leg, centers in
         let inside = centers.filter { (105...500).contains($0) }
         return leg.outbound ? inside : inside.reversed()
     }
-    let travel = "centers by leg: \(centers.map { $0.map(Int.init) })"
-    #expect(between.allSatisfy { $0 == $0.sorted() }, "\(travel)")
+    let travel = "centers by leg: \(centers.map { $0.map { ($0 * 10).rounded() / 10 } })"
+    #expect(between.allSatisfy { zip($0, $0.dropFirst()).allSatisfy { $1 > $0 - 1 } }, "\(travel)")
     #expect(between.contains { ($0.last ?? 0) - ($0.first ?? 0) > 20 }, "\(travel)")
     #expect(centers.contains { ($0.max() ?? 0) - ($0.min() ?? 0) > 200 }, "\(travel)")
     let rest = try #require(resting)
