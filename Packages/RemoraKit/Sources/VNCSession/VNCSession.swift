@@ -412,7 +412,7 @@ public final class VNCSession: AgentInputSession, @unchecked Sendable {
                         case 5: .certificateRejected
                         case 8:
                             .protocolError(
-                                "The experimental Apple profile requires RFB 003.889, ARD authentication, and a supported shared desktop with session encryption."
+                                "Apple mode requires RFB 003.889, ARD authentication, and a supported shared desktop with session encryption."
                             )
                         case 14: .protocolError("Apple session encryption could not be established. Check that the Mac supports encrypted Screen Sharing.")
                         case 9: .protocolError("The Apple desktop update could not be decoded.")

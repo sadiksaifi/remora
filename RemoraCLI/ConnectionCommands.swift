@@ -11,7 +11,7 @@ struct ConnectionFields: ParsableArguments {
     @Option(help: "Remote account domain.") var domain: String?
     @Option(help: "Saved resolution: fit or WIDTHxHEIGHT, 200 to 8192 pixels per side with an even width. VNC starts at the server's size.") var resolution:
         String?
-    @Option(help: "VNC mode: standard, or apple for encrypted Apple Screen Sharing with experimental lossy encoding (Macs only).") var vncMode: String?
+    @Option(help: "VNC mode: standard, or apple for Apple Screen Sharing's encrypted connection and faster, lossy encoding (Macs only).") var vncMode: String?
     @Flag(help: "Read the password from UTF-8 stdin, removing one trailing line ending.") var passwordStdin = false
 
     func arguments() async throws -> [String: ControlValue] {

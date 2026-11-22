@@ -18,7 +18,7 @@ public enum ConnectionResolution: Codable, Sendable, Hashable {
 public enum VNCMode: String, Codable, Sendable, CaseIterable {
     /// Standard VNC with lossless encodings.
     case standard
-    /// Apple Screen Sharing's dialect and its faster, lossy encoding. Experimental, Macs only.
+    /// Apple Screen Sharing's encrypted dialect and its faster, lossy encoding. Macs only.
     case apple
 }
 
