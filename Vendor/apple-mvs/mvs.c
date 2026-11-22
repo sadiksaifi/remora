@@ -452,6 +452,7 @@ struct mvs_decoder {
     uint64_t cache_count;
     tile_desc *desc;
     size_t tiles;
+    bool covered;                  /* every pixel of the current descriptors is initialized */
     uint32_t fb_width, fb_height, tiles_x;
     uint32_t frame_seq;
     huffman_table huffman;
@@ -497,7 +498,7 @@ void mvs_destroy(mvs_decoder *d) {
 
 void mvs_reset_picture(mvs_decoder *d) {
     if (!d) return;
-    free(d->desc); d->desc=NULL;
+    free(d->desc); d->desc=NULL; d->covered=false;
     d->tiles=0; d->fb_width=d->fb_height=d->tiles_x=0;
 }
 
@@ -523,6 +524,7 @@ static mvs_error ensure_screen(mvs_decoder *d, uint32_t width, uint32_t height) 
     for (size_t i = 0; i < tiles; i++) desc[i].ref_index = -1;
     free(d->desc);
     d->desc = desc;
+    d->covered = false;
     d->tiles = tiles;
     d->fb_width = width;
     d->fb_height = height;
@@ -550,8 +552,12 @@ static bool coverage(mvs_decoder *d, uint32_t x, uint32_t y, uint32_t w, uint32_
     return true;
 }
 
-int mvs_region_initialized(const mvs_decoder *d, uint32_t x, uint32_t y, uint32_t w, uint32_t h) {
-    return coverage((mvs_decoder *)d,x,y,w,h,false);
+/* Coverage only grows until the descriptors are replaced, so a covered screen needs no rescan. */
+int mvs_region_initialized(mvs_decoder *d, uint32_t x, uint32_t y, uint32_t w, uint32_t h) {
+    if (d && d->covered) return d->desc && (uint64_t)x+w<=d->fb_width && (uint64_t)y+h<=d->fb_height && w && h;
+    bool covered = coverage(d,x,y,w,h,false);
+    if (covered && !x && !y && w==d->fb_width && h==d->fb_height) d->covered = true;
+    return covered;
 }
 
 mvs_error mvs_mark_raw(mvs_decoder *d, uint32_t width, uint32_t height, uint32_t x, uint32_t y, uint32_t w, uint32_t h) {

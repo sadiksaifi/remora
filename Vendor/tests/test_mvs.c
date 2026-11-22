@@ -392,6 +392,12 @@ static void test_raw_coverage_and_geometry_reset(void) {
     mvs_reset_picture(s.decoder);
     CHECK(!mvs_region_initialized(s.decoder,0,0,16,8));
     CHECK(decode(&s,&skip)==MVS_E_BASELINE);
+    /* A covered screen loses its coverage when the geometry changes. */
+    CHECK(mvs_mark_raw(s.decoder,16,8,0,0,16,8)==MVS_OK);
+    CHECK(mvs_region_initialized(s.decoder,0,0,16,8));
+    CHECK(mvs_mark_raw(s.decoder,16,16,0,0,16,8)==MVS_OK);
+    CHECK(!mvs_region_initialized(s.decoder,0,0,16,16));
+    CHECK(mvs_region_initialized(s.decoder,0,0,16,8));
     screen_free(&s);
 }
 

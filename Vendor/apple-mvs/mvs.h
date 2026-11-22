@@ -107,7 +107,7 @@ mvs_error mvs_decode(mvs_decoder *decoder, const mvs_surface *surface,
 
 /* Coverage is independent of DCT descriptors. Raw writes do not establish a DCT baseline.
  * Geometry changes discard all coverage. Query only after a successful complete message. */
-int mvs_region_initialized(const mvs_decoder *, uint32_t x, uint32_t y, uint32_t w, uint32_t h);
+int mvs_region_initialized(mvs_decoder *, uint32_t x, uint32_t y, uint32_t w, uint32_t h);
 mvs_error mvs_mark_raw(mvs_decoder *, uint32_t width, uint32_t height,
                        uint32_t x, uint32_t y, uint32_t w, uint32_t h);
 
