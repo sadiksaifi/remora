@@ -321,10 +321,22 @@ private final class ApplePixels: FrameSink, @unchecked Sendable {
     #expect(wire["requests_after_initial"] as? Int == 1)
 }
 
+@Test @MainActor func applePartialUpdateWithoutABaselineIsSkippedAndTheScreenRequestedInFull() async throws {
+    let (wire, terminals, frames) = try await appleSession("apple-no-baseline")
+    #expect(frames.samples.count == 1)
+    #expect(try #require(wire["requests_after_initial"] as? Int) >= 1)
+    for terminal in terminals {
+        switch terminal {
+        case .protocolError(let detail), .serverEndedSession(let detail): #expect(!detail.contains("could not be decoded"))
+        default: break
+        }
+    }
+}
+
 @Test @MainActor func appleMalformedUpdatesNeverPublishAnIncompleteMessage() async throws {
-    for mode in ["apple-no-baseline", "apple-truncated", "apple-multi-invalid", "apple-control-encryption", "apple-geometry"] {
+    for mode in ["apple-truncated", "apple-multi-invalid", "apple-control-encryption", "apple-geometry"] {
         let (_, terminals, frames) = try await appleSession(mode)
-        let count = ["apple-no-baseline", "apple-truncated"].contains(mode) ? 0 : 1
+        let count = mode == "apple-truncated" ? 0 : 1
         #expect(frames.samples.count == count, "\(mode)")
         #expect(terminals.count == 1)
         if case .serverEndedSession = terminals.first {} else { Issue.record("Expected a typed runtime end for \(mode)") }

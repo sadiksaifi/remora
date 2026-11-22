@@ -352,13 +352,20 @@ def apple_frames(outcome, exact, send, report, connection):
         one_partial = bytes([1,14,19])+mvs_bits('01','000000','1 0','1010','0','1010',marker('mvs'))
         update(one_full, rect=(8,0,8,8))
         if outcome == 'apple-region-uninitialized':
-            update(one_partial, rect=(0,0,8,8)); return
+            # The client skips a partial update over pixels it lacks and asks for the screen in full.
+            update(one_partial, rect=(0,0,8,8))
+            before = report['requests_after_initial']
+            while report['requests_after_initial'] == before: client_message()
+            update(one_full, rect=(0,0,8,8)); return
         update(one_partial, rect=(8,0,8,8))
         update(one_full, rect=(0,0,8,8))
         update(one_partial, rect=(0,0,8,8))
         return
     if outcome == 'apple-no-baseline':
-        update(partial); return
+        update(partial)
+        before = report['requests_after_initial']
+        while report['requests_after_initial'] == before: client_message()
+        update(full); return
     if outcome == 'apple-truncated':
         send(struct.pack('>BBHHHHHiI',0,0,1,0,0,16,8,1011,100)+b'\x00'); return
     if outcome.startswith('apple-retry-'):

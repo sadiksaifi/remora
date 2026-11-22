@@ -128,7 +128,7 @@ int main(int argc,char **argv) {
     if(invalidClipboard && (clipboardMessages || c->remoraAppleError!=17)) failures++;
     if(largeClipboard && (clipboardMessages!=3 || clipboardChanges!=3 || c->remoraAppleError)) failures++;
     if(earlyClipboard && (clipboardMessages!=1 || c->remoraAppleError)) failures++;
-    if(argc==4 && atoi(argv[3]) && c->remoraAppleError!=atoi(argv[3])) {
+    if(argc==4 && (atoi(argv[3]) || !strcmp(argv[3],"0")) && c->remoraAppleError!=atoi(argv[3])) {
         fprintf(stderr,"native error=%d expected=%s\n",c->remoraAppleError,argv[3]); failures++;
     }
     free(c->frameBuffer); c->frameBuffer=NULL; rfbClientCleanup(c);

@@ -1,4 +1,4 @@
-/* Remora's experimental Apple 003.889 adapter. GPL-3.0-or-later.
+/* Remora's Apple 003.889 adapter. GPL-3.0-or-later.
  * Wire definitions: peetinc/noVNC-ARD d699293635083c9e0c30c8f9480993865653772a,
  * ard/ard-patch.js. The scroll record follows ard-rs protocol.rs's 0x17/54 layout.
  * The separately licensed MVS implementation is in mvs.c/h.
@@ -427,6 +427,9 @@ int rfbRemoraAppleRect(rfbClient *c,const rfbFramebufferUpdateRectHeader *r) {
     mvs_stats stats;
     mvs_error error=mvs_decode(a->decoder,&surface,r->r.x,r->r.y,r->r.w,r->r.h,payload,n,damage,a,&stats);
     free(payload);
+    /* Screen Sharing sends partial updates for pixels it has not sent yet, such as at connect.
+     * Remora leaves those tiles as they are and asks for the screen in full. */
+    if(error==MVS_E_BASELINE) return SendFramebufferUpdateRequest(c,0,0,c->width,c->height,FALSE)?1:-1;
     if(error!=MVS_OK) return fail(c,APPLE_DECODE),-1;
     if(!quant) {
         a->baseline=mvs_region_initialized(a->decoder,0,0,c->width,c->height);
