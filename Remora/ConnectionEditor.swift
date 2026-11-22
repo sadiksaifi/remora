@@ -173,7 +173,7 @@ struct ConnectionEditor: View {
                     Section {
                         Picker("Mode", selection: $vncMode) {
                             Text("Standard").tag(VNCMode.standard)
-                            Text("Apple (experimental)").tag(VNCMode.apple)
+                            Text("Apple").tag(VNCMode.apple)
                         }
                         .pickerStyle(.menu)
                         .accessibilityIdentifier("editorVNCMode")
@@ -184,7 +184,7 @@ struct ConnectionEditor: View {
                     } footer: {
                         Text(
                             vncMode == .apple
-                                ? "Apple mode uses Apple Screen Sharing’s faster, lossy encoding and works only with Macs. Clipboard sharing and display resizing are unavailable."
+                                ? "Apple mode uses Apple Screen Sharing’s encrypted connection and its faster, lossy encoding. It works only with Macs. It can’t verify the Mac’s identity, so use it on networks you trust. Display resizing is unavailable."
                                 : "Remora scales the remote screen to fit the window. Servers that allow resizing match the window’s size."
                         )
                         .foregroundStyle(.secondary)

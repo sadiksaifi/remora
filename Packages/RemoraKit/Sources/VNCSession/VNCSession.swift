@@ -175,10 +175,9 @@ public final class VNCSession: AgentInputSession, @unchecked Sendable {
         // pulses still travel through normal keyboard input.
     }
     public func releaseHumanInput() { enqueue(.releaseHuman) }
-    public var supportsClipboardSynchronization: Bool { configuration.vncMode == .standard }
+    public var supportsClipboardSynchronization: Bool { true }
 
     public func setLocalClipboard(text: String) {
-        guard supportsClipboardSynchronization else { return }
         guard text.utf8.count <= 1_048_576 else {
             clipboard(.failed)
             return
@@ -253,6 +252,9 @@ public final class VNCSession: AgentInputSession, @unchecked Sendable {
         case 9: "The Apple desktop update could not be decoded."
         case 10: "The Mac did not provide a supported single-display picture."
         case 12: "The VNC server reports multiple displays without a supported display-selection protocol."
+        case 15: "The Apple encrypted session record failed validation. Reconnect to start a new session."
+        case 16: "The Mac requested an unsupported encryption key change. Reconnect to start a new session."
+        case 17: "The Apple clipboard archive is invalid or exceeds the size limit."
         default: nil
         }
     }
@@ -399,8 +401,9 @@ public final class VNCSession: AgentInputSession, @unchecked Sendable {
                 promptedCredentials = nil
                 guard connected else {
                     let diagnostic = rm_vnc_diagnostic(created)
+                    let nativeError = rm_vnc_error(created)
                     let reason: DisconnectReason =
-                        switch rm_vnc_error(created) {
+                        switch nativeError {
                         case 1: .hostNotFound
                         case 13: .localNetworkDenied
                         case 2: .connectionRefused
@@ -409,8 +412,9 @@ public final class VNCSession: AgentInputSession, @unchecked Sendable {
                         case 5: .certificateRejected
                         case 8:
                             .protocolError(
-                                "The experimental Apple profile requires RFB 003.889, ARD authentication, and a supported shared desktop without session encryption."
+                                "Apple mode requires RFB 003.889, ARD authentication, and a supported shared desktop with session encryption."
                             )
+                        case 14: .protocolError("Apple session encryption could not be established. Check that the Mac supports encrypted Screen Sharing.")
                         case 9: .protocolError("The Apple desktop update could not be decoded.")
                         case 10: .protocolError("The Mac did not provide a supported single-display picture.")
                         case 7: .protocolError(unsupportedSizeDetail(width: diagnostic.framebufferWidth, height: diagnostic.framebufferHeight))
@@ -421,7 +425,10 @@ public final class VNCSession: AgentInputSession, @unchecked Sendable {
                                     ? "Remora couldn't negotiate a supported security method with the VNC server."
                                     : "The VNC connection couldn't be set up.")
                         }
-                    state.lock.withLock { if state.reason == nil { state.reason = reason } }
+                    state.lock.withLock {
+                        // The watchdog's timeout stays: the attempt ran out of time, whatever step it reached.
+                        if state.reason == nil { state.reason = reason }
+                    }
                     return
                 }
                 let security = String(cString: rm_vnc_security(created))
@@ -433,7 +440,7 @@ public final class VNCSession: AgentInputSession, @unchecked Sendable {
                     state.security = security
                 }
                 emit(.stateChanged(.connected))
-                clipboard(configuration.vncMode == .apple ? .unavailable : .unknown)
+                clipboard(.unknown)
                 if configuration.vncMode == .apple { emit(.cursorChanged(.systemDefault)) }
                 rm_vnc_enable_input_service(created)
                 while !state.lock.withLock({ state.stopping }) {
@@ -627,10 +634,16 @@ public final class VNCSession: AgentInputSession, @unchecked Sendable {
                 ))
         }
         cb.clipboard = { user, text, length, utf8 in
-            guard let text else { return }
-            var data = Data(bytes: text, count: Int(length))
-            // Extended UTF-8 text includes one terminal NUL in its wire size.
-            if utf8, data.last == 0 { data.removeLast() }
+            // Apple mode announces a remote change before its text arrives.
+            if length < 0 {
+                owner(user).clipboard(.pending)
+                return
+            }
+            guard let text else {
+                owner(user).clipboard(.unavailable)
+                return
+            }
+            let data = Data(bytes: text, count: Int(length))
             let value = String(data: data, encoding: utf8 ? .utf8 : .isoLatin1)
             owner(user).clipboard(value.map(RemoteClipboard.Status.text) ?? .failed)
         }

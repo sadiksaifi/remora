@@ -56,6 +56,7 @@ private final class AppleFrames: FrameSink, @unchecked Sendable {
     #expect(result["subscription"] as? [Int] == [0, 1, 0, 0, 0, 16, 16])
     #expect(result["error_class"] == nil)
     #expect(connected)
+    #expect(session.negotiatedSecurity == "Apple ARD (AES-128-CBC session)")
     #expect(frames.count == 1)
 }
 
@@ -79,7 +80,8 @@ private final class ApplePixels: FrameSink, @unchecked Sendable {
 
 @MainActor private func appleSession(
     _ outcome: String, offers: String = "ard-only", updatesEnabled: Bool = true, mode: VNCMode = .apple, password: String? = "fixture-password",
-    patience: Duration = .seconds(4), actions: (@MainActor @Sendable (VNCSession, ApplePixels) async throws -> Void)? = nil
+    patience: Duration = .seconds(4), actions: (@MainActor @Sendable (VNCSession, ApplePixels) async throws -> Void)? = nil,
+    onClipboard: ((VNCSession, RemoteClipboard.Status) -> Void)? = nil
 ) async throws -> ([String: Any], [DisconnectReason], ApplePixels) {
     let peer = Process()
     peer.executableURL = URL(fileURLWithPath: "/usr/bin/python3")
@@ -122,11 +124,11 @@ private final class ApplePixels: FrameSink, @unchecked Sendable {
         }
         if case .stateChanged(.connected) = event {
             #expect(!session.supportsDynamicResize)
-            #expect(!session.supportsClipboardSynchronization)
+            #expect(session.supportsClipboardSynchronization)
             session.requestResize(.init(width: 32, height: 16), scale: 1)
-            session.setLocalClipboard(text: "not sent in Apple mode")
             if let actions { work = Task { try await actions(session, frames) } }
         }
+        if case .clipboardChanged(_, let status) = event { onClipboard?(session, status) }
         if case .stateChanged(.disconnected(let reason)) = event, let reason { terminals.append(reason) }
     }
     try await work?.value
@@ -134,6 +136,53 @@ private final class ApplePixels: FrameSink, @unchecked Sendable {
     let result = try #require(JSONSerialization.jsonObject(with: output.fileHandleForReading.readDataToEndOfFile()) as? [String: Any])
     #expect(result["error_class"] == nil, "\(outcome): stage=\(result["stage"] ?? "unknown")")
     return (result, terminals, frames)
+}
+
+@Test @MainActor func appleClipboardExchangesPlainTextThroughThePublicSession() async throws {
+    var statuses: [RemoteClipboard.Status] = []
+    let (wire, _, pixels) = try await appleSession(
+        "apple-clipboard",
+        onClipboard: { session, status in
+            statuses.append(status)
+            if status == .text("from Mac ✓\0") { session.setLocalClipboard(text: "from viewer 🦀") }
+            if status == .offered("from viewer 🦀") { session.setLocalClipboard(text: "") }
+        })
+
+    #expect(wire["pasteboard_monitoring"] as? Bool == true)
+    #expect(wire["clipboard_uploads"] as? [String] == ["from viewer 🦀", ""])
+    #expect(
+        statuses == [
+            .unknown, .pending, .text("from Mac ✓\0"), .offered("from viewer 🦀"), .offered(""), .pending, .failed, .pending, .unavailable,
+            .pending, .unavailable,
+        ])
+    #expect(pixels.samples.count == 3)
+}
+
+@Test @MainActor func appleClipboardOverTheLocalLimitIsSkippedWithoutEndingTheSession() async throws {
+    var statuses: [RemoteClipboard.Status] = []
+    let (_, _, pixels) = try await appleSession("apple-clipboard-limit", onClipboard: { _, status in statuses.append(status) })
+
+    #expect(statuses.prefix(7) == [.unknown, .pending, .unavailable, .pending, .unavailable, .pending, .text("after a large image")])
+    #expect(pixels.samples.count == 1)
+}
+
+@Test @MainActor func appleClipboardChangeDuringEncryptionSetupIsFetchedAfterActivation() async throws {
+    var statuses: [RemoteClipboard.Status] = []
+    let (wire, _, _) = try await appleSession("apple-clipboard-early", onClipboard: { _, status in statuses.append(status) })
+
+    #expect(wire["early_clipboard_fetched"] as? Bool == true)
+    // The change arrives before the session reports itself connected.
+    #expect(statuses.prefix(3) == [.pending, .unknown, .text("changed during setup")])
+}
+
+@Test(arguments: ["wire-limit", "length", "malformed"])
+@MainActor func appleClipboardRejectsInvalidArchivesWithoutPublishingText(_ mode: String) async throws {
+    var statuses: [RemoteClipboard.Status] = []
+    let (_, terminals, pixels) = try await appleSession("apple-clipboard-\(mode)", onClipboard: { _, status in statuses.append(status) })
+
+    #expect(statuses == [.unknown, .pending])
+    #expect(terminals == [.serverEndedSession("The Apple clipboard archive is invalid or exceeds the size limit.")])
+    #expect(pixels.samples.count == 1)
 }
 
 @Test @MainActor func appleFullPartialAndCacheUpdatesUseSubscriptionWithoutIncrementalRequests() async throws {
@@ -220,7 +269,7 @@ private final class ApplePixels: FrameSink, @unchecked Sendable {
     #expect(pixels.snapshots == expected)
 }
 
-@Test @MainActor func appleKeyEncryptionAndSourceOwnershipReachTheIndependentPeer() async throws {
+@Test @MainActor func appleInputReachesTheIndependentPeerInSessionRecords() async throws {
     let (wire, _, frames) = try await appleSession("apple-input") { session, frames in
         let deadline = ContinuousClock.now.advanced(by: .seconds(2))
         while frames.samples.count < 3, ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(2)) }
@@ -230,7 +279,6 @@ private final class ApplePixels: FrameSink, @unchecked Sendable {
         session.sendKey(.init(keyCode: 56, isDown: true))
         session.sendKey(.init(keyCode: 56, isDown: false))
         session.sendKey(.init(keyCode: 58, isDown: true))
-        try await Task.sleep(for: .milliseconds(200))
         session.sendKey(.init(keyCode: 58, isDown: false))
         try await request.send(.unicode("α"), deadline: deadline)
         try await request.send(.pointer(.init(x: 3, y: 4), .left), deadline: deadline)
@@ -244,16 +292,10 @@ private final class ApplePixels: FrameSink, @unchecked Sendable {
     }
     let keys = try #require(wire["keys"] as? [[Int]])
     #expect(
-        keys.map { Array($0.prefix(2)) } == [
+        keys == [
             [0xffe1, 1], [0xffe7, 1], [0xffe7, 0], [0x0100_03b1, 1], [0x0100_03b1, 0], [0xffbe, 1], [0xffbe, 0], [0xffe1, 0],
         ])
-    #expect(keys.allSatisfy { $0.count == 3 })
-    // Apple sends elapsed microseconds since the preceding combined input event.
-    // The held key has a longer interval than the immediately following Unicode event.
-    #expect((100_000...2_000_000).contains(keys[2][2]))
-    #expect(keys[3][2] < keys[2][2])
     let pointers = try #require(wire["pointers"] as? [[Int]])
-    #expect(wire["combined_pointers"] as? Int == pointers.count)
     #expect(pointers.contains([3, 9, 7]))
     #expect(pointers.suffix(2) == [[1, 9, 7], [0, 9, 7]])
     #expect(wire["scrolls"] as? [[Int]] == [[0, 1, 0, 65536, 0, 1, 9, 7], [-1, 0, -65536, 0, -1, 0, 9, 7]])
@@ -279,13 +321,45 @@ private final class ApplePixels: FrameSink, @unchecked Sendable {
     #expect(wire["requests_after_initial"] as? Int == 1)
 }
 
+@Test @MainActor func applePartialUpdateWithoutABaselineIsSkippedAndTheScreenRequestedInFull() async throws {
+    let (wire, terminals, frames) = try await appleSession("apple-no-baseline")
+    #expect(frames.samples.count == 1)
+    #expect(try #require(wire["requests_after_initial"] as? Int) >= 1)
+    for terminal in terminals {
+        switch terminal {
+        case .protocolError(let detail), .serverEndedSession(let detail): #expect(!detail.contains("could not be decoded"))
+        default: break
+        }
+    }
+}
+
 @Test @MainActor func appleMalformedUpdatesNeverPublishAnIncompleteMessage() async throws {
-    for mode in ["apple-no-baseline", "apple-truncated", "apple-bad-cache", "apple-multi-invalid", "apple-control-encryption", "apple-geometry"] {
+    for mode in ["apple-truncated", "apple-multi-invalid", "apple-control-encryption", "apple-geometry"] {
         let (_, terminals, frames) = try await appleSession(mode)
-        let count = ["apple-no-baseline", "apple-truncated"].contains(mode) ? 0 : 1
+        let count = mode == "apple-truncated" ? 0 : 1
         #expect(frames.samples.count == count, "\(mode)")
         #expect(terminals.count == 1)
         if case .serverEndedSession = terminals.first {} else { Issue.record("Expected a typed runtime end for \(mode)") }
+    }
+}
+
+@Test @MainActor func appleRejectsClearPixelsWhenTheServerRefusesEncryption() async throws {
+    let (_, terminals, pixels) = try await appleSession("apple-refuse")
+    #expect(pixels.samples.isEmpty)
+    if case .protocolError(let detail) = terminals.first {
+        #expect(detail.contains("session encryption could not be established"))
+    } else {
+        Issue.record("Expected an encryption negotiation failure")
+    }
+}
+
+@Test @MainActor func appleRejectsRecordsWithAnInvalidDigest() async throws {
+    let (_, terminals, pixels) = try await appleSession("apple-invalid-digest")
+    #expect(pixels.samples.isEmpty)
+    if case .serverEndedSession(let detail) = terminals.first {
+        #expect(detail.contains("record failed validation"))
+    } else {
+        Issue.record("Expected an encrypted record failure")
     }
 }
 

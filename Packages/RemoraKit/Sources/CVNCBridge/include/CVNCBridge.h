@@ -39,7 +39,9 @@ typedef struct {
     void (*size)(void *, int, int, bool);
     void (*frame)(void *, const uint8_t *, int, int, int, int, int, int);
     void (*cursor)(void *, const uint8_t *, int, int, int, int);
-    void (*clipboard)(void *, const char *, int, bool);
+    /* Counted text bytes. NULL indicates a pasteboard without supported text, and NULL with -1 a remote
+     * change whose text has not arrived. */
+    void (*clipboard)(void *, const char *, int, bool utf8);
     bool (*credentials)(void *, bool, char **, char **);
     bool (*trust)(void *, const char *, const uint8_t *, size_t);
     /* Fill 32 bytes if this endpoint has a pin. */
@@ -64,7 +66,9 @@ RMVNCRuntimeDiagnostic rm_vnc_runtime_diagnostic(RMVNC *);
 int rm_vnc_error(RMVNC *); /* 1 DNS, 2 refused, 3 timeout, 4 auth, 5 certificate, 6 protocol, 7 unsupported size,
  * 8 unsupported Apple profile, 9 Apple decode failure, 10 unsupported Apple geometry,
  * 11 Apple ServerInit withheld after accepted authentication (one fresh context may retry),
- * 12 reported generic multi-display layout without display selection, 13 Local Network policy denied DNS resolution */
+ * 12 reported generic multi-display layout without display selection, 13 Local Network policy denied DNS resolution,
+ * 14 Apple encryption negotiation failed, 15 invalid encrypted record, 16 unsupported encryption key change,
+ * 17 malformed or oversized Apple clipboard archive */
 const char *rm_vnc_security(RMVNC *);
 bool rm_vnc_resize_supported(RMVNC *);
 bool rm_vnc_resize(RMVNC *, uint16_t, uint16_t);

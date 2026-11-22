@@ -1,25 +1,31 @@
-/* Remora's experimental Apple 003.889 adapter. GPL-3.0-or-later.
+/* Remora's Apple 003.889 adapter. GPL-3.0-or-later.
  * Wire definitions: peetinc/noVNC-ARD d699293635083c9e0c30c8f9480993865653772a,
  * ard/ard-patch.js. The scroll record follows ard-rs protocol.rs's 0x17/54 layout.
  * The separately licensed MVS implementation is in mvs.c/h.
  */
 #include "apple.h"
 #include "mvs.h"
-#include "crypto.h"
+#include "records.h"
 #include <openssl/crypto.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <zlib.h>
 
 /* Profile errors are local numeric diagnostics, never server-controlled strings. */
-enum { APPLE_PROFILE = 8, APPLE_DECODE = 9, APPLE_GEOMETRY = 10 };
+enum { APPLE_PROFILE = 8, APPLE_DECODE = 9, APPLE_GEOMETRY = 10, APPLE_CLIPBOARD = 17 };
+/* Archives above the local limit are drained, not inflated. Apple's server caps both sizes at the wire limit. */
+enum { CLIPBOARD_TEXT_LIMIT = 1024*1024, CLIPBOARD_ARCHIVE_LIMIT = 8*1024*1024, CLIPBOARD_WIRE_LIMIT = 100*1024*1024 };
+static const char clipboardTextType[]="public.utf8-plain-text";
+
 typedef struct {
     uint8_t key[16];
     rfbBool keyValid, baseline, dirty, demand, subscribed;
     double baselineRequestAt;
-    uint32_t previousInputTime;
     uint32_t left, top, right, bottom;
     mvs_decoder *decoder;
+    uint32_t clipboardRequestID;
+    rfbBool clipboardPending;
 } Apple;
 static Apple *state(rfbClient *c) { return c->remoraAppleState; }
 static double monotonic(void) {
@@ -45,6 +51,7 @@ rfbBool rfbRemoraAppleRememberKey(rfbClient *c, const uint8_t key[16]) {
 void rfbRemoraAppleCleanup(rfbClient *c) {
     Apple *a=state(c);
     if (!a) return;
+    rfbRemoraFreeRecords(c);
     mvs_destroy(a->decoder);
     OPENSSL_cleanse(a,sizeof(*a)); free(a); c->remoraAppleState=NULL;
 }
@@ -57,10 +64,29 @@ rfbBool rfbRemoraAppleSetup(rfbClient *c) {
         return fail(c,APPLE_PROFILE);
     a->decoder=mvs_create();
     if (!a->decoder) return fail(c,APPLE_DECODE);
-    /* Control mode. No session selection, session-record encryption, media or clipboard. */
+    /* The measured numeric ViewerInfo precedes control mode and pasteboard monitoring.
+     * Monitor during the clear prelude, before requesting pixels. */
+    uint8_t viewer[66]={0x21,0,0,62,0,1};
+    put32(viewer+6,2); put32(viewer+10,6); put32(viewer+14,1);
+    put32(viewer+22,26); put32(viewer+26,6); put32(viewer+30,2);
+    const uint8_t commands[]={0xb0,0,0x0c,0x03,0x90,0,0,0,0,0,0x40};
+    memcpy(viewer+34,commands,sizeof(commands));
     const char mode[4]={0x0a,0,0,1};
+    const char monitor[8]={0x15,0,0,1};
     a->baselineRequestAt=monotonic()+1;
-    return WriteToRFBServer(c,mode,sizeof(mode));
+    return WriteToRFBServer(c,(char *)viewer,sizeof(viewer)) &&
+        WriteToRFBServer(c,mode,sizeof(mode)) &&
+        WriteToRFBServer(c,monitor,sizeof(monitor));
+}
+static rfbBool requestClipboard(rfbClient *c);
+rfbBool rfbRemoraAppleEncrypt(rfbClient *c) {
+    Apple *a = state(c);
+    double deadline = monotonic() + (c->readTimeout ? c->readTimeout : 10);
+    rfbBool clipboardChanged = FALSE;
+    rfbBool ok = rfbRemoraStartRecords(c, a->key, deadline, &clipboardChanged);
+    OPENSSL_cleanse(a->key, sizeof(a->key));
+    a->keyValid = FALSE;
+    return ok && (!clipboardChanged || requestClipboard(c));
 }
 /* The initial full request can go unanswered, or produce only controls/partial
  * coverage. Keep requesting a baseline alongside the push subscription.
@@ -75,8 +101,8 @@ rfbBool rfbRemoraAppleRetryBaseline(rfbClient *c) {
     return SendFramebufferUpdateRequest(c,0,0,c->width,c->height,FALSE);
 }
 rfbBool rfbRemoraAppleEncodings(rfbClient *c) {
-    uint8_t message[24]={2,0,0,5};
-    put32(message+4,1011); put32(message+8,0); put32(message+12,1105); put32(message+16,(uint32_t)-223); put32(message+20,1101);
+    uint8_t message[28]={2,0,0,6};
+    put32(message+4,1011); put32(message+8,0); put32(message+12,1105); put32(message+16,(uint32_t)-223); put32(message+20,1101); put32(message+24,1103);
     return WriteToRFBServer(c,(char *)message,sizeof(message));
 }
 static rfbBool skip(rfbClient *c,uint32_t n) {
@@ -89,6 +115,170 @@ static rfbBool skip(rfbClient *c,uint32_t n) {
     }
     return TRUE;
 }
+
+static rfbBool requestClipboard(rfbClient *c) {
+    Apple *a=state(c);
+    uint8_t request[8]={0x0b};
+    a->clipboardRequestID=a->clipboardRequestID==UINT32_MAX?1:a->clipboardRequestID+1;
+    put32(request+4,a->clipboardRequestID);
+    a->clipboardPending=TRUE;
+    /* Length -1 tells the viewer the remote text changed and the old text is stale. */
+    if(c->GotXCutTextUTF8) c->GotXCutTextUTF8(c,NULL,-1);
+    return WriteToRFBServer(c,(char *)request,sizeof(request));
+}
+
+static rfbBool stateChange(rfbClient *c) {
+    uint8_t h[3],body[4];
+    if(!ReadFromRFBServer(c,(char *)h,sizeof(h))) return FALSE;
+    uint32_t n=be16(h+1);
+    if(n<sizeof(body)) return fail(c,APPLE_PROFILE);
+    if(!ReadFromRFBServer(c,(char *)body,sizeof(body)) || !skip(c,n-sizeof(body))) return FALSE;
+    return be16(body)!=1 || be16(body+2)!=2 || requestClipboard(c);
+}
+
+/* Keep one bounded output allocation so we can validate the entire archive
+ * before publishing text. The compressed input is consumed in fixed chunks. */
+static rfbBool inflateClipboard(rfbClient *c,uint32_t compressed,uint8_t *archive,uint32_t length) {
+    z_stream z={0};
+    if(inflateInit(&z)!=Z_OK) return fail(c,APPLE_CLIPBOARD);
+    z.next_out=archive;
+    z.avail_out=length+1; /* A sentinel byte detects output beyond the declared size. */
+    uint8_t buffer[4096];
+    int result=Z_OK;
+    while(compressed && result==Z_OK) {
+        unsigned chunk=compressed<sizeof(buffer)?compressed:sizeof(buffer);
+        if(!ReadFromRFBServer(c,(char *)buffer,chunk)) {
+            inflateEnd(&z);
+            return FALSE;
+        }
+        compressed-=chunk;
+        z.next_in=buffer; z.avail_in=chunk;
+        result=inflate(&z,Z_NO_FLUSH);
+        if(z.avail_in || z.total_out>length) break;
+    }
+    /* A sync flush ends on a byte-aligned nonfinal block boundary (data_type
+     * 128). The zlib header alone can have the same flag, so require a block. */
+    rfbBool complete=!compressed && !z.avail_in && z.total_out==length &&
+        (result==Z_STREAM_END || (result==Z_OK && z.data_type==128 && z.total_in>2));
+    inflateEnd(&z);
+    return complete || fail(c,APPLE_CLIPBOARD);
+}
+
+static const uint8_t *take(const uint8_t **cursor,const uint8_t *end,uint32_t n) {
+    if(n>(size_t)(end-*cursor)) return NULL;
+    const uint8_t *field=*cursor;
+    *cursor+=n;
+    return field;
+}
+
+static const uint8_t *counted(const uint8_t **cursor,const uint8_t *end,uint32_t *n) {
+    const uint8_t *length=take(cursor,end,4);
+    if(!length) return NULL;
+    *n=be32(length);
+    return take(cursor,end,*n);
+}
+
+static rfbBool clipboardText(const uint8_t *cursor,uint32_t length,const char **text,int *textLength) {
+    const uint8_t *end=cursor+length;
+    while(cursor<end) {
+        const uint8_t *item=take(&cursor,end,4);
+        if(!item) return FALSE;
+        uint32_t flavors=be32(item);
+        if(flavors>(size_t)(end-cursor)/16) return FALSE;
+        for(uint32_t f=0;f<flavors;f++) {
+            uint32_t typeLength;
+            const uint8_t *type=counted(&cursor,end,&typeLength);
+            const uint8_t *flavor=take(&cursor,end,8); /* Flags and tag count. */
+            if(!type || !flavor) return FALSE;
+            uint32_t tags=be32(flavor+4), size;
+            if(tags>(size_t)(end-cursor)/8) return FALSE;
+            for(uint32_t t=0;t<tags;t++) {
+                if(!counted(&cursor,end,&size) || !counted(&cursor,end,&size)) return FALSE;
+            }
+            const uint8_t *data=counted(&cursor,end,&size);
+            if(!data) return FALSE;
+            if(!*text && size<=CLIPBOARD_TEXT_LIMIT && typeLength==sizeof(clipboardTextType)-1 &&
+               !memcmp(type,clipboardTextType,typeLength)) {
+                *text=(const char *)data; *textLength=(int)size;
+            }
+        }
+    }
+    return TRUE;
+}
+
+static rfbBool receiveClipboard(rfbClient *c) {
+    uint8_t h[15];
+    if(!ReadFromRFBServer(c,(char *)h,sizeof(h))) return FALSE;
+    uint32_t length=be32(h+7), compressed=be32(h+11);
+    if(length>CLIPBOARD_WIRE_LIMIT || !compressed || compressed>CLIPBOARD_WIRE_LIMIT)
+        return fail(c,APPLE_CLIPBOARD);
+    Apple *a=state(c);
+    rfbBool answer=a->clipboardPending && be32(h+3)==a->clipboardRequestID && !(h[1]&1);
+    if(length>CLIPBOARD_ARCHIVE_LIMIT || compressed>CLIPBOARD_ARCHIVE_LIMIT) {
+        /* A large image can exceed the local limit. Drain it and report the transfer as failed. */
+        char buffer[4096];
+        while(compressed) {
+            unsigned chunk=compressed<sizeof(buffer)?compressed:sizeof(buffer);
+            if(!ReadFromRFBServer(c,buffer,chunk)) return FALSE;
+            compressed-=chunk;
+        }
+        if(answer) {
+            a->clipboardPending=FALSE;
+            if(c->GotXCutTextUTF8) c->GotXCutTextUTF8(c,NULL,0);
+        }
+        return TRUE;
+    }
+    uint8_t *archive=malloc(length+1);
+    if(!archive) return fail(c,APPLE_CLIPBOARD);
+    const char *text=length?NULL:"";
+    int textLength=0;
+    rfbBool ok=inflateClipboard(c,compressed,archive,length);
+    if(ok && !clipboardText(archive,length,&text,&textLength)) ok=fail(c,APPLE_CLIPBOARD);
+    if(ok && answer) {
+        a->clipboardPending=FALSE;
+        if(c->GotXCutTextUTF8) c->GotXCutTextUTF8(c,text,textLength);
+    }
+    free(archive);
+    return ok;
+}
+
+rfbBool rfbRemoraAppleClipboard(rfbClient *c,const char *text,int length) {
+    if(!state(c) || c->remoraDiagnostic.phase!=RFB_REMORA_READY || length<0 ||
+       length>CLIPBOARD_TEXT_LIMIT || (length && !text)) return FALSE;
+    enum { TYPE_LENGTH=sizeof(clipboardTextType)-1 };
+    uint8_t prefix[20+TYPE_LENGTH]={0};
+    unsigned prefixLength=4;
+    if(length) {
+        put32(prefix,1);
+        put32(prefix+4,TYPE_LENGTH);
+        memcpy(prefix+8,clipboardTextType,TYPE_LENGTH);
+        put32(prefix+16+TYPE_LENGTH,(uint32_t)length);
+        prefixLength=sizeof(prefix);
+    }
+    /* A zero-flavor item clears the pasteboard. An empty flavor is a promise. */
+    z_stream z={0};
+    if(deflateInit(&z,Z_DEFAULT_COMPRESSION)!=Z_OK) return FALSE;
+    uint32_t archiveLength=prefixLength+(uint32_t)length;
+    unsigned capacity=(unsigned)deflateBound(&z,archiveLength)+6;
+    uint8_t *message=malloc(16+capacity);
+    rfbBool ok=FALSE;
+    if(message) {
+        z.next_out=message+16; z.avail_out=capacity;
+        z.next_in=prefix; z.avail_in=prefixLength;
+        if(deflate(&z,Z_NO_FLUSH)==Z_OK && !z.avail_in) {
+            z.next_in=(Bytef *)text; z.avail_in=(unsigned)length;
+            if(deflate(&z,Z_SYNC_FLUSH)==Z_OK && !z.avail_in && z.avail_out) {
+                memset(message,0,16); message[0]=0x1f;
+                put32(message+8,archiveLength); put32(message+12,(uint32_t)z.total_out);
+                ok=WriteToRFBServer(c,(char *)message,16+(unsigned)z.total_out);
+            }
+        }
+    }
+    deflateEnd(&z);
+    free(message);
+    return ok;
+}
+
 rfbBool rfbRemoraDisplayReset(rfbClient *c) {
     if(!state(c)) c->remoraAppleState=calloc(1,sizeof(Apple));
     Apple *a=state(c);
@@ -168,7 +358,7 @@ rfbBool rfbRemoraSelectDisplay(rfbClient *c,uint32_t id) {
     return FALSE;
 }
 int rfbRemoraAppleMessage(rfbClient *c,uint8_t type) {
-    uint8_t h[15]; uint32_t n;
+    uint8_t h[7]; uint32_t n;
     switch(type) {
     case 0: case 2: return 0;
     case 4: case 7: return 1; /* ARDAck and NOP are one-byte messages. */
@@ -176,14 +366,8 @@ int rfbRemoraAppleMessage(rfbClient *c,uint8_t type) {
         if(!ReadFromRFBServer(c,(char *)h,7)) return -1;
         n=be32(h+3); if(n&0x80000000u) n=0u-n;
         return skip(c,n)?1:-1;
-    case 0x1f: /* Apple pasteboard: format/reserved/session/uncompressed/compressed sizes. */
-        if(!ReadFromRFBServer(c,(char *)h,15)) return -1;
-        return skip(c,be32(h+11))?1:-1;
-    case 0x14: /* StateChange: pad, BE16 body length, body. */
-        if(!ReadFromRFBServer(c,(char *)h,3)) return -1;
-        n=be16(h+1);
-        if(n<4) return fail(c,APPLE_PROFILE),-1;
-        return skip(c,n)?1:-1;
+    case 0x1f: return receiveClipboard(c)?1:-1;
+    case 0x14: return stateChange(c)?1:-1;
     case 0x51: return displayInfo(c)?1:-1;
     default: return fail(c,APPLE_PROFILE),-1;
     }
@@ -204,6 +388,10 @@ static void damage(void *context,uint32_t x,uint32_t y,uint32_t w,uint32_t h) {
     a->dirty=TRUE;
 }
 int rfbRemoraAppleRect(rfbClient *c,const rfbFramebufferUpdateRectHeader *r) {
+    if(r->encoding==1103) {
+        rfbRemoraFreeRecords(c);
+        return fail(c,APPLE_REKEY),-1;
+    }
     if(r->encoding==1105) return displayInfo(c)?1:-1;
     if(r->encoding==1101) {
         uint8_t h[8];
@@ -239,6 +427,9 @@ int rfbRemoraAppleRect(rfbClient *c,const rfbFramebufferUpdateRectHeader *r) {
     mvs_stats stats;
     mvs_error error=mvs_decode(a->decoder,&surface,r->r.x,r->r.y,r->r.w,r->r.h,payload,n,damage,a,&stats);
     free(payload);
+    /* Screen Sharing sends partial updates for pixels it has not sent yet, such as at connect.
+     * Remora leaves those tiles as they are and asks for the screen in full. */
+    if(error==MVS_E_BASELINE) return SendFramebufferUpdateRequest(c,0,0,c->width,c->height,FALSE)?1:-1;
     if(error!=MVS_OK) return fail(c,APPLE_DECODE),-1;
     if(!quant) {
         a->baseline=mvs_region_initialized(a->decoder,0,0,c->width,c->height);
@@ -271,33 +462,12 @@ rfbBool rfbRemoraAppleEnd(rfbClient *c) {
     if(a->dirty) c->GotFrameBufferUpdate(c,a->left,a->top,a->right-a->left,a->bottom-a->top);
     return TRUE;
 }
-/* Apple's combined input format shares its elapsed-time counter across keys and pointers. */
-static rfbBool sendInput(rfbClient *c,uint8_t plain[16]) {
-    Apple *a=state(c);
-    if(!a || !a->keyValid || c->remoraDiagnostic.phase!=RFB_REMORA_READY) return fail(c,APPLE_PROFILE);
-    uint8_t wire[18]={0x10,0}; int length=0;
-    struct timespec now; clock_gettime(CLOCK_MONOTONIC,&now);
-    uint32_t timestamp=(uint32_t)((uint64_t)now.tv_sec*1000000+now.tv_nsec/1000);
-    put32(plain+6,timestamp-a->previousInputTime);
-    rfbBool ok=encrypt_aes128ecb(wire+2,&length,a->key,plain,16) && length==16;
-    if(ok) ok=WriteToRFBServer(c,(char *)wire,sizeof(wire));
-    if(ok) a->previousInputTime=timestamp;
-    OPENSSL_cleanse(plain,16); OPENSSL_cleanse(wire,sizeof(wire));
-    return ok;
-}
-rfbBool rfbRemoraAppleKey(rfbClient *c,uint32_t keysym,rfbBool down) {
-    /* Option is Meta for ARD, preserving the source's held-key identity on both transitions. */
-    if(keysym==0xffe9) keysym=0xffe7;
-    if(keysym==0xffea) keysym=0xffe8;
-    uint8_t plain[16]={0xff,down?1:0}; put32(plain+2,keysym);
-    return sendInput(c,plain);
-}
 rfbBool rfbRemoraApplePointer(rfbClient *c,int x,int y,int mask) {
     /* The common source-button state stays in Remora. Only the wire mask changes. */
-    uint8_t plain[16]={0};
-    plain[10]=0xff; plain[11]=(uint8_t)((mask&1)|((mask&4)>>1)|((mask&2)<<1));
-    put16(plain+12,x); put16(plain+14,y);
-    if(!sendInput(c,plain)) return FALSE;
+    if(!c->remoraRecords || c->remoraDiagnostic.phase!=RFB_REMORA_READY) return FALSE;
+    uint8_t pointer[6]={5,(uint8_t)((mask&1)|((mask&4)>>1)|((mask&2)<<1))};
+    put16(pointer+2,x); put16(pointer+4,y);
+    if(!WriteToRFBServer(c,(char *)pointer,sizeof(pointer))) return FALSE;
     /* Native horizontal deltas are positive toward RFB button 0x20 (left). */
     int dx=(mask&64)?-1:(mask&32)?1:0;
     int dy=(mask&8)?1:(mask&16)?-1:0;

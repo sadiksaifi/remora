@@ -257,7 +257,7 @@ public protocol RemoteSession: AnyObject, Sendable {
     func synchronize(locks: LockKeys)
     /// Releases only human-owned keys and buttons, preserving agent input.
     func releaseHumanInput()
-    /// False when the session never exchanges clipboard text, for example Apple VNC mode.
+    /// Whether the session can exchange clipboard text.
     var supportsClipboardSynchronization: Bool { get }
     func setLocalClipboard(text: String)
 }

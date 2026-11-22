@@ -158,7 +158,8 @@ public struct ControlFailure: Error, Codable, Sendable, Equatable, LocalizedErro
             case .appUnavailable: "Open \(AppIdentity.current.name) and inspect its launch error."
             case .notFound: "List the valid names with `remora connection list`, `remora session list` or `remora prompt list`."
             case .ambiguousTarget: "Use the UUID instead of the name."
-            case .unsupported: "The remote server cannot do this. Reach the goal another way."
+            case .unsupported:
+                "For clipboard reads, copy plain text in the remote session and retry `remora clipboard get`. For other commands, reach the goal another way."
             case .sessionRequired:
                 "Pass --session with a session value from `remora session list`, or open one with `remora connect C`, where C is a name from `remora connection list`."
             case .sessionEnded: "Find the current session with `remora session list`."
