@@ -161,6 +161,21 @@ private func expectPicture(_ color: UInt32, sourceLocation: SourceLocation = #_s
         #expect(desktop.surfacePixel(2, 10, 10) == desktop.gpu.readColor)
     }
 
+    /// A restore from the cache lands on a surface whose GPU-drawn area is read back first, so a later read back
+    /// cannot cover the restored pixels.
+    @Test func gpuDrawnAreaIsReadBackBeforeACachedAreaIsRestoredOverIt() throws {
+        let desktop = try Desktop()
+        desktop.surface(1, at: (0, 0))
+        desktop.surface(2, at: (128, 32))
+        desktop.fill(1, Area(0, 0, 16, 16), 0xFF0000)
+        desktop.cache(1, Area(0, 0, 16, 16), slot: 1)
+        desktop.h264(2, RMGRAPHICS_AVC420, [Area(0, 0, 16, 16)])
+        desktop.restore(slot: 1, to: 2, x: 8, y: 8)
+        #expect(desktop.gpu.reads.map(\.areas) == [[Area(128, 32, 144, 48)]])
+        #expect(desktop.surfacePixel(2, 4, 4) == desktop.gpu.readColor)
+        #expect(desktop.surfacePixel(2, 10, 10) == 0xFF0000)
+    }
+
     /// Windows mixes H.264 with codecs such as planar. A planar update lands on the surface's read-back pixels,
     /// reaches the desktop at the end of the frame, and leaves later H.264 on the GPU, with no redraw for AVC444.
     @Test func planarUpdateBetweenH264UpdatesDrawsOverTheReadBackPixels() throws {
@@ -200,10 +215,12 @@ private func expectPicture(_ color: UInt32, sourceLocation: SourceLocation = #_s
         #expect(desktop.surfacePixel(2, 10, 10) == desktop.gpu.readColor)
     }
 
-    /// The desktop texture has no room for a surface that hangs off the desktop, so FreeRDP draws it.
-    @Test func surfacePartlyOffTheDesktopDrawsOnTheCPU() throws {
+    /// The desktop texture has no room for a surface that hangs off the desktop's right or bottom edge, so FreeRDP
+    /// draws it.
+    @Test(arguments: [(UInt32(220), UInt32(0)), (0, 100)])
+    func surfacePartlyOffTheDesktopDrawsOnTheCPU(x: UInt32, y: UInt32) throws {
         let desktop = try Desktop()
-        desktop.surface(1, at: (220, 100))
+        desktop.surface(1, at: (x, y))
         desktop.h264(1)
         #expect(desktop.gpu.frames.isEmpty)
         expectPicture(desktop.surfacePixel(1, 5, 5))
@@ -275,14 +292,17 @@ private func expectPicture(_ color: UInt32, sourceLocation: SourceLocation = #_s
         expectPicture(desktop.surfacePixel(2, 5, 5))
     }
 
-    /// GPU drawing from before a GPU error is gone, so only drawing after it is read back.
+    /// A GPU error discards GPU drawing on every surface, so only drawing after it is read back.
     @Test func drawingLostToAGPUErrorIsNotReadBack() throws {
         let desktop = try Desktop()
         desktop.surface(1, at: (0, 0))
-        desktop.gpu.results = [RMRDP_VIDEO_DRAWN, RMRDP_VIDEO_DRAWN_AFTER_LOSS]
+        desktop.surface(2, at: (128, 32))
+        desktop.gpu.results = [RMRDP_VIDEO_DRAWN, RMRDP_VIDEO_DRAWN, RMRDP_VIDEO_DRAWN_AFTER_LOSS]
         desktop.h264(1, RMGRAPHICS_AVC420, [Area(0, 0, 16, 16)])
+        desktop.h264(2, RMGRAPHICS_AVC420, [Area(0, 0, 16, 16)])
         desktop.h264(1, RMGRAPHICS_AVC420, [Area(32, 32, 48, 48)])
         #expect(desktop.refreshes == 1)
+        desktop.fill(2, Area(60, 60, 64, 64), 0xFF0000)
         desktop.fill(1, Area(60, 60, 64, 64), 0xFF0000)
         #expect(desktop.gpu.reads.map(\.areas) == [[Area(32, 32, 48, 48)]])
     }

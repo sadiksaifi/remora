@@ -256,6 +256,12 @@ func avc444MatchesFreeRDPByteForByte(chroma: H264Renderer.Layout) throws {
     var drawn: (any MTLTexture)?
     _ = try desktop.submit { texture, _ in drawn = texture }
     let lost = try #require(drawn)
+    // A CPU update staged after the failed command holds a staging slot, which the discard must return.
+    let update = [UInt8](repeating: 0, count: 64 * 48 * 4)
+    _ = try update.withUnsafeBytes {
+        try desktop.ingest(
+            BorrowedFrame(pixels: $0.baseAddress!, width: 64, height: 48, stride: 256, dirtyRectangles: [.init(x: 0, y: 0, width: 8, height: 8)]))
+    }
     desktop.discardFramebuffer(drawnInto: lost)
     #expect(observed.withLock { $0 } == 1)
     #expect(desktop.losses == 1)

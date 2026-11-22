@@ -109,12 +109,12 @@ RMGraphics *rm_graphics_new(uint32_t width, uint32_t height, bool refresh, const
     if (!g)
         return NULL;
     g->session = rm_rdp_create(&config, callbacks, user);
+    /* The session's context comes first in it. */
+    g->context = (rdpContext *)g->session;
     if (!g->session || !rm_rdp_video(g->session)) {
         rm_graphics_free(g);
         return NULL;
     }
-    /* The session's context comes first in it. */
-    g->context = (rdpContext *)g->session;
     /* The order caches that GDI registers with are made while connecting. Graphics pipeline commands use none. */
     rdpSettings *settings = g->context->settings;
     if (!freerdp_settings_set_bool(settings, FreeRDP_SuppressOutput, TRUE) ||
