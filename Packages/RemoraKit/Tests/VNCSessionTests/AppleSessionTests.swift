@@ -1,6 +1,7 @@
 import Foundation
 import RemoraCore
 import Testing
+import os
 
 @testable import VNCSession
 
@@ -82,7 +83,7 @@ private final class ApplePixels: FrameSink, @unchecked Sendable {
 @MainActor private func appleSession(
     _ outcome: String, offers: String = "apple-mixed", updatesEnabled: Bool = true, mode: VNCMode = .apple, password: String? = "fixture-password",
     patience: Duration = .seconds(4), actions: (@MainActor @Sendable (VNCSession, ApplePixels) async throws -> Void)? = nil,
-    onClipboard: ((VNCSession, RemoteClipboard.Status) -> Void)? = nil
+    onClipboard: ((VNCSession, RemoteClipboard.Status) -> Void)? = nil, onDisconnect: (() -> Void)? = nil
 ) async throws -> ([String: Any], [DisconnectReason], ApplePixels) {
     let peer = Process()
     peer.executableURL = URL(fileURLWithPath: "/usr/bin/python3")
@@ -130,13 +131,46 @@ private final class ApplePixels: FrameSink, @unchecked Sendable {
             if let actions { work = Task { try await actions(session, frames) } }
         }
         if case .clipboardChanged(_, let status) = event { onClipboard?(session, status) }
-        if case .stateChanged(.disconnected(let reason)) = event, let reason { terminals.append(reason) }
+        if case .stateChanged(.disconnected(let reason)) = event {
+            onDisconnect?()
+            if let reason { terminals.append(reason) }
+        }
     }
     try await work?.value
-    peer.waitUntilExit()
-    let result = try #require(JSONSerialization.jsonObject(with: output.fileHandleForReading.readDataToEndOfFile()) as? [String: Any])
+    // Wait off the main actor, so a long peer does not delay another test's session events.
+    let report = await Task.detached {
+        peer.waitUntilExit()
+        return output.fileHandleForReading.readDataToEndOfFile()
+    }.value
+    let result = try #require(JSONSerialization.jsonObject(with: report) as? [String: Any])
     #expect(result["error_class"] == nil, "\(outcome): stage=\(result["stage"] ?? "unknown")")
     return (result, terminals, frames)
+}
+
+// The peer stops reading at the start of a 640 KiB upload. Loopback socket buffers hold about 340 KiB, so the write
+// stalls. Its deadline is 10 s plus the message size at 1 Mbit/s, so the session ends about 15 s after the upload starts.
+@Test(arguments: [VNCMode.apple, .standard])
+@MainActor func aPeerThatStopsReadingEndsTheSessionAtTheWriteDeadline(_ mode: VNCMode) async throws {
+    // Random printable ASCII keeps Apple mode's compressed upload above the buffered amount.
+    let text = String(String.UnicodeScalarView((0..<640 * 1024).map { _ in Unicode.Scalar(UInt8.random(in: 0x20...0x7e)) }))
+    let started = OSAllocatedUnfairLock<ContinuousClock.Instant?>(initialState: nil)
+    var elapsed: Duration?
+    let (wire, terminals, _) = try await appleSession(
+        mode == .apple ? "apple-write-stall" : "runtime-write-stall", offers: mode == .apple ? "apple-mixed" : "ard-only", mode: mode,
+        patience: .seconds(25),
+        actions: { session, pixels in
+            while pixels.samples.isEmpty { try await Task.sleep(for: .milliseconds(10)) }
+            started.withLock { $0 = .now }
+            session.setLocalClipboard(text: text)
+        },
+        onDisconnect: { elapsed = started.withLock { $0 }?.duration(to: .now) })
+    #expect(terminals == [.connectionTimedOut])
+    let duration = try #require(elapsed)
+    #expect(duration >= .seconds(10) && duration < .seconds(18), "\(duration)")
+    // The client closed its transport partway through the upload.
+    #expect(wire["closed_after_stall"] as? Bool == true)
+    let declared = try #require(wire["stalled_upload_declared"] as? Int)
+    #expect(try #require(wire["stalled_bytes"] as? Int) < declared)
 }
 
 @Test @MainActor func appleClipboardDropsAReplyThatALocalUploadReplaced() async throws {

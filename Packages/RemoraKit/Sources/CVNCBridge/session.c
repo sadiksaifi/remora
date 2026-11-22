@@ -634,6 +634,10 @@ int rm_vnc_error(RMVNC *s) {
     if (s->error && s->error!=6) return s->error;
     return s->client && s->client->remoraAppleError ? s->client->remoraAppleError : s->error;
 }
+bool rm_vnc_write_timed_out(RMVNC *s) {
+    const rfbRemoraRuntimeDiagnostic *d = s->client ? &s->client->remoraRuntime : NULL;
+    return d && d->failure == RFB_REMORA_TIMEOUT && d->operation == RFB_REMORA_WRITE_OP;
+}
 const char *rm_vnc_security(RMVNC *s) {
     if (!s->client) return "unnegotiated";
     switch(s->client->authScheme) {

@@ -390,6 +390,10 @@ public final class VNCSession: AgentInputSession, @unchecked Sendable {
                     let address = String(cString: rm_vnc_failure_address(handle))
                     if !address.isEmpty { failureAddress = address }
                     logRuntimeFailure(handle)
+                    // A write that missed its deadline is the cause, whichever caller reported the failed write.
+                    if rm_vnc_write_timed_out(handle) {
+                        state.lock.withLock { if state.reason != .cancelledByUser { state.reason = .connectionTimedOut } }
+                    }
                     rm_vnc_free(handle)
                 }
                 finish(failureAddress: failureAddress)
