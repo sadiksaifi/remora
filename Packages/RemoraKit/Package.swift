@@ -43,7 +43,11 @@ let package = Package(
             name: "RemoraCore",
             dependencies: [.product(name: "KeychainAccess", package: "KeychainAccess")]
         ),
-        .testTarget(name: "RemoraCoreTests", dependencies: ["RemoraCore", "CFreeRDPBridge", "CVNCBridge"], resources: [.copy("CursorReference")]),
+        // FreeRDP's CPU conversion of H.264 pictures, the reference for H264Renderer's tests.
+        .target(name: "CFreeRDPReference", dependencies: ["FreeRDP"], path: "Tests/CFreeRDPReference"),
+        .testTarget(
+            name: "RemoraCoreTests", dependencies: ["RemoraCore", "CFreeRDPBridge", "CVNCBridge", "CFreeRDPReference"],
+            resources: [.copy("CursorReference")]),
     ],
     swiftLanguageModes: [.v6]
 )

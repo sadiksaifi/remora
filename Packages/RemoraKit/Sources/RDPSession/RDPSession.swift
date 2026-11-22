@@ -1,4 +1,5 @@
 import CFreeRDPBridge
+import CoreVideo
 import Foundation
 import RemoraCore
 import os
@@ -19,6 +20,8 @@ public final class RDPSession: AgentInputSession, @unchecked Sendable {
     private let isoKeyboard: Bool
     let inputFeedback: @Sendable (InputSource, SessionInputFeedback) -> Void
     private let state = StateBox()
+    /// Set on the session thread before FreeRDP starts; read only by its callbacks there.
+    private let video = VideoBox()
     /// FreeRDP's configuration folder, which holds the certificates the user accepted.
     private let configurationDirectory: URL
 
@@ -193,6 +196,7 @@ public final class RDPSession: AgentInputSession, @unchecked Sendable {
                     if state.cancelled { rm_rdp_abort(handle) }
                 }
                 rm_rdp_run(handle)
+                video.endLossObserver?()
                 state.lock.withLock {
                     state.connected = false
                     state.handle = nil
@@ -235,6 +239,41 @@ public final class RDPSession: AgentInputSession, @unchecked Sendable {
             dynamic_resolution: configuration.allowsDynamicResize
         )
         var callbacks = RMRDPCallbacks()
+        if let desktop = frameSink.metalDesktop {
+            do {
+                video.renderer = try H264Renderer(desktop: desktop)
+                // A frame drawn just before the loss may be the last one for a while, so no later draw would notice.
+                let observer = desktop.addLossObserver { [weak self] in self?.enqueue { rm_rdp_request_refresh($0) } }
+                video.endLossObserver = { desktop.removeLossObserver(observer) }
+                callbacks.video_frame = { user, frame in
+                    guard let frame, let renderer = session(user).video.renderer else { return RMRDP_VIDEO_FAILED }
+                    do {
+                        let kept = try renderer.draw(videoTarget(frame.pointee), passes: try videoPasses(frame.pointee))
+                        return kept ? RMRDP_VIDEO_DRAWN : RMRDP_VIDEO_DRAWN_AFTER_LOSS
+                    } catch {
+                        rdpLog.error("GPU H.264 drawing failed: \(error.localizedDescription, privacy: .public)")
+                        return RMRDP_VIDEO_FAILED
+                    }
+                }
+                callbacks.video_read = { user, rectangles, count, originX, originY, pixels, stride in
+                    guard let rectangles, let pixels, let renderer = session(user).video.renderer else { return false }
+                    let areas = UnsafeBufferPointer(start: rectangles, count: count).map {
+                        DirtyRectangle(
+                            x: Int($0.left), y: Int($0.top), width: Int($0.right) - Int($0.left), height: Int($0.bottom) - Int($0.top))
+                    }
+                    do {
+                        try renderer.read(areas, into: pixels, stride: Int(stride), originX: Int(originX), originY: Int(originY))
+                        return true
+                    } catch {
+                        rdpLog.error("Desktop read back failed: \(error.localizedDescription, privacy: .public)")
+                        return false
+                    }
+                }
+                callbacks.video_surface_reset = { user, surface in session(user).video.renderer?.removeSurface(surface) }
+            } catch {
+                rdpLog.error("H.264 stays on the CPU: \(error.localizedDescription, privacy: .public)")
+            }
+        }
         callbacks.connected = { user in
             let owner = session(user)
             owner.state.lock.withLock {
@@ -392,6 +431,38 @@ public final class RDPSession: AgentInputSession, @unchecked Sendable {
         let answer = wait.answer()
         state.lock.withLock { state.cancelChallenge = nil }
         return answer
+    }
+}
+
+private final class VideoBox: @unchecked Sendable {
+    var renderer: H264Renderer?
+    var endLossObserver: (() -> Void)?
+}
+
+private func videoTarget(_ frame: RMRDPVideoFrame) -> H264Renderer.Target {
+    H264Renderer.Target(
+        surface: frame.surface, surfaceWidth: Int(frame.surface_width), surfaceHeight: Int(frame.surface_height),
+        originX: Int(frame.origin_x), originY: Int(frame.origin_y),
+        visibleWidth: Int(frame.visible_width), visibleHeight: Int(frame.visible_height),
+        desktopWidth: Int(frame.desktop_width), desktopHeight: Int(frame.desktop_height))
+}
+
+private func videoPasses(_ frame: RMRDPVideoFrame) throws -> [H264Renderer.Pass] {
+    try [frame.passes.0, frame.passes.1].prefix(min(2, frame.pass_count)).map { pass in
+        guard let image = pass.image else { throw CaptureFailure.image("H.264 pass without a picture.") }
+        let layout: H264Renderer.Layout
+        switch pass.layout {
+        case RMRDP_VIDEO_LUMA: layout = .luma
+        case RMRDP_VIDEO_CHROMA_V1: layout = .chromaV1
+        case RMRDP_VIDEO_CHROMA_V2: layout = .chromaV2
+        default: layout = .yuv420
+        }
+        return H264Renderer.Pass(
+            layout: layout, image: Unmanaged<CVPixelBuffer>.fromOpaque(image).takeUnretainedValue(),
+            rectangles: UnsafeBufferPointer(start: pass.rectangles, count: pass.count).map {
+                H264Renderer.Rectangle(left: Int($0.left), top: Int($0.top), right: Int($0.right), bottom: Int($0.bottom))
+            },
+            convertHeight: Int(pass.convert_height))
     }
 }
 
