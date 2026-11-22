@@ -35,7 +35,7 @@ with tempfile.TemporaryDirectory(prefix='remora-apple-sanitizers-') as temporary
         # A server that does not offer the SRP login gets no selection and no credentials.
         *(('apple-policy-reject', 0, '18', offers) for offers in ('ard-only', 'apple-ard', 'tls-ard', 'none-only')),
         # Unsupported SRP parameters end the login before the proof. A server without the verifier ends it after.
-        *(('apple-srp-'+case, 0, '8') for case in ('group', 'generator', 'public-zero', 'public-modulus', 'iterations-zero',
+        *(('apple-srp-'+case, 0, '8') for case in ('group', 'generator', 'public-zero', 'public-modulus', 'iterations-zero', 'iterations-low',
                                                     'iterations-excessive', 'options', 'flag', 'trailing')),
         ('apple-impersonator-proof', 0, '19'), ('apple-impersonator-result', 0, '19'),
     ]

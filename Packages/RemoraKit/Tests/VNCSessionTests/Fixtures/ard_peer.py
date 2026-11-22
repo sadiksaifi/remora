@@ -51,7 +51,7 @@ SRP_N = int(
 SRP_G = 5
 SRP_SIZE = 512
 SRP_SALT = hashlib.sha256(b'ARD synthetic SRP salt').digest()
-SRP_ITERATIONS = 2048
+SRP_ITERATIONS = 10000
 SRP_OPTIONS = b'mda=SHA-512,replay_detection,conf+int=ChaCha20-Poly1305,kdf=SALTED-SHA512-PBKDF2'
 
 
@@ -162,7 +162,7 @@ def srp_login(outcome, exact, send, report):
     # macOS answers an unknown account with a random salt.
     salt = SRP_SALT if known else os.urandom(32)
     iterations = SRP_ITERATIONS
-    # The impersonator has no verifier for the account. It commits to one password guess.
+    # The impersonator has no verifier for the account. It builds its challenge from a made-up password.
     impersonator = outcome.startswith('apple-impersonator-')
     verifier = srp_verifier(b'impersonator guess' if impersonator else PASSWORD, salt, iterations)
     k = int.from_bytes(srp_hash(srp_pad(SRP_N), srp_pad(SRP_G)), 'big')
@@ -174,6 +174,7 @@ def srp_login(outcome, exact, send, report):
     elif outcome == 'apple-srp-public-zero': B = 0
     elif outcome == 'apple-srp-public-modulus': B = SRP_N
     elif outcome == 'apple-srp-iterations-zero': iterations = 0
+    elif outcome == 'apple-srp-iterations-low': iterations = 9999
     elif outcome == 'apple-srp-iterations-excessive': iterations = 1 << 40
     elif outcome == 'apple-srp-options': options = options.replace(b'kdf=SALTED-SHA512-PBKDF2', b'kdf=SALTED-SHA512')
     elif outcome == 'apple-srp-flag': flag = 1
@@ -193,7 +194,7 @@ def srp_login(outcome, exact, send, report):
     report['credentials_valid'] = known and report['proof_verified'] and not impersonator
     report['stage'] = 'security_result'
     if impersonator:
-        # Its one guess failed, so it cannot compute the client's K. It claims success anyway.
+        # Its made-up password was wrong, so it cannot compute the client's K. It claims success anyway.
         if report['proof_verified']: raise ValueError('impersonator verified the proof')
         if outcome == 'apple-impersonator-proof':
             send(srp_frame(srp_pack('oos', srp_hash(srp_pad(A), proof, K), os.urandom(16), b'') + bytes(4)))

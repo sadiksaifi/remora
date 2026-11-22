@@ -435,7 +435,7 @@ private func richFlavors(_ source: String) -> [RemoteClipboard.Flavor] {
 @MainActor func appleEndsTheLoginWhenTheServerCannotProveItHoldsTheVerifier(_ claim: String) async throws {
     // The peer has no verifier for the account. It answers with a made-up proof, or with a bare success result.
     let (wire, terminals, pixels) = try await appleSession("apple-impersonator-\(claim)")
-    // The client's proof told the peer only that its one password guess was wrong.
+    // The peer could not verify the client's proof.
     #expect(wire["proof_verified"] as? Bool == false)
     // The client then closed without ClientInit, records or input.
     #expect(wire["closed_after_proof"] as? Bool == true)
@@ -448,7 +448,7 @@ private func richFlavors(_ source: String) -> [RemoteClipboard.Flavor] {
 }
 
 @Test(arguments: [
-    "group", "generator", "public-zero", "public-modulus", "iterations-zero", "iterations-excessive", "options", "flag", "trailing",
+    "group", "generator", "public-zero", "public-modulus", "iterations-zero", "iterations-low", "iterations-excessive", "options", "flag", "trailing",
 ])
 @MainActor func appleSendsNoProofForUnsupportedSRPParameters(_ fault: String) async throws {
     let (wire, terminals, pixels) = try await appleSession("apple-srp-\(fault)")

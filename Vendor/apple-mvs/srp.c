@@ -13,7 +13,8 @@
 #include <time.h>
 
 /* The RFC 5054 4096-bit group with SHA-512. The iteration bound keeps a peer from stalling the client in PBKDF2. */
-enum { GROUP = 512, HASH = 64, STRETCHED = 128, MAX_NAME = 255, MAX_MESSAGE = 4096, MAX_ITERATIONS = 2000000 };
+enum { GROUP = 512, HASH = 64, STRETCHED = 128, MAX_NAME = 255, MAX_MESSAGE = 4096,
+       MIN_ITERATIONS = 10000, MAX_ITERATIONS = 2000000 };
 static const uint8_t generator[GROUP] = {[GROUP - 1] = 5};
 static const char options[] = "mda=SHA-512,replay_detection,conf+int=ChaCha20-Poly1305,kdf=SALTED-SHA512-PBKDF2";
 
@@ -184,7 +185,9 @@ rfbBool rfbRemoraAppleLogin(rfbClient *c) {
         (salt = field(&r, 1, &saltLength)) && number(&r, B) && memcmp(B, zero, GROUP) && memcmp(B, modulus, GROUP) < 0 &&
         (count = take(&r, 8)) && (text = field(&r, 2, &n)) && selectable(text, n) && r.at == r.end;
     if (valid) iterations = (uint64_t)be32(count) << 32 | be32(count + 4);
-    if (!iterations || iterations > MAX_ITERATIONS) { fail(c, APPLE_PROFILE); goto out; }
+    /* The server picks the PBKDF2 cost, and an impersonator would pick a low one to test password
+     * guesses against M1 cheaply. macOS used 158,730 for a real account and 19,417 for an unknown one. */
+    if (iterations < MIN_ITERATIONS || iterations > MAX_ITERATIONS) { fail(c, APPLE_PROFILE); goto out; }
     c->remoraDiagnostic.ardBits = GROUP * 8;
     rfbRemoraDiagnosticComplete(c, RFB_REMORA_ARD_PARAMETERS);
 
