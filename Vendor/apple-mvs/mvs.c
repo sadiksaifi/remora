@@ -20,13 +20,6 @@
 
 /* ---- Tables (mvs-tables.js, from libjpeg) ---- */
 
-static const uint8_t ZIGZAG[64] = {
-     0,  1,  8, 16,  9,  2,  3, 10, 17, 24, 32, 25, 18, 11,  4,  5,
-    12, 19, 26, 33, 40, 48, 41, 34, 27, 20, 13,  6,  7, 14, 21, 28,
-    35, 42, 49, 56, 57, 50, 43, 36, 29, 22, 15, 23, 30, 37, 44, 51,
-    58, 59, 52, 45, 38, 31, 39, 46, 53, 60, 61, 54, 47, 55, 62, 63,
-};
-
 static const uint8_t DEFAULT_LUMA_QUANT[64] = {
     16, 11, 11, 14, 24, 22, 24, 33,
     11, 12, 11, 11, 26, 18, 19, 23,
@@ -102,91 +95,118 @@ static inline uint8_t green(int32_t y, int32_t cb, int32_t cr) {
 }
 static inline uint8_t blue(int32_t y, int32_t cb) { return clamp255(y + floor_shift16(116130 * (cb - 128) + 32768)); }
 
-/* ---- Bitstream (mvs-bitstream.js). A read past the end sets a sticky
- * error and returns zeros, so every loop still ends; the caller checks the
- * error after each tile and returns it. ---- */
+/* ---- Bitstream (mvs-bitstream.js). Bits past the end read as zeros, and
+ * consuming one sets a sticky error, so every loop still ends; the caller
+ * checks the error after each tile and returns it. ---- */
 
 typedef struct {
     const uint8_t *data;
-    size_t length, byte;
-    unsigned bit;
+    size_t length, position; /* bytes, and bits consumed */
     mvs_error *error;
 } bitstream;
 
-static unsigned read_bit(bitstream *b) {
-    if (b->byte >= b->length) {
-        if (!*b->error) *b->error = MVS_E_OVERRUN;
-        return 0;
-    }
-    unsigned v = (b->data[b->byte] >> (7 - b->bit)) & 1u;
-    if (++b->bit > 7) { b->bit = 0; b->byte++; }
-    return v;
-}
-
-/* The next 64 bits, MSB first, when 8 bytes remain; the slow paths handle the tail. */
-static inline bool peek64(const bitstream *b, uint64_t *out) {
-    if (b->length - b->byte < 8 || b->byte > b->length) return false;
-    uint64_t w;
-    memcpy(&w, b->data + b->byte, 8);
-    *out = (__builtin_bswap64(w) & (UINT64_MAX >> b->bit)) << b->bit;
-    return true;
-}
-
-static inline void skip_bits(bitstream *b, unsigned n) {
-    unsigned pos = b->bit + n;
-    b->byte += pos >> 3;
-    b->bit = pos & 7;
-}
-
-static uint32_t read_bits(bitstream *b, unsigned n) {
-    uint64_t w;
-    if (n && n <= 32 && peek64(b, &w)) {
-        skip_bits(b, n);
-        return (uint32_t)(w >> (64 - n));
-    }
-    uint32_t v = 0;
-    for (unsigned i = 0; i < n; i++) v = (v << 1) | read_bit(b);
-    return v;
-}
-
 static void fail(mvs_error *error, mvs_error e) { if (!*error) *error = e; }
+
+/* A window holds the next bits of the stream, MSB first. Dropping its first n < 64 bits is a
+ * shift that discards no set bit. */
+static inline uint64_t drop(uint64_t window, unsigned n) { return (window & (UINT64_MAX >> n)) << n; }
+
+/* A window of the next 57 or more bits */
+_Static_assert(__BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__, "peek loads the stream as little-endian words");
+static inline uint64_t peek(const bitstream *b) {
+    size_t byte = b->position >> 3, left = b->length - byte;
+    uint64_t w = 0;
+    if (left >= 8) memcpy(&w, b->data + byte, 8);
+    else memcpy(&w, b->data + byte, left);
+    return drop(__builtin_bswap64(w), b->position & 7);
+}
+
+static inline void skip(bitstream *b, unsigned n) {
+    b->position += n;
+    if (b->position > b->length * 8) {
+        b->position = b->length * 8;
+        fail(b->error, MVS_E_OVERRUN);
+    }
+}
+
+/* 1 to 32 bits */
+static inline uint32_t read_bits(bitstream *b, unsigned n) {
+    uint64_t w = peek(b);
+    skip(b, n);
+    return (uint32_t)(w >> (64 - n));
+}
+
+static inline unsigned read_bit(bitstream *b) { return read_bits(b, 1); }
 
 /* ---- Rice codes (mvs-rice.js) ---- */
 
-static uint32_t leading_ones(bitstream *b) {
-    uint64_t w;
-    if (peek64(b, &w)) {
+/* Consumes a unary prefix and its closing zero. *rest is a window of the 16 or more bits after them. */
+static inline uint32_t leading_ones(bitstream *b, uint64_t *rest) {
+    for (uint32_t n = 0;; n += 40) {
+        uint64_t w = peek(b);
         unsigned ones = ~w ? (unsigned)__builtin_clzll(~w) : 64;
-        if (ones < 57) { skip_bits(b, ones + 1); return ones; }
+        if (n + ones > MVS_MAX_RICE_PREFIX) {
+            skip(b, MVS_MAX_RICE_PREFIX + 1 - n);
+            fail(b->error, MVS_E_RICE);
+            *rest = peek(b);
+            return 0;
+        }
+        if (ones <= 40) {
+            skip(b, ones + 1);
+            *rest = drop(w, ones + 1);
+            return n + ones;
+        }
+        skip(b, 40);
     }
-    uint32_t n = 0;
-    while (read_bit(b) == 1) {
-        if (++n > MVS_MAX_RICE_PREFIX) { fail(b->error, MVS_E_RICE); return 0; }
-    }
-    return n;
 }
 
-static int32_t signed_mag(bitstream *b, int32_t mag) { return read_bit(b) ? -mag : mag; }
+/* Consumes the low bits of a magnitude from the window after its prefix, then a sign unless the magnitude is zero. */
+static inline int32_t magnitude(bitstream *b, uint64_t w, unsigned bits, uint32_t base) {
+    int32_t mag = (int32_t)(base + (uint32_t)(w >> (64 - bits)));
+    skip(b, bits + (mag != 0));
+    return drop(w, bits) >> 63 ? -mag : mag;
+}
 
 static int32_t dc_rice(bitstream *b) {
-    uint32_t n = leading_ones(b);
-    if (n == 0) return read_bit(b) == 0 ? 0 : signed_mag(b, 1);
-    if (n == 1) return signed_mag(b, 2 + (int32_t)read_bits(b, 1));
-    if (n == 2) return signed_mag(b, 4 + (int32_t)read_bits(b, 2));
-    return signed_mag(b, (int32_t)((n << 3) | read_bits(b, 3)) - 16);
+    uint64_t w;
+    uint32_t n = leading_ones(b, &w);
+    return magnitude(b, w, n < 3 ? (n ? n : 1) : 3, n < 3 ? n * 2 : n * 8 - 16);
 }
 
 static int32_t ac_rice_standard(bitstream *b) {
-    uint32_t n = leading_ones(b);
-    if (n == 0) return signed_mag(b, 2 + (int32_t)read_bits(b, 1));
-    if (n == 1) return signed_mag(b, 4 + (int32_t)read_bits(b, 2));
-    return signed_mag(b, (int32_t)((n << 3) | read_bits(b, 3)) - 8);
+    uint64_t w;
+    uint32_t n = leading_ones(b, &w);
+    return magnitude(b, w, n < 2 ? n + 1 : 3, n < 2 ? n * 2 + 2 : n * 8 - 8);
 }
 
 static int32_t ac_rice_near_dc(bitstream *b) {
-    uint32_t n = leading_ones(b);
-    if (n <= 3) return signed_mag(b, 2 + (int32_t)n * 4 + (int32_t)read_bits(b, 2));
-    return signed_mag(b, 18 + ((int32_t)n - 4) * 8 + (int32_t)read_bits(b, 3));
+    uint64_t w;
+    uint32_t n = leading_ones(b, &w);
+    return magnitude(b, w, n <= 3 ? 2 : 3, n <= 3 ? n * 4 + 2 : n * 8 - 14);
+}
+
+/* A luma code of a partial tile that fits eight bits, looked up by the next eight bits. A
+ * length of zero sends a longer code to dc_rice. */
+typedef struct { int8_t value; uint8_t length; } short_code;
+
+/* Rows are [below the threshold][threshold under 15][baseline not zero]. A zero baseline takes a
+ * whole value: -1, 0 or 1 below a threshold of 15 or more, a Rice code otherwise. Any other
+ * baseline grows by `value`. The decoders above fill the table. */
+static void build_luma_codes(short_code codes[2][2][2][256]) {
+    for (unsigned fine = 0; fine < 2; fine++) {
+        for (unsigned coarse = 0; coarse < 2; coarse++) {
+            unsigned growth_bits = fine ? (coarse ? 3 : 1) : (coarse ? 4 : 3);
+            for (unsigned byte = 0; byte < 256; byte++) {
+                const uint8_t data = (uint8_t)byte;
+                mvs_error error = MVS_OK;
+                bitstream b = { &data, 1, 0, &error };
+                int32_t whole = fine && !coarse ? (read_bit(&b) ? (read_bit(&b) ? -1 : 1) : 0) : dc_rice(&b);
+                codes[fine][coarse][0][byte] =
+                    error ? (short_code){ 0, 0 } : (short_code){ (int8_t)whole, (uint8_t)b.position };
+                codes[fine][coarse][1][byte] = (short_code){ (int8_t)(byte >> (8 - growth_bits)), (uint8_t)growth_bits };
+            }
+        }
+    }
 }
 
 static int32_t quant_step(unsigned pos, unsigned threshold) {
@@ -254,31 +274,17 @@ static huffman_table build_table(void) {
 }
 
 static uint8_t huffman_symbol(bitstream *b, const huffman_table *t) {
-    uint64_t w;
-    if (peek64(b, &w)) {
-        for (int len = 1; len <= 16; len++) {
-            int32_t code = (int32_t)(w >> (64 - len));
-            if (t->max_code[len] >= 0 && code <= t->max_code[len]) {
-                int32_t index = t->val_ptr[len] + (code - t->min_code[len]);
-                skip_bits(b, (unsigned)len);
-                if (index >= 0 && index < (int32_t)sizeof AC_VALUES) return AC_VALUES[index];
-                fail(b->error, MVS_E_HUFFMAN);
-                return 0;
-            }
-        }
-        skip_bits(b, 16);
-        fail(b->error, MVS_E_HUFFMAN);
-        return 0;
+    uint64_t w = peek(b);
+    unsigned len = 1;
+    for (; len <= 16; len++) {
+        int32_t code = (int32_t)(w >> (64 - len));
+        if (t->max_code[len] < 0 || code > t->max_code[len]) continue;
+        int32_t index = t->val_ptr[len] + (code - t->min_code[len]);
+        skip(b, len);
+        if (index >= 0 && index < (int32_t)sizeof AC_VALUES) return AC_VALUES[index];
+        break;
     }
-    int32_t code = 0;
-    for (int len = 1; len <= 16; len++) {
-        code = (code << 1) | (int32_t)read_bit(b);
-        if (t->max_code[len] >= 0 && code <= t->max_code[len]) {
-            int32_t index = t->val_ptr[len] + (code - t->min_code[len]);
-            if (index < 0 || index >= (int32_t)sizeof AC_VALUES) break;
-            return AC_VALUES[index];
-        }
-    }
+    if (len > 16) skip(b, 16);
     fail(b->error, MVS_E_HUFFMAN);
     return 0; /* end of block, so the caller's loop ends */
 }
@@ -317,97 +323,107 @@ enum { CONST_BITS = 13, PASS1_BITS = 2 };
 #define FIX_2_562915447 20995
 #define FIX_3_072711026 25172
 
-/* libjpeg range limit: level shift by 128 and clamp, wrapping wildly
- * out-of-range values the way the 10-bit table does */
-static uint8_t range_limit(int64_t v) {
+/* libjpeg range limit of a value's low ten bits: level shift by 128 and clamp,
+ * wrapping wildly out-of-range values the way the 10-bit table does */
+static inline uint8_t range_limit(unsigned m) {
     /* m < 128 gives m + 128, m < 512 gives 255, m < 896 gives 0, and the rest m - 896.
      * Rotating by 128 puts the two passthrough ranges first, without branches. */
-    unsigned t = ((unsigned)((uint64_t)v & 0x3ffu) + 128u) & 0x3ffu;
+    unsigned t = (m + 128u) & 0x3ffu;
     return t < 256 ? (uint8_t)t : (t < 640 ? 255 : 0);
 }
 
-/* range_limit(asr(v, n)) reads only bits n..n+9 of v, which a logical shift keeps. */
-static inline uint8_t descale_limit(int64_t v, unsigned n) { return range_limit((int64_t)((uint64_t)v >> n)); }
-
-/* wrap32(asr(v, n)) keeps bits n..n+31 of v, which a logical shift keeps too. */
-static inline int32_t descale_wrap(int64_t v, unsigned n) { return wrap32((int64_t)((uint64_t)v >> n)); }
-
 uint8_t mvs_idct_flat(int32_t dc) {
-    return range_limit(asr((int64_t)dc * (1 << PASS1_BITS) + (1 << (PASS1_BITS + 2)), PASS1_BITS + 3));
+    int64_t v = asr((int64_t)dc * (1 << PASS1_BITS) + (1 << (PASS1_BITS + 2)), PASS1_BITS + 3);
+    return range_limit((unsigned)v & 0x3ffu);
+}
+
+/* Eight values, which the compiler keeps in SIMD registers where the target has them */
+typedef int32_t lanes __attribute__((vector_size(32)));
+typedef uint32_t unsigned_lanes __attribute__((vector_size(32)));
+typedef int64_t wide_lanes __attribute__((vector_size(64)));
+
+/* One dimension of the transform before its descale, on eight lanes at once: x[k] holds
+ * frequency k of every lane. */
+#define IDCT_LANES(name, T) \
+    static inline void name(const T x[8], T y[8]) { \
+        T z2 = x[2], z3 = x[6]; \
+        T z1 = (z2 + z3) * FIX_0_541196100; \
+        T tmp2 = z1 - z3 * FIX_1_847759065; \
+        T tmp3 = z1 + z2 * FIX_0_765366865; \
+        T tmp0 = (x[0] + x[4]) * (1 << CONST_BITS); \
+        T tmp1 = (x[0] - x[4]) * (1 << CONST_BITS); \
+        T tmp10 = tmp0 + tmp3, tmp13 = tmp0 - tmp3, tmp11 = tmp1 + tmp2, tmp12 = tmp1 - tmp2; \
+        tmp0 = x[7]; tmp1 = x[5]; tmp2 = x[3]; tmp3 = x[1]; \
+        z1 = tmp0 + tmp3; z2 = tmp1 + tmp2; z3 = tmp0 + tmp2; \
+        T z4 = tmp1 + tmp3; \
+        T z5 = (z3 + z4) * FIX_1_175875602; \
+        tmp0 *= FIX_0_298631336; tmp1 *= FIX_2_053119869; tmp2 *= FIX_3_072711026; tmp3 *= FIX_1_501321110; \
+        z1 *= -FIX_0_899976223; z2 *= -FIX_2_562915447; \
+        z3 = z3 * -FIX_1_961570560 + z5; \
+        z4 = z4 * -FIX_0_390180644 + z5; \
+        tmp0 += z1 + z3; tmp1 += z2 + z4; tmp2 += z2 + z3; tmp3 += z1 + z4; \
+        y[0] = tmp10 + tmp3; y[7] = tmp10 - tmp3; \
+        y[1] = tmp11 + tmp2; y[6] = tmp11 - tmp2; \
+        y[2] = tmp12 + tmp1; y[5] = tmp12 - tmp1; \
+        y[3] = tmp13 + tmp0; y[4] = tmp13 - tmp0; \
+    }
+IDCT_LANES(idct_lanes, lanes)
+IDCT_LANES(idct_lanes_wide, wide_lanes)
+
+/* One pass in 64 bits: y is the transform of x, rounded, divided by 2^shift and wrapped to 32 bits. */
+static void idct_pass_wide(const lanes x[8], lanes y[8], unsigned shift) {
+    wide_lanes wide_x[8], wide_y[8];
+    for (int k = 0; k < 8; k++)
+        for (int i = 0; i < 8; i++) wide_x[k][i] = x[k][i];
+    idct_lanes_wide(wide_x, wide_y);
+    /* wrap32(asr(v, n)) keeps bits n..n+31 of v, which a logical shift keeps too. */
+    for (int k = 0; k < 8; k++)
+        for (int i = 0; i < 8; i++)
+            y[k][i] = wrap32((int64_t)((uint64_t)(wide_y[k][i] + ((int64_t)1 << (shift - 1))) >> shift));
+}
+
+/* The same pass in 32 bits when that is exact. Every intermediate is a sum of inputs whose
+ * weights total 61214 at most, so inputs within +-2^15 keep it and its rounding within 32 bits.
+ * Inlined, so each caller's shift is a constant. */
+static inline __attribute__((always_inline)) void idct_pass(const lanes x[8], lanes y[8], unsigned shift) {
+    lanes wide = { 0 };
+    int32_t any = 0;
+    for (int k = 0; k < 8; k++) wide |= (x[k] > 32767) | (x[k] < -32767);
+    for (int i = 0; i < 8; i++) any |= wide[i];
+    if (any) {
+        idct_pass_wide(x, y, shift);
+        return;
+    }
+    idct_lanes(x, y);
+    /* Floor division without a signed shift */
+    const unsigned_lanes sign = (unsigned_lanes){ 0 } + 0x80000000u;
+    for (int k = 0; k < 8; k++)
+        y[k] = (lanes)((((unsigned_lanes)(y[k] + (1 << (shift - 1))) ^ sign) >> shift) - (sign >> shift));
+}
+
+/* Swaps rows and lanes: three rounds of interleaving row i with row i + 4. */
+static void transpose(lanes m[8]) {
+    for (int round = 0; round < 3; round++) {
+        lanes t[8];
+        for (int i = 0; i < 4; i++) {
+            t[2 * i] = __builtin_shufflevector(m[i], m[i + 4], 0, 8, 1, 9, 2, 10, 3, 11);
+            t[2 * i + 1] = __builtin_shufflevector(m[i], m[i + 4], 4, 12, 5, 13, 6, 14, 7, 15);
+        }
+        memcpy(m, t, sizeof t);
+    }
 }
 
 void mvs_idct8x8(const int32_t block[64], uint8_t out[64]) {
-    int32_t ws[64];
-    for (int c = 0; c < 8; c++) {
-        if (!block[c + 8] && !block[c + 16] && !block[c + 24] && !block[c + 32] &&
-            !block[c + 40] && !block[c + 48] && !block[c + 56]) {
-            int32_t dc = wrap32((int64_t)block[c] * (1 << PASS1_BITS));
-            for (int r = 0; r < 64; r += 8) ws[c + r] = dc;
-            continue;
-        }
-        int64_t z2 = block[c + 16], z3 = block[c + 48];
-        int64_t z1 = (z2 + z3) * FIX_0_541196100;
-        int64_t tmp2 = z1 - z3 * FIX_1_847759065;
-        int64_t tmp3 = z1 + z2 * FIX_0_765366865;
-        z2 = block[c];
-        z3 = block[c + 32];
-        int64_t tmp0 = (z2 + z3) * (1 << CONST_BITS);
-        int64_t tmp1 = (z2 - z3) * (1 << CONST_BITS);
-        int64_t tmp10 = tmp0 + tmp3, tmp13 = tmp0 - tmp3, tmp11 = tmp1 + tmp2, tmp12 = tmp1 - tmp2;
-        tmp0 = block[c + 56]; tmp1 = block[c + 40]; tmp2 = block[c + 24]; tmp3 = block[c + 8];
-        z1 = tmp0 + tmp3; z2 = tmp1 + tmp2; z3 = tmp0 + tmp2;
-        int64_t z4 = tmp1 + tmp3;
-        int64_t z5 = (z3 + z4) * FIX_1_175875602;
-        tmp0 *= FIX_0_298631336; tmp1 *= FIX_2_053119869; tmp2 *= FIX_3_072711026; tmp3 *= FIX_1_501321110;
-        z1 *= -FIX_0_899976223; z2 *= -FIX_2_562915447;
-        z3 = z3 * -FIX_1_961570560 + z5;
-        z4 = z4 * -FIX_0_390180644 + z5;
-        tmp0 += z1 + z3; tmp1 += z2 + z4; tmp2 += z2 + z3; tmp3 += z1 + z4;
-        const unsigned shift = CONST_BITS - PASS1_BITS;
-        const int64_t round = (int64_t)1 << (shift - 1);
-        ws[c]      = descale_wrap(tmp10 + tmp3 + round, shift);
-        ws[c + 56] = descale_wrap(tmp10 - tmp3 + round, shift);
-        ws[c + 8]  = descale_wrap(tmp11 + tmp2 + round, shift);
-        ws[c + 48] = descale_wrap(tmp11 - tmp2 + round, shift);
-        ws[c + 16] = descale_wrap(tmp12 + tmp1 + round, shift);
-        ws[c + 40] = descale_wrap(tmp12 - tmp1 + round, shift);
-        ws[c + 24] = descale_wrap(tmp13 + tmp0 + round, shift);
-        ws[c + 32] = descale_wrap(tmp13 - tmp0 + round, shift);
-    }
-    for (int r = 0; r < 64; r += 8) {
-        if (!ws[r + 1] && !ws[r + 2] && !ws[r + 3] && !ws[r + 4] && !ws[r + 5] && !ws[r + 6] && !ws[r + 7]) {
-            /* Every term but the DC is zero, so all eight outputs equal its rounded value. */
-            const unsigned shift = CONST_BITS + PASS1_BITS + 3;
-            memset(out + r, descale_limit((int64_t)ws[r] * (1 << CONST_BITS) + ((int64_t)1 << (shift - 1)), shift), 8);
-            continue;
-        }
-        int64_t z2 = ws[r + 2], z3 = ws[r + 6];
-        int64_t z1 = (z2 + z3) * FIX_0_541196100;
-        int64_t tmp2 = z1 - z3 * FIX_1_847759065;
-        int64_t tmp3 = z1 + z2 * FIX_0_765366865;
-        int64_t tmp0 = ((int64_t)ws[r] + ws[r + 4]) * (1 << CONST_BITS);
-        int64_t tmp1 = ((int64_t)ws[r] - ws[r + 4]) * (1 << CONST_BITS);
-        int64_t tmp10 = tmp0 + tmp3, tmp13 = tmp0 - tmp3, tmp11 = tmp1 + tmp2, tmp12 = tmp1 - tmp2;
-        tmp0 = ws[r + 7]; tmp1 = ws[r + 5]; tmp2 = ws[r + 3]; tmp3 = ws[r + 1];
-        z1 = tmp0 + tmp3; z2 = tmp1 + tmp2; z3 = tmp0 + tmp2;
-        int64_t z4 = tmp1 + tmp3;
-        int64_t z5 = (z3 + z4) * FIX_1_175875602;
-        tmp0 *= FIX_0_298631336; tmp1 *= FIX_2_053119869; tmp2 *= FIX_3_072711026; tmp3 *= FIX_1_501321110;
-        z1 *= -FIX_0_899976223; z2 *= -FIX_2_562915447;
-        z3 = z3 * -FIX_1_961570560 + z5;
-        z4 = z4 * -FIX_0_390180644 + z5;
-        tmp0 += z1 + z3; tmp1 += z2 + z4; tmp2 += z2 + z3; tmp3 += z1 + z4;
-        const unsigned shift = CONST_BITS + PASS1_BITS + 3;
-        const int64_t round = (int64_t)1 << (shift - 1);
-        out[r]     = descale_limit(tmp10 + tmp3 + round, shift);
-        out[r + 7] = descale_limit(tmp10 - tmp3 + round, shift);
-        out[r + 1] = descale_limit(tmp11 + tmp2 + round, shift);
-        out[r + 6] = descale_limit(tmp11 - tmp2 + round, shift);
-        out[r + 2] = descale_limit(tmp12 + tmp1 + round, shift);
-        out[r + 5] = descale_limit(tmp12 - tmp1 + round, shift);
-        out[r + 3] = descale_limit(tmp13 + tmp0 + round, shift);
-        out[r + 4] = descale_limit(tmp13 - tmp0 + round, shift);
-    }
+    lanes rows[8], columns[8];
+    uint32_t wrapped[64];
+    memcpy(rows, block, sizeof rows);
+    idct_pass(rows, columns, CONST_BITS - PASS1_BITS); /* down each column */
+    transpose(columns);
+    idct_pass(columns, rows, CONST_BITS + PASS1_BITS + 3); /* along each row */
+    transpose(rows);
+    /* The range limit reads ten bits, which the 32-bit wrap keeps. */
+    memcpy(wrapped, rows, sizeof wrapped);
+    for (int i = 0; i < 64; i++) out[i] = range_limit(wrapped[i] & 0x3ffu);
 }
 
 /* ---- Decoder state ---- */
@@ -425,7 +441,7 @@ typedef struct {
 } tile_desc;
 
 struct mvs_decoder {
-    uint8_t luma_quant[64], chroma_quant[64]; /* in coefficient (zigzag) order */
+    uint8_t luma_quant[64], chroma_quant[64]; /* in natural order */
     int16_t coeffs[192], dpcm[192];
     uint8_t solid[3], two_a[3], two_b[3];
     uint32_t tile[64];             /* pixels in the surface format of the current decode */
@@ -439,6 +455,7 @@ struct mvs_decoder {
     uint32_t fb_width, fb_height, tiles_x;
     uint32_t frame_seq;
     huffman_table huffman;
+    short_code luma_codes[2][2][2][256];
     mvs_error error;               /* first failure of the current decode */
     mvs_stats *stats;
 };
@@ -455,12 +472,9 @@ size_t mvs_descriptor_bytes_for(uint32_t width, uint32_t height, size_t *tiles_o
     return bytes;
 }
 
-/* Tables arrive in natural order; keep them in the order coefficients are coded. */
 static void set_quant(mvs_decoder *d, const uint8_t luma[64], const uint8_t chroma[64]) {
-    for (int i = 0; i < 64; i++) {
-        d->luma_quant[i] = luma[ZIGZAG[i]];
-        d->chroma_quant[i] = chroma[ZIGZAG[i]];
-    }
+    memcpy(d->luma_quant, luma, 64);
+    memcpy(d->chroma_quant, chroma, 64);
 }
 
 mvs_decoder *mvs_create(void) {
@@ -470,6 +484,7 @@ mvs_decoder *mvs_create(void) {
     if (!d->cache) { free(d); return NULL; }
     set_quant(d, DEFAULT_LUMA_QUANT, DEFAULT_CHROMA_QUANT);
     d->huffman = build_table();
+    build_luma_codes(d->luma_codes);
     return d;
 }
 
@@ -523,8 +538,9 @@ static bool coverage(mvs_decoder *d, uint32_t x, uint32_t y, uint32_t w, uint32_
         for (uint32_t tx=x/8; tx<=(x+w-1)/8; tx++) {
             uint32_t left=x>tx*8?x-tx*8:0, right=x+w<tx*8+8?x+w-tx*8:8;
             uint32_t top=y>ty*8?y-ty*8:0, bottom=y+h<ty*8+8?y+h-ty*8:8;
-            uint64_t mask=0, row=((UINT64_C(1)<<(right-left))-1)<<left;
-            for (uint32_t r=top; r<bottom; r++) mask|=row<<(r*8);
+            /* One row's bits, repeated in rows top to bottom. */
+            uint64_t row=((UINT64_C(1)<<(right-left))-1)<<left;
+            uint64_t mask=row*UINT64_C(0x0101010101010101) & (UINT64_MAX>>(64-8*(bottom-top)))<<(8*top);
             tile_desc *t=&d->desc[(size_t)ty*d->tiles_x+tx];
             if (mark) {
                 t->initialized|=mask;
@@ -585,32 +601,50 @@ static inline uint32_t pack_rgb(const mvs_decoder *d, const uint8_t rgb[3]) {
            ((uint32_t)rgb[2] << d->blue_shift) | d->alpha;
 }
 
+typedef int16_t coefficients __attribute__((vector_size(128)));
+
 static int transform_plane(mvs_decoder *d, unsigned plane, const uint8_t quant[64], uint8_t out[64]) {
     const int16_t *c = d->coeffs + plane;
     int32_t ac = 0;
     for (int i = 1; i < 64; i++) ac |= c[i];
-    int32_t dc = c[0] * quant[0];
-    if (ac == 0) return mvs_idct_flat(dc);
+    if (ac == 0) return mvs_idct_flat(c[0] * quant[0]);
+    /* Coded (zigzag) order to natural order (mvs-tables.js, from libjpeg): each natural
+     * position names the coded coefficient it takes. */
+    coefficients coded;
+    memcpy(&coded, c, sizeof coded);
+    const coefficients natural = __builtin_shufflevector(coded, coded,
+         0,  1,  5,  6, 14, 15, 27, 28,
+         2,  4,  7, 13, 16, 26, 29, 42,
+         3,  8, 12, 17, 25, 30, 41, 43,
+         9, 11, 18, 24, 31, 40, 44, 53,
+        10, 19, 23, 32, 39, 45, 52, 54,
+        20, 22, 33, 38, 46, 51, 55, 60,
+        21, 34, 37, 47, 50, 56, 59, 61,
+        35, 36, 48, 49, 57, 58, 62, 63);
+    int16_t n[64];
     int32_t dq[64];
     bool wide = false;
+    memcpy(n, &natural, sizeof n);
     for (int i = 0; i < 64; i++) {
-        int32_t v = c[i] * quant[i];
-        wide |= v > 4096 || v < -4096;
-        dq[ZIGZAG[i]] = v;
+        dq[i] = n[i] * quant[i];
+        wide |= dq[i] > 4096 || dq[i] < -4096;
     }
     if (wide && d->stats) d->stats->wide_idct++;
     mvs_idct8x8(dq, out);
     return -1;
 }
 
-static void render(mvs_decoder *d, const uint8_t ys[64], const uint8_t cbs[64], const uint8_t crs[64]) {
+/* A chroma step of 0 reads one sample for the whole tile, and its arithmetic leaves the loop. */
+static inline void render(mvs_decoder *d, const uint8_t ys[64], const uint8_t *cbs, const uint8_t *crs, int chroma_step) {
     /* Locals, because the stores to d->tile could alias the decoder's fields. */
     const unsigned rs = d->red_shift, gs = d->green_shift, bs = d->blue_shift;
     const uint32_t alpha = d->alpha;
     uint32_t *tile = d->tile;
-    for (int i = 0; i < 64; i++)
-        tile[i] = ((uint32_t)red(ys[i], crs[i]) << rs) | ((uint32_t)green(ys[i], cbs[i], crs[i]) << gs) |
-                  ((uint32_t)blue(ys[i], cbs[i]) << bs) | alpha;
+    for (int i = 0; i < 64; i++) {
+        const int32_t cb = cbs[i * chroma_step], cr = crs[i * chroma_step];
+        tile[i] = ((uint32_t)red(ys[i], cr) << rs) | ((uint32_t)green(ys[i], cb, cr) << gs) |
+                  ((uint32_t)blue(ys[i], cb) << bs) | alpha;
+    }
 }
 
 static void dequant_and_render(mvs_decoder *d) {
@@ -619,9 +653,14 @@ static void dequant_and_render(mvs_decoder *d) {
     if (y_flat >= 0) memset(ys, y_flat, 64);
     int cb_flat = transform_plane(d, CB, d->chroma_quant, cbs);
     int cr_flat = transform_plane(d, CR, d->chroma_quant, crs);
+    if (cb_flat >= 0 && cr_flat >= 0) {
+        const uint8_t cb = (uint8_t)cb_flat, cr = (uint8_t)cr_flat;
+        render(d, ys, &cb, &cr, 0);
+        return;
+    }
     if (cb_flat >= 0) memset(cbs, cb_flat, 64);
     if (cr_flat >= 0) memset(crs, cr_flat, 64);
-    render(d, ys, cbs, crs);
+    render(d, ys, cbs, crs, 1);
 }
 
 static void fill_tile(mvs_decoder *d, const uint8_t rgb[3]) {
@@ -740,8 +779,8 @@ static void full_update(mvs_decoder *d, const mvs_surface *s, uint32_t x, uint32
     size_t total = (size_t)tiles_x * tiles_y;
     size_t body_offset = ((size_t)data[3] << 16) | ((size_t)data[4] << 8) | data[5];
     if (body_offset < 6 || body_offset > length) { fail(&d->error, MVS_E_BODY_OFFSET); return; }
-    bitstream header = { data + 6, body_offset - 6, 0, 0, &d->error };
-    bitstream body = { data + body_offset, length - body_offset, 0, 0, &d->error };
+    bitstream header = { data + 6, body_offset - 6, 0, &d->error };
+    bitstream body = { data + body_offset, length - body_offset, 0, &d->error };
 
     read_bit(&header);
     d->frame_seq++;
@@ -822,6 +861,38 @@ static int8_t chroma_dc_delta(bitstream *b, int8_t baseline) {
     return 0;
 }
 
+/* Luma of a partial tile. Below the threshold the baseline is finer; a threshold of zero codes
+ * position 0 from baseline 1. Seven codes of eight bits fit one window, so the window stays in a
+ * register between refills and each code costs one table load. */
+static void partial_luma(mvs_decoder *d, bitstream *b, const tile_desc *t, int8_t *entry) {
+    const unsigned threshold = t->threshold, shifted = threshold == 0, count = read_bits(b, 6) + shifted;
+    uint64_t w = 0;
+    unsigned used = 0; /* bits decoded from w and not yet skipped */
+    for (unsigned i = 1, room = 0; i <= count; i++, room--) {
+        if (room == 0) {
+            skip(b, used);
+            w = peek(b);
+            used = 0;
+            room = 7;
+        }
+        unsigned pos = i - shifted;
+        int32_t prev = i < 64 ? t->y[i] : 0, value;
+        const short_code code = d->luma_codes[pos < threshold][threshold < 15][prev != 0][w >> 56];
+        if (code.length) {
+            value = prev >= 0 ? prev + code.value : prev - code.value;
+            w = drop(w, code.length);
+            used += code.length;
+        } else {
+            skip(b, used);
+            used = 0;
+            value = dc_rice(b);
+            room = 1;
+        }
+        d->coeffs[pos] = entry[i] = wrap8(value);
+    }
+    skip(b, used);
+}
+
 static void partial_dct(mvs_decoder *d, bitstream *b, size_t screen, unsigned cr_limit, unsigned cb_limit) {
     const tile_desc *t = &d->desc[screen];
     if (!t->cr_valid || !t->cb_valid) { fail(&d->error, MVS_E_BASELINE); return; }
@@ -829,40 +900,10 @@ static void partial_dct(mvs_decoder *d, bitstream *b, size_t screen, unsigned cr
     int8_t entry[MVS_CACHE_ENTRY_BYTES];
     memset(d->coeffs, 0, sizeof d->coeffs);
     memset(entry, 0, sizeof entry);
-    unsigned threshold = t->threshold;
     c[0] = t->y[0];
     entry[0] = t->y[0];
 
-    unsigned ac_count = read_bits(b, 6);
-    unsigned end = ac_count + 1;
-    unsigned desc_pos = 1, entry_pos = 1;
-    unsigned phase1_end = end < threshold ? end : threshold;
-    for (unsigned pos = 1; pos < phase1_end; pos++) {
-        int32_t prev = desc_pos < 64 ? t->y[desc_pos] : 0;
-        desc_pos++;
-        int8_t value = 0;
-        if (threshold < 15) {
-            if (prev == 0) value = wrap8(dc_rice(b));
-            else { int32_t delta = (int32_t)read_bits(b, 3); value = wrap8(prev >= 0 ? prev + delta : prev - delta); }
-        } else {
-            if (prev == 0) { if (read_bit(b)) value = read_bit(b) ? -1 : 1; }
-            else { int32_t delta = (int32_t)read_bit(b); value = wrap8(prev >= 0 ? prev + delta : prev - delta); }
-        }
-        c[pos] = value;
-        entry[entry_pos++] = value;
-    }
-    if (ac_count >= threshold) {
-        unsigned delta_bits = threshold < 15 ? 4 : 3;
-        for (unsigned pos = threshold; pos < end; pos++) {
-            int32_t prev = desc_pos < 64 ? t->y[desc_pos] : 0;
-            desc_pos++;
-            int8_t value;
-            if (prev == 0) value = wrap8(dc_rice(b));
-            else { int32_t delta = (int32_t)read_bits(b, delta_bits); value = wrap8(prev >= 0 ? prev + delta : prev - delta); }
-            c[pos] = value;
-            entry[entry_pos++] = value;
-        }
-    }
+    partial_luma(d, b, t, entry);
 
     c[CR] = chroma_dc_delta(b, t->cr_dc);
     huffman_ac(b, &d->huffman, c, CR, cr_limit);
@@ -882,34 +923,33 @@ static void partial_update(mvs_decoder *d, const mvs_surface *s, uint32_t x, uin
                            const uint8_t *data, size_t length, mvs_written_fn written, void *context) {
     if (length < 3) { fail(&d->error, MVS_E_SHORT); return; }
     unsigned cr_limit = data[1] < 64 ? data[1] : 64, cb_limit = data[2] < 64 ? data[2] : 64;
-    uint32_t tiles_x = (w + 7) / 8, tiles_y = (h + 7) / 8;
-    size_t total = (size_t)tiles_x * tiles_y;
-    bitstream b = { data + 3, length - 3, 0, 0, &d->error };
-    for (size_t index = 0; index < total && !d->error; index++) {
-        uint32_t tx, ty, tw, th;
-        tile_geometry(x, y, w, h, tiles_x, index, &tx, &ty, &tw, &th);
-        size_t screen = (size_t)(ty >> 3) * d->tiles_x + (tx >> 3);
-        unsigned code = read_bits(&b, 2);
-        if (d->stats) d->stats->partial_tiles[code]++;
-        switch (code) {
-        case 0: break;
-        case 1:
-            partial_dct(d, &b, screen, cr_limit, cb_limit);
-            if (!d->error) put_tile(d, s, tx, ty, tw, th, written, context);
-            break;
-        case 2: {
-            const tile_desc *t = &d->desc[screen];
-            int64_t ref = t->ref_index;
-            if (ref >= 0 && (size_t)ref < d->tiles && t->frame_seq == d->desc[ref].frame_seq)
-                copy_tile(d, s, t->match_x, t->match_y, tx, ty, tw, th, written, context);
-            else if (d->stats) d->stats->copy_skipped++;
-            break;
-        }
-        case 3: {
-            uint32_t idx = read_bit(&b) ? (d->cache_last + 1) & 0xffff : read_bits(&b, 16);
-            if (!d->error && load_cache(d, idx)) put_tile(d, s, tx, ty, tw, th, written, context);
-            break;
-        }
+    bitstream b = { data + 3, length - 3, 0, &d->error };
+    for (uint32_t ty = y; ty < y + h; ty += 8) {
+        for (uint32_t tx = x; tx < x + w && !d->error; tx += 8) {
+            uint32_t tw = x + w - tx < 8 ? x + w - tx : 8, th = y + h - ty < 8 ? y + h - ty : 8;
+            size_t screen = (size_t)(ty >> 3) * d->tiles_x + (tx >> 3);
+            unsigned code = read_bits(&b, 2);
+            if (d->stats) d->stats->partial_tiles[code]++;
+            switch (code) {
+            case 0: break;
+            case 1:
+                partial_dct(d, &b, screen, cr_limit, cb_limit);
+                if (!d->error) put_tile(d, s, tx, ty, tw, th, written, context);
+                break;
+            case 2: {
+                const tile_desc *t = &d->desc[screen];
+                int64_t ref = t->ref_index;
+                if (ref >= 0 && (size_t)ref < d->tiles && t->frame_seq == d->desc[ref].frame_seq)
+                    copy_tile(d, s, t->match_x, t->match_y, tx, ty, tw, th, written, context);
+                else if (d->stats) d->stats->copy_skipped++;
+                break;
+            }
+            case 3: {
+                uint32_t idx = read_bit(&b) ? (d->cache_last + 1) & 0xffff : read_bits(&b, 16);
+                if (!d->error && load_cache(d, idx)) put_tile(d, s, tx, ty, tw, th, written, context);
+                break;
+            }
+            }
         }
     }
     if (d->error) return;
