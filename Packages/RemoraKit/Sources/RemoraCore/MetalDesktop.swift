@@ -133,16 +133,7 @@ public final class MetalDesktop: CaptureSource, Sendable {
             }
             command.addCompletedHandler { [self] command in
                 slot?.available.signal()
-                if command.status == .error {
-                    let observers = self.state.withLock { state -> [@Sendable () -> Void] in
-                        guard state.storage === storage else { return [] }
-                        state.dropPending()
-                        state.storage = nil
-                        state.losses += 1
-                        return Array(state.lossObservers.values)
-                    }
-                    for observer in observers { observer() }
-                }
+                if command.status == .error { discardFramebuffer(drawnInto: storage.texture) }
             }
             state.pending = nil
             state.damage = FrameDamage()
@@ -186,6 +177,19 @@ public final class MetalDesktop: CaptureSource, Sendable {
             state.arrival = ProcessInfo.processInfo.systemUptime
             for observer in state.observers.values { observer(state.arrival) }
         }
+    }
+
+    /// After GPU work on `texture` fails, the framebuffer holds undefined pixels, including those only the GPU drew.
+    /// It is dropped, and the next frame makes a new one. A failure in an older framebuffer leaves the current one.
+    func discardFramebuffer(drawnInto texture: any MTLTexture) {
+        let observers = state.withLock { state -> [@Sendable () -> Void] in
+            guard let storage = state.storage, storage.texture === texture else { return [] }
+            state.dropPending()
+            state.storage = nil
+            state.losses += 1
+            return Array(state.lossObservers.values)
+        }
+        for observer in observers { observer() }
     }
 
     /// Copies framebuffer rectangles as BGRA bytes, after all earlier uploads and draws, in one GPU round trip.

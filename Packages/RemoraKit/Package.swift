@@ -45,8 +45,11 @@ let package = Package(
         ),
         // FreeRDP's CPU conversion of H.264 pictures, the reference for H264Renderer's tests.
         .target(name: "CFreeRDPReference", dependencies: ["FreeRDP"], path: "Tests/CFreeRDPReference"),
+        // A session with FreeRDP's GDI and a graphics channel without a server, for the video module's tests.
+        .target(name: "CFreeRDPGraphics", dependencies: ["CFreeRDPBridge", "FreeRDP"], path: "Tests/CFreeRDPGraphics"),
         .testTarget(
-            name: "RemoraCoreTests", dependencies: ["RemoraCore", "CFreeRDPBridge", "CVNCBridge", "CFreeRDPReference"],
+            name: "RemoraCoreTests",
+            dependencies: ["RemoraCore", "CFreeRDPBridge", "CVNCBridge", "CFreeRDPReference", "CFreeRDPGraphics"],
             resources: [.copy("CursorReference")]),
     ],
     swiftLanguageModes: [.v6]
