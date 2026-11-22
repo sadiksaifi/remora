@@ -12,8 +12,6 @@
 #include <time.h>
 #include <zlib.h>
 
-/* Profile errors are local numeric diagnostics, never server-controlled strings. */
-enum { APPLE_PROFILE = 8, APPLE_DECODE = 9, APPLE_GEOMETRY = 10, APPLE_CLIPBOARD = 17 };
 /* Archives above the local limit are drained, not inflated. Apple's server caps both sizes at the wire limit. */
 enum { CLIPBOARD_TEXT_LIMIT = 1024*1024, CLIPBOARD_ARCHIVE_LIMIT = 8*1024*1024, CLIPBOARD_WIRE_LIMIT = 100*1024*1024 };
 static const char clipboardTextType[]="public.utf8-plain-text";
@@ -41,7 +39,6 @@ static rfbBool fail(rfbClient *c, int error) {
     return FALSE;
 }
 rfbBool rfbRemoraAppleRememberKey(rfbClient *c, const uint8_t key[16]) {
-    if (!c->remoraApple889) return TRUE;
     if (!state(c)) c->remoraAppleState=calloc(1,sizeof(Apple));
     Apple *a=state(c);
     if (!a) return fail(c,APPLE_PROFILE);
@@ -58,7 +55,7 @@ void rfbRemoraAppleCleanup(rfbClient *c) {
 rfbBool rfbRemoraAppleSetup(rfbClient *c) {
     Apple *a=state(c);
     const uint8_t *n=(const uint8_t *)c->desktopName;
-    if (!a || !a->keyValid || c->authScheme!=30 || !n || c->si.nameLength<22 || n[0]!=0 ||
+    if (!a || !a->keyValid || c->authScheme!=rfbRemoraAppleSRP || !n || c->si.nameLength<22 || n[0]!=0 ||
         (be32(n+2)&4) || c->format.bitsPerPixel!=32 || c->format.bigEndian ||
         c->format.redShift!=16 || c->format.greenShift!=8 || c->format.blueShift!=0)
         return fail(c,APPLE_PROFILE);

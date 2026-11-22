@@ -68,7 +68,8 @@ int rm_vnc_error(RMVNC *); /* 1 DNS, 2 refused, 3 timeout, 4 auth, 5 certificate
  * 11 Apple ServerInit withheld after accepted authentication (one fresh context may retry),
  * 12 reported generic multi-display layout without display selection, 13 Local Network policy denied DNS resolution,
  * 14 Apple encryption negotiation failed, 15 invalid encrypted record, 16 unsupported encryption key change,
- * 17 malformed or oversized Apple clipboard archive */
+ * 17 malformed or oversized Apple clipboard archive, 18 Apple profile server did not offer the SRP login,
+ * 19 Apple profile server did not prove that it holds the account's SRP verifier */
 const char *rm_vnc_security(RMVNC *);
 bool rm_vnc_resize_supported(RMVNC *);
 bool rm_vnc_resize(RMVNC *, uint16_t, uint16_t);

@@ -379,9 +379,9 @@ public final class VNCSession: AgentInputSession, @unchecked Sendable {
                 var created = try openContext()
                 var connected = rm_vnc_connect(created)
                 logHandshake(created, connected: connected)
-                // Native error 11: the Mac accepted ARD authentication, then sent no ServerInit before the read
+                // Native error 11: the Mac completed the SRP login, then sent no ServerInit before the read
                 // deadline. Retire that context under the lock, so stop() cannot abort freed memory. Freeing it
-                // closes its socket and cleanses its ARD key. Then open one new context to the same endpoint with
+                // closes its socket and cleanses its session key. Then open one new context to the same endpoint with
                 // the same profile and credentials. The connection deadline is not renewed, and every other
                 // failure stays terminal.
                 let retired =
@@ -412,7 +412,15 @@ public final class VNCSession: AgentInputSession, @unchecked Sendable {
                         case 5: .certificateRejected
                         case 8:
                             .protocolError(
-                                "Apple mode requires RFB 003.889, ARD authentication, and a supported shared desktop with session encryption."
+                                "Apple mode requires RFB 003.889, the SRP login, and a supported shared desktop with session encryption."
+                            )
+                        case 18:
+                            .protocolError(
+                                "The Mac didn't offer the SRP login, which proves its identity. Apple mode sends the password only through that login."
+                            )
+                        case 19:
+                            .protocolError(
+                                "The computer that answered couldn't prove that it knows this account's password. Someone might be impersonating the Mac."
                             )
                         case 14: .protocolError("Apple session encryption could not be established. Check that the Mac supports encrypted Screen Sharing.")
                         case 9: .protocolError("The Apple desktop update could not be decoded.")

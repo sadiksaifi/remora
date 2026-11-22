@@ -84,7 +84,7 @@ private let securitySequencePeer = #"""
     """#
 
 @Test @MainActor func vncClassicAuthenticationDoesNotPoisonLaterTLSSessions() async throws {
-    // A completed opt-in ARD attempt must not change the default OpenSSL context
+    // A completed Apple-mode SRP login must not change the default OpenSSL context
     // or the following standard classic/TLS transcripts in this process.
     try await verifyApplePrecedesStandardSecuritySequence()
     let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
