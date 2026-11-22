@@ -640,7 +640,17 @@
  
 --- a/src/libvncclient/tls_openssl.c
 +++ b/src/libvncclient/tls_openssl.c
-@@ -655,8 +655,7 @@
+@@ -335,6 +335,9 @@
+   }
+ 
+   SSL_CTX_set_min_proto_version(ssl_ctx, TLS1_2_VERSION);
++  /* A TLS 1.2 renegotiation inside SSL_write could verify a new certificate and wait for a trust
++   * answer past the write deadline. Refuse renegotiation. */
++  SSL_CTX_set_options(ssl_ctx, SSL_OP_NO_RENEGOTIATION);
+   param = X509_VERIFY_PARAM_new();
+ 
+   /* Setup verification if not anonymous */
+@@ -655,8 +658,7 @@
      return FALSE;
    }
  
@@ -650,7 +660,7 @@
        !ReadFromRFBServer(client, (char *)&status, 1))
    {
      return FALSE;
-@@ -782,20 +781,24 @@
+@@ -782,20 +784,24 @@
  
    while (offset < n)
    {
