@@ -23,18 +23,22 @@ final class ClipboardSync {
     }
 
     func focusGained() {
-        sendLocalTextIfChanged()
+        sendLocalItemIfChanged()
     }
 
-    func receiveRemoteText(_ text: String) {
+    func receiveRemoteItem(_ flavors: [RemoteClipboard.Flavor]) {
         guard canSync() else { return }
         let pasteboard = NSPasteboard.general
+        let item = NSPasteboardItem()
+        for flavor in flavors {
+            item.setData(flavor.data, forType: .init(flavor.format.rawValue))
+        }
         pasteboard.clearContents()
-        pasteboard.setString(text, forType: .string)
+        pasteboard.writeObjects([item])
         changeCount = pasteboard.changeCount
     }
 
-    private func sendLocalTextIfChanged() {
+    private func sendLocalItemIfChanged() {
         guard connected, canSync() else { return }
         let pasteboard = NSPasteboard.general
         guard changeCount != pasteboard.changeCount else { return }
@@ -45,7 +49,7 @@ final class ClipboardSync {
             return
         case .default, .ask:
             // One potentially prompting read per session attempt, including when
-            // access returns no string. Further focus changes must not nag.
+            // the pasteboard has no supported format. Further focus changes must not nag.
             guard !attemptedPrompt else { return }
             attemptedPrompt = true
         case .alwaysAllow:
@@ -54,8 +58,22 @@ final class ClipboardSync {
             return
         }
         changeCount = pasteboard.changeCount
-        if let text = pasteboard.string(forType: .string) {
-            session.setLocalClipboard(text: text)
+        let formats = session.clipboardFormats
+        if formats == [.text] {
+            if let text = pasteboard.string(forType: .string) { session.setLocalClipboard(text: text) }
+            return
+        }
+        for item in pasteboard.pasteboardItems ?? [] {
+            let flavors = item.types.compactMap { type -> RemoteClipboard.Flavor? in
+                guard let format = RemoteClipboard.Format(rawValue: type.rawValue), formats.contains(format),
+                    let data = item.data(forType: type), !data.isEmpty || format == .text
+                else { return nil }
+                return .init(format, data)
+            }
+            if !flavors.isEmpty {
+                session.setLocalClipboard(flavors: flavors)
+                return
+            }
         }
     }
 }

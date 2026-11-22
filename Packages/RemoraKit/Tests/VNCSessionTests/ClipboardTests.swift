@@ -24,7 +24,7 @@ import VNCSession
     try peer.command("clipboard")
     var texts: [String] = []
     for await event in session.events {
-        if case .clipboardChanged(_, .text(let text)) = event {
+        if case .clipboardChanged(_, .received(let flavors)) = event, let text = RemoteClipboard.plainText(in: flavors) {
             texts.append(text)
             if texts.count == 4 { break }
         }

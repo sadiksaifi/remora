@@ -3,6 +3,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include <stddef.h>
+#include <rfb/rfbclient.h>
 typedef struct RMVNC RMVNC;
 /* Fixed numeric handshake summary. Only the owning worker reads this record. */
 typedef struct {
@@ -42,6 +43,7 @@ typedef struct {
     /* Counted text bytes. NULL indicates a pasteboard without supported text, and NULL with -1 a remote
      * change whose text has not arrived. */
     void (*clipboard)(void *, const char *, int, bool utf8);
+    void (*clipboardItem)(void *, const rfbRemoraClipboardFlavor *, int);
     bool (*credentials)(void *, bool, char **, char **);
     bool (*trust)(void *, const char *, const uint8_t *, size_t);
     /* Fill 32 bytes if this endpoint has a pin. */
@@ -80,6 +82,7 @@ bool rm_vnc_display_selection_required(RMVNC *);
 uint32_t rm_vnc_unicode_keysym(uint32_t scalar);
 bool rm_vnc_key(RMVNC *, uint32_t keysym, uint32_t qnum, bool down);
 bool rm_vnc_pointer(RMVNC *, uint16_t, uint16_t, uint8_t mask);
+int rm_vnc_clipboard_item(RMVNC *, const rfbRemoraClipboardFlavor *, unsigned count);
 bool rm_vnc_clipboard_utf8(RMVNC *);
 bool rm_vnc_clipboard(RMVNC *, const char *, int, bool utf8);
 #endif

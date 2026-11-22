@@ -177,12 +177,53 @@ public final class VNCSession: AgentInputSession, @unchecked Sendable {
     public func releaseHumanInput() { enqueue(.releaseHuman) }
     public var supportsClipboardSynchronization: Bool { true }
 
+    public var clipboardFormats: [RemoteClipboard.Format] { configuration.vncMode == .apple ? RemoteClipboard.Format.allCases : [.text] }
+
     public func setLocalClipboard(text: String) {
-        guard text.utf8.count <= 1_048_576 else {
+        setLocalClipboard(flavors: [.text(text)])
+    }
+
+    public func setLocalClipboard(flavors item: [RemoteClipboard.Flavor]) {
+        // A rich item can still travel when its plain-text alternative exceeds the text limit.
+        let flavors = item.count == 1 ? item : item.filter { !$0.data.isEmpty && ($0.format != .text || $0.data.count <= 1_048_576) }
+        let formats = Set(flavors.map(\.format))
+        guard !flavors.isEmpty, formats.count == flavors.count, formats.isSubset(of: clipboardFormats),
+            flavors.allSatisfy({ $0.format == .text ? $0.data.count <= 1_048_576 : (1...8_388_608).contains($0.data.count) }),
+            flavors.reduce(0, { $0 + $1.data.count }) <= 8_388_608
+        else {
             clipboard(.failed)
             return
         }
-        state.lock.withLock { if !state.stopping, !state.ended { state.clipboard = text } }
+        state.lock.withLock { if !state.stopping, !state.ended { state.clipboard = flavors } }
+    }
+
+    private func sendClipboard(_ flavors: [RemoteClipboard.Flavor], to connection: OpaquePointer) throws {
+        if configuration.vncMode == .apple {
+            // Retain the backing storage until the synchronous native write returns.
+            let storage = flavors.filter { !$0.data.isEmpty }.map { ($0.format.rawValue as NSString, $0.data as NSData) }
+            let result = withExtendedLifetime(storage) {
+                let native = storage.map { type, data in
+                    rfbRemoraClipboardFlavor(uti: type.utf8String, data: data.bytes.assumingMemoryBound(to: UInt8.self), length: UInt32(data.length))
+                }
+                return rm_vnc_clipboard_item(connection, native, UInt32(native.count))
+            }
+            guard result >= 0 else {
+                clipboard(.failed)
+                return
+            }
+            if result == 0 { throw Failure("The VNC clipboard submission failed.") }
+        } else {
+            let utf8 = rm_vnc_clipboard_utf8(connection)
+            guard let text = RemoteClipboard.plainText(in: flavors), let data = text.data(using: utf8 ? .utf8 : .isoLatin1) else {
+                clipboard(.failed)
+                return
+            }
+            let sent = data.withUnsafeBytes { raw in
+                rm_vnc_clipboard(connection, raw.baseAddress?.assumingMemoryBound(to: CChar.self), Int32(data.count), utf8)
+            }
+            if !sent { throw Failure("The VNC clipboard submission failed.") }
+        }
+        clipboard(.offered(flavors))
     }
 
     public func beginAgentInput() -> (any AgentInputRequest)? {
@@ -472,18 +513,7 @@ public final class VNCSession: AgentInputSession, @unchecked Sendable {
                     if let demand = pending.3, !rm_vnc_set_display_demand(created, demand) {
                         throw Failure("The Apple display subscription could not be updated.")
                     }
-                    if let text = pending.0 {
-                        let utf8 = rm_vnc_clipboard_utf8(created)
-                        if let data = text.data(using: utf8 ? .utf8 : .isoLatin1, allowLossyConversion: false) {
-                            let accepted = data.withUnsafeBytes { raw in
-                                rm_vnc_clipboard(created, raw.baseAddress?.assumingMemoryBound(to: CChar.self), Int32(data.count), utf8)
-                            }
-                            if !accepted { throw Failure("The VNC clipboard submission failed.") }
-                            clipboard(.offered(text))
-                        } else {
-                            clipboard(.failed)
-                        }
-                    }
+                    if let flavors = pending.0 { try sendClipboard(flavors, to: created) }
                     if let size = pending.1, !rm_vnc_resize(created, UInt16(size.width), UInt16(size.height)) {
                         throw Failure("The VNC resize submission failed.")
                     }
@@ -633,6 +663,19 @@ public final class VNCSession: AgentInputSession, @unchecked Sendable {
                     .image(pixels: Data(bytes: pixels, count: Int(width) * Int(height) * 4), width: Int(width), height: Int(height), hotspot: .init(x: x, y: y))
                 ))
         }
+        cb.clipboardItem = { user, item, count in
+            guard count > 0, let item else {
+                owner(user).clipboard(count < 0 ? .pending : .unavailable)
+                return
+            }
+            let flavors: [RemoteClipboard.Flavor] = UnsafeBufferPointer(start: item, count: Int(count)).compactMap { flavor in
+                guard let format = RemoteClipboard.Format(rawValue: String(cString: flavor.uti)) else { return nil }
+                let data = Data(bytes: flavor.data, count: Int(flavor.length))
+                if format == .text, String(data: data, encoding: .utf8) == nil { return nil }
+                return .init(format, data)
+            }
+            owner(user).clipboard(flavors.isEmpty ? .failed : .received(flavors))
+        }
         cb.clipboard = { user, text, length, utf8 in
             // Apple mode announces a remote change before its text arrives.
             if length < 0 {
@@ -748,7 +791,7 @@ extension VNCSession {
         var reason: DisconnectReason?
         var commands: [Command] = []
         var receipts: [Receipt] = []
-        var clipboard: String?, resize: DesktopSize?, refresh = false
+        var clipboard: [RemoteClipboard.Flavor]?, resize: DesktopSize?, refresh = false
         var displayUpdatesEnabled = true, displayDemandChanged = false
         /// A resume owes a redraw. redrawSent: the session thread has taken its request.
         var redrawOwed = false, redrawSent = false
