@@ -426,7 +426,8 @@ public final class VNCSession: AgentInputSession, @unchecked Sendable {
                                     : "The VNC connection couldn't be set up.")
                         }
                     state.lock.withLock {
-                        if state.reason == nil || (nativeError == 14 && state.reason == .connectionTimedOut) { state.reason = reason }
+                        // The watchdog's timeout stays: the attempt ran out of time, whatever step it reached.
+                        if state.reason == nil { state.reason = reason }
                     }
                     return
                 }
@@ -633,6 +634,11 @@ public final class VNCSession: AgentInputSession, @unchecked Sendable {
                 ))
         }
         cb.clipboard = { user, text, length, utf8 in
+            // Apple mode announces a remote change before its text arrives.
+            if length < 0 {
+                owner(user).clipboard(.pending)
+                return
+            }
             guard let text else {
                 owner(user).clipboard(.unavailable)
                 return

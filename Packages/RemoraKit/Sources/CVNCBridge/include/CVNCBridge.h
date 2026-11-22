@@ -39,7 +39,8 @@ typedef struct {
     void (*size)(void *, int, int, bool);
     void (*frame)(void *, const uint8_t *, int, int, int, int, int, int);
     void (*cursor)(void *, const uint8_t *, int, int, int, int);
-    /* Counted text bytes. NULL indicates a pasteboard without supported text. */
+    /* Counted text bytes. NULL indicates a pasteboard without supported text, and NULL with -1 a remote
+     * change whose text has not arrived. */
     void (*clipboard)(void *, const char *, int, bool utf8);
     bool (*credentials)(void *, bool, char **, char **);
     bool (*trust)(void *, const char *, const uint8_t *, size_t);

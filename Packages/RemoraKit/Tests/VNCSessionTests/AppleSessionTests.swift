@@ -150,7 +150,11 @@ private final class ApplePixels: FrameSink, @unchecked Sendable {
 
     #expect(wire["pasteboard_monitoring"] as? Bool == true)
     #expect(wire["clipboard_uploads"] as? [String] == ["from viewer 🦀", ""])
-    #expect(statuses == [.unknown, .text("from Mac ✓\0"), .offered("from viewer 🦀"), .offered(""), .failed, .unavailable, .unavailable])
+    #expect(
+        statuses == [
+            .unknown, .pending, .text("from Mac ✓\0"), .offered("from viewer 🦀"), .offered(""), .pending, .failed, .pending, .unavailable,
+            .pending, .unavailable,
+        ])
     #expect(pixels.samples.count == 3)
 }
 
@@ -158,7 +162,7 @@ private final class ApplePixels: FrameSink, @unchecked Sendable {
     var statuses: [RemoteClipboard.Status] = []
     let (_, _, pixels) = try await appleSession("apple-clipboard-limit", onClipboard: { _, status in statuses.append(status) })
 
-    #expect(statuses.prefix(4) == [.unknown, .unavailable, .unavailable, .text("after a large image")])
+    #expect(statuses.prefix(7) == [.unknown, .pending, .unavailable, .pending, .unavailable, .pending, .text("after a large image")])
     #expect(pixels.samples.count == 1)
 }
 
@@ -167,7 +171,8 @@ private final class ApplePixels: FrameSink, @unchecked Sendable {
     let (wire, _, _) = try await appleSession("apple-clipboard-early", onClipboard: { _, status in statuses.append(status) })
 
     #expect(wire["early_clipboard_fetched"] as? Bool == true)
-    #expect(statuses.prefix(2) == [.unknown, .text("changed during setup")])
+    // The change arrives before the session reports itself connected.
+    #expect(statuses.prefix(3) == [.pending, .unknown, .text("changed during setup")])
 }
 
 @Test(arguments: ["wire-limit", "length", "malformed"])
@@ -175,7 +180,7 @@ private final class ApplePixels: FrameSink, @unchecked Sendable {
     var statuses: [RemoteClipboard.Status] = []
     let (_, terminals, pixels) = try await appleSession("apple-clipboard-\(mode)", onClipboard: { _, status in statuses.append(status) })
 
-    #expect(statuses == [.unknown])
+    #expect(statuses == [.unknown, .pending])
     #expect(terminals == [.serverEndedSession("The Apple clipboard archive is invalid or exceeds the size limit.")])
     #expect(pixels.samples.count == 1)
 }

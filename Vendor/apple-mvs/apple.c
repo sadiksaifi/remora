@@ -122,6 +122,8 @@ static rfbBool requestClipboard(rfbClient *c) {
     a->clipboardRequestID=a->clipboardRequestID==UINT32_MAX?1:a->clipboardRequestID+1;
     put32(request+4,a->clipboardRequestID);
     a->clipboardPending=TRUE;
+    /* Length -1 tells the viewer the remote text changed and the old text is stale. */
+    if(c->GotXCutTextUTF8) c->GotXCutTextUTF8(c,NULL,-1);
     return WriteToRFBServer(c,(char *)request,sizeof(request));
 }
 

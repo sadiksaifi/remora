@@ -83,8 +83,9 @@ static apple_mvs *session_new(uint32_t width, uint32_t height) {
     return m;
 }
 
-/* The framework build the oracle was verified on. A skip there is a failure. */
+/* The framework build the oracle was verified on, and the macOS build that ships it. A skip there is a failure. */
 #define VERIFIED_UUID "EC0B2C20-F816-3FCE-822D-F9403C09EB50"
+#define VERIFIED_MACOS_BUILD "26A434"
 
 /* Loads the framework without calling it, and reads its LC_UUID. */
 static const struct mach_header_64 *image(intptr_t *slide, char uuid[40]) {
@@ -106,7 +107,15 @@ static const struct mach_header_64 *image(intptr_t *slide, char uuid[40]) {
 bool apple_oracle_verified_build(void) {
     intptr_t slide;
     char uuid[40];
-    return image(&slide, uuid) && !strcmp(uuid, VERIFIED_UUID);
+    if (image(&slide, uuid)) return !strcmp(uuid, VERIFIED_UUID);
+    /* Without a readable image, the macOS build stands in for the framework's. */
+#if defined(__arm64__)
+    char build[32] = "";
+    size_t n = sizeof build;
+    return !sysctlbyname("kern.osversion", build, &n, NULL, 0) && !strcmp(build, VERIFIED_MACOS_BUILD);
+#else
+    return false;
+#endif
 }
 
 static const char *load(void) {

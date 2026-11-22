@@ -4,7 +4,7 @@
 #include <string.h>
 #include <stdio.h>
 static unsigned frames, failures, expected;
-static unsigned clipboardMessages;
+static unsigned clipboardMessages, clipboardChanges;
 static int largeClipboard, earlyClipboard;
 static int regional;
 static rfbCredential *credential(rfbClient *c,int type) {
@@ -21,6 +21,11 @@ static rfbBool allocate(rfbClient *c) {
 }
 static void clipboard(rfbClient *c,const char *text,int length) {
     (void)c;
+    if(length==-1) {
+        if(text) failures++;
+        clipboardChanges++;
+        return;
+    }
     if(earlyClipboard) {
         const char early[]="changed during setup";
         if(clipboardMessages++ || !text || length!=sizeof(early)-1 || memcmp(text,early,length)) failures++;
@@ -119,9 +124,9 @@ int main(int argc,char **argv) {
             if(!rfbRemoraAppleRetryBaseline(c)) return 3;
         }
     }
-    if(clipboardExchange && (clipboardMessages!=4 || !uploaded || c->remoraAppleError)) failures++;
+    if(clipboardExchange && (clipboardMessages!=4 || clipboardChanges!=4 || !uploaded || c->remoraAppleError)) failures++;
     if(invalidClipboard && (clipboardMessages || c->remoraAppleError!=17)) failures++;
-    if(largeClipboard && (clipboardMessages!=3 || c->remoraAppleError)) failures++;
+    if(largeClipboard && (clipboardMessages!=3 || clipboardChanges!=3 || c->remoraAppleError)) failures++;
     if(earlyClipboard && (clipboardMessages!=1 || c->remoraAppleError)) failures++;
     if(argc==4 && atoi(argv[3]) && c->remoraAppleError!=atoi(argv[3])) {
         fprintf(stderr,"native error=%d expected=%s\n",c->remoraAppleError,argv[3]); failures++;

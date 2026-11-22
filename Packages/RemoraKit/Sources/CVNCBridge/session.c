@@ -339,8 +339,8 @@ static void clipboard(rfbClient *c, const char *text, int length) {
 }
 static void clipboard_utf8(rfbClient *c, const char *text, int length) {
     RMVNC *s = owner(c);
-    if (length < 0 || length > 1048576 || !s->cb.clipboard) return;
-    /* Extended clipboard counts a terminal NUL. Apple flavor data is exact. */
+    if (length < -1 || length > 1048576 || !s->cb.clipboard) return;
+    /* -1 announces a pending remote change. Extended clipboard counts a terminal NUL. Apple flavor data is exact. */
     if (!s->apple && text && length && text[length-1] == '\0') length--;
     s->cb.clipboard(s->user, text, length, true);
 }
