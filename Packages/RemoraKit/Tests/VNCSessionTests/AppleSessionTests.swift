@@ -165,11 +165,14 @@ private final class ApplePixels: FrameSink, @unchecked Sendable {
         },
         onDisconnect: { elapsed = started.withLock { $0 }?.duration(to: .now) })
     #expect(terminals == [.connectionTimedOut])
+    // The peer reports the message's declared payload. Its deadline is 10 s plus the whole message at 1 Mbit/s.
+    // A deadline per Apple record, about 10.5 s, falls below this window.
+    let declared = try #require(wire["stalled_upload_declared"] as? Int)
+    let deadline = 10 + Double(declared + (mode == .apple ? 16 : 8)) / 131_072
     let duration = try #require(elapsed)
-    #expect(duration >= .seconds(10) && duration < .seconds(18), "\(duration)")
+    #expect(duration >= .seconds(deadline - 0.25) && duration < .seconds(deadline + 3), "\(duration), deadline \(deadline) s")
     // The client closed its transport partway through the upload.
     #expect(wire["closed_after_stall"] as? Bool == true)
-    let declared = try #require(wire["stalled_upload_declared"] as? Int)
     #expect(try #require(wire["stalled_bytes"] as? Int) < declared)
 }
 

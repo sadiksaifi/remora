@@ -72,7 +72,7 @@ int rm_vnc_error(RMVNC *); /* 1 DNS, 2 refused, 3 timeout, 4 auth, 5 certificate
  * 14 Apple encryption negotiation failed, 15 invalid encrypted record, 16 unsupported encryption key change,
  * 17 malformed or oversized Apple clipboard archive, 18 Apple profile server did not offer the SRP login,
  * 19 Apple profile server did not prove that it holds the account's SRP verifier */
-/* Worker-only. A connected-session write missed its deadline, and the transport is closed. */
+/* Worker-only, before free. A write missed its deadline, in setup or in the session, and the transport is closed. */
 bool rm_vnc_write_timed_out(RMVNC *);
 const char *rm_vnc_security(RMVNC *);
 bool rm_vnc_resize_supported(RMVNC *);

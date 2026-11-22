@@ -36,7 +36,7 @@
  typedef struct _rfbClient {
  	uint8_t* frameBuffer;
  	int width, height;
-@@ -589,7 +602,35 @@
+@@ -589,7 +602,41 @@
          uint16_t remoraLastResizeWidth, remoraLastResizeHeight;
          void (*RemoraDesktopSize)(struct _rfbClient*, rfbBool requested);
          void (*RemoraResizeReply)(struct _rfbClient*, unsigned int result, uint16_t width, uint16_t height);
@@ -50,7 +50,7 @@
 +  /* One monotonic deadline covers each whole message write. After any failed write the
 +   * transport is shut down, so no later bytes follow a partly sent message or record. */
 +  double remoraWriteDeadline;
-+  rfbBool remoraWriteClosed;
++  rfbBool remoraWriteClosed, remoraWriteTimedOut;
 +  rfbRemoraDisplay remoraDisplays[64];
 +  uint32_t remoraDisplayCount, remoraDisplayID;
 +  /* Borrowed until return. -1 pending, 0 unavailable, positive count for one item. */
@@ -67,6 +67,12 @@
 +rfbBool rfbRemoraDisplayReady(rfbClient *);
 +rfbBool rfbRemoraDisplayRaw(rfbClient *, int x, int y, int w, int h);
 +rfbBool rfbRemoraAppleRetryBaseline(rfbClient *);
++/* Starts one write deadline for a message of this many bytes that LibVNCClient writes in parts.
++ * Every WriteToRFBServer call until rfbRemoraEndMessage shares it. */
++void rfbRemoraBeginMessage(rfbClient *, size_t bytes);
++void rfbRemoraEndMessage(rfbClient *);
++/* FALSE, with the timeout recorded, once the current write deadline has passed. */
++rfbBool rfbRemoraWriteInTime(rfbClient *);
 +/* Waits for the socket until the current write deadline. FALSE records a timeout or wait failure. */
 +rfbBool rfbRemoraWaitWritable(rfbClient *, rfbBool wantRead);
  
@@ -395,7 +401,7 @@
  #ifdef DEBUG_READ_EXACT
  hexdump:
    { unsigned int ii;
-@@ -291,10 +310,74 @@
+@@ -291,10 +310,85 @@
   * Write an exact number of bytes, and don't return until you've sent them.
   */
  
@@ -403,9 +409,14 @@
 +
 +/* A whole message gets a fixed allowance plus its size at 1 Mbit/s, so a
 + * stalled peer releases the worker even during an 8 MiB clipboard upload. */
-+static double write_deadline(unsigned int n)
++void rfbRemoraBeginMessage(rfbClient* client, size_t bytes)
 +{
-+  return monotonic_seconds() + 10 + n / 131072.0;
++  client->remoraWriteDeadline = monotonic_seconds() + 10 + bytes / 131072.0;
++}
++
++void rfbRemoraEndMessage(rfbClient* client)
++{
++  client->remoraWriteDeadline = 0;
 +}
 +
 +/* Stops all later writes and wakes any read, so the session ends at the first failure. */
@@ -420,12 +431,22 @@
  WriteToRFBServer(rfbClient* client, const char *buf, unsigned int n)
  {
 -  fd_set fds;
-+  rfbBool ok;
++  rfbBool ok, owned = !client->remoraWriteDeadline;
 +  if (client->remoraAppleError || client->remoraWriteClosed) return FALSE;
-+  client->remoraWriteDeadline = write_deadline(n);
++  if (owned) rfbRemoraBeginMessage(client, n);
 +  ok = client->remoraRecords ? rfbRemoraWriteRecords(client, buf, n) : rfbRemoraWriteWire(client, buf, n);
-+  client->remoraWriteDeadline = 0;
++  if (owned) rfbRemoraEndMessage(client);
 +  return ok;
++}
++
++rfbBool
++rfbRemoraWriteInTime(rfbClient* client)
++{
++  if (monotonic_seconds() < client->remoraWriteDeadline) return TRUE;
++  client->remoraWriteTimedOut = TRUE;
++  rfbRemoraDiagnosticFail(client, RFB_REMORA_TIMEOUT, ETIMEDOUT, 0);
++  rfbClientErr("write timed out\n");
++  return FALSE;
 +}
 +
 +rfbBool
@@ -433,16 +454,12 @@
 +{
 +  struct pollfd fd = { client->sock, wantRead ? POLLIN : POLLOUT, 0 };
 +  for (;;) {
-+    double remaining = client->remoraWriteDeadline - monotonic_seconds();
 +    if (client->sock == RFB_INVALID_SOCKET) {
 +      rfbRemoraDiagnosticFail(client, RFB_REMORA_IO, EBADF, 0);
 +      return FALSE;
 +    }
-+    if (remaining <= 0) {
-+      rfbRemoraDiagnosticFail(client, RFB_REMORA_TIMEOUT, ETIMEDOUT, 0);
-+      rfbClientErr("write timed out\n");
-+      return FALSE;
-+    }
++    if (!rfbRemoraWriteInTime(client)) return FALSE;
++    double remaining = client->remoraWriteDeadline - monotonic_seconds();
 +    int ready = poll(&fd, 1, (int)(remaining * 1000) + 1);
 +    if (ready > 0) return TRUE;
 +    if (ready < 0 && errno != EINTR) {
@@ -459,9 +476,9 @@
 +  /* Clear-text controls before encrypted records arrive here outside WriteToRFBServer. */
 +  rfbBool owned = !client->remoraWriteDeadline;
 +  if (client->remoraWriteClosed) return FALSE;
-+  if (owned) client->remoraWriteDeadline = write_deadline(n);
++  if (owned) rfbRemoraBeginMessage(client, n);
 +  ok = write_wire(client, buf, n);
-+  if (owned) client->remoraWriteDeadline = 0;
++  if (owned) rfbRemoraEndMessage(client);
 +  return ok ? TRUE : close_writes(client);
 +}
 +
@@ -471,7 +488,16 @@
    rfbRemoraRuntimeOperation(client, RFB_REMORA_WRITE_OP);
    int i = 0;
    int j;
-@@ -342,21 +425,7 @@
+@@ -331,6 +425,8 @@
+ #endif /* LIBVNCSERVER_HAVE_SASL */
+ 
+   while (i < n) {
++    /* A wakeup after the deadline must not send the rest of the message. */
++    if (!rfbRemoraWriteInTime(client)) return FALSE;
+     j = write(client->sock, obuf + i, (n - i));
+     if (j <= 0) {
+       if (j < 0) {
+@@ -342,21 +438,7 @@
  		errno == ENOENT ||
  #endif
  		errno == EAGAIN) {
@@ -494,7 +520,7 @@
  	  j = 0;
  	} else {
  	  rfbRemoraDiagnosticFail(client, RFB_REMORA_IO, errno, 0);
-@@ -914,7 +983,7 @@
+@@ -914,7 +996,7 @@
      return 1;
  
    /* Check if we have buffered data available */
@@ -505,7 +531,13 @@
  
 --- a/src/libvncclient/tls_openssl.c
 +++ b/src/libvncclient/tls_openssl.c
-@@ -787,15 +787,18 @@
+@@ -782,20 +782,24 @@
+ 
+   while (offset < n)
+   {
++    if (!rfbRemoraWriteInTime(client)) return -1;
+     LOCK(client->tlsRwMutex);
+     if (client->remoraDiagnostic.phase == RFB_REMORA_READY) ERR_clear_error();
      ret = SSL_write (client->tlsSession, buf + offset, (size_t)(n-offset));
      savedErrno = errno;
  
