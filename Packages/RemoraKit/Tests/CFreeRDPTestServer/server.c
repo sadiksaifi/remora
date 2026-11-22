@@ -30,16 +30,24 @@ struct RMTestRDPServer {
     int connection;
     pthread_t thread;
     char *certificate, *key;
-    atomic_uint refreshes;
+    atomic_uint refreshes, whole_refreshes;
     atomic_bool activated, ended;
 };
 
 static RMTestRDPServer *server_of(rdpContext *context) { return context->peer->ContextExtra; }
 
 static BOOL refresh_rect(rdpContext *context, BYTE count, const RECTANGLE_16 *areas) {
-    (void)count;
-    (void)areas;
-    atomic_fetch_add(&server_of(context)->refreshes, 1);
+    RMTestRDPServer *s = server_of(context);
+    const UINT32 width = freerdp_settings_get_uint32(context->settings, FreeRDP_DesktopWidth);
+    const UINT32 height = freerdp_settings_get_uint32(context->settings, FreeRDP_DesktopHeight);
+    bool whole = false;
+    /* Bounds are inclusive. */
+    for (BYTE i = 0; i < count; i++)
+        whole = whole || (areas[i].left == 0 && areas[i].top == 0 && areas[i].right + 1u >= width &&
+                          areas[i].bottom + 1u >= height);
+    atomic_fetch_add(&s->refreshes, 1);
+    if (whole)
+        atomic_fetch_add(&s->whole_refreshes, 1);
     return TRUE;
 }
 
@@ -151,9 +159,26 @@ static void release(RMTestRDPServer *s) {
     free(s);
 }
 
+/* FreeRDP builds these BIO methods on first use without a lock. They are hidden in the library, but a static build
+ * links them. Only the call matters here, so the OpenSSL type is left out. */
+void *BIO_s_simple_socket(void);
+void *BIO_s_buffered_socket(void);
+
+/* Runs before the first server, so before any client or peer thread in the process. */
+static void prepare_process(void) {
+    /* A peer thread and a client thread both create socket BIOs during the first handshake. */
+    (void)BIO_s_simple_socket();
+    (void)BIO_s_buffered_socket();
+    /* FreeRDP sends even a loopback connection through a proxy from the environment. */
+    unsetenv("https_proxy");
+    unsetenv("HTTPS_PROXY");
+}
+
 RMTestRDPServer *rm_test_rdp_server_start(const char *certificate_path, const char *key_path) {
+    static pthread_once_t prepared = PTHREAD_ONCE_INIT;
     if (!certificate_path || !key_path || !winpr_InitializeSSL(WINPR_SSL_INIT_DEFAULT))
         return NULL;
+    pthread_once(&prepared, prepare_process);
     RMTestRDPServer *s = calloc(1, sizeof(*s));
     if (!s)
         return NULL;
@@ -180,6 +205,7 @@ RMTestRDPServer *rm_test_rdp_server_start(const char *certificate_path, const ch
 uint16_t rm_test_rdp_server_port(const RMTestRDPServer *s) { return s->port; }
 bool rm_test_rdp_server_activated(const RMTestRDPServer *s) { return atomic_load(&s->activated); }
 uint32_t rm_test_rdp_server_refreshes(const RMTestRDPServer *s) { return atomic_load(&s->refreshes); }
+uint32_t rm_test_rdp_server_whole_refreshes(const RMTestRDPServer *s) { return atomic_load(&s->whole_refreshes); }
 bool rm_test_rdp_server_ended(const RMTestRDPServer *s) { return atomic_load(&s->ended); }
 
 void rm_test_rdp_server_stop(RMTestRDPServer *s) {

@@ -145,6 +145,7 @@ private final class DesktopSink: FrameSink, @unchecked Sendable {
     let ended = try await eventually(within: .seconds(5)) { rm_test_rdp_server_ended(connection.server) }
     #expect(ended)
     #expect(connection.refreshes == 1)
+    #expect(rm_test_rdp_server_whole_refreshes(connection.server) == 1)
     #expect(connection.desktop.losses == 1)
 }
 
