@@ -12,6 +12,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 static int failures;
 #define CHECK(cond) do { if (!(cond)) { failures++; fprintf(stderr, "FAIL %s:%d: %s\n", __FILE__, __LINE__, #cond); } } while (0)
@@ -400,7 +401,7 @@ static void test_raw_coverage_and_geometry_reset(void) {
  * Rice and Huffman rejections. The hash covers the result, statistics, written
  * rectangles and pixels of every update, so a faster decoder must reproduce
  * this one bit for bit. */
-typedef struct { uint8_t bytes[16384]; size_t bits; } bit_writer;
+typedef struct { uint8_t *bytes; size_t bits; } bit_writer; /* bytes start zeroed */
 static void put_bits(bit_writer *w, uint32_t value, unsigned n) {
     for (unsigned i = n; i > 0; i--) {
         if ((value >> (i - 1)) & 1) w->bytes[w->bits / 8] |= (uint8_t)(0x80 >> (w->bits % 8));
@@ -437,10 +438,135 @@ static unsigned golden_type(void) {
     return 5;
 }
 
+/* ---- Valid refinement streams ----
+ * A full update codes each coefficient as a multiple of a coarse step, and the
+ * partial update of the same region adds the remainder. The generator writes
+ * that pair for one region: text-like, smooth and flat DCT tiles, white tiles
+ * the partial skips, copies it matches, and cache loads. */
+
+/* `ones` one bits, a zero, `nbits` low bits, then the sign. */
+static void put_code(bit_writer *w, unsigned ones, unsigned low, unsigned nbits, bool negative) {
+    put_bits(w, (2u << ones) - 2, ones + 1);
+    put_bits(w, low, nbits);
+    put_bits(w, negative, 1);
+}
+
+static void put_dc_rice(bit_writer *w, int v) {
+    unsigned m = (unsigned)abs(v);
+    if (m < 2) put_bits(w, m ? 2u | (v < 0) : 0, m ? 3 : 2);
+    else if (m < 4) put_code(w, 1, m - 2, 1, v < 0);
+    else if (m < 8) put_code(w, 2, m - 4, 2, v < 0);
+    else put_code(w, m / 8 + 2, m % 8, 3, v < 0);
+}
+
+static void put_full_ac(bit_writer *w, int raw, unsigned pos) {
+    unsigned m = (unsigned)abs(raw);
+    if (m < 2) { put_bits(w, m ? 2u | (raw < 0) : 0, 3); return; }
+    put_bits(w, 1, 1);
+    if (pos <= 5 && m < 18) put_code(w, (m - 2) / 4, (m - 2) % 4, 2, raw < 0);
+    else if (pos <= 5) put_code(w, 4 + (m - 18) / 8, (m - 18) % 8, 3, raw < 0);
+    else if (m < 4) put_code(w, 0, m - 2, 1, raw < 0);
+    else if (m < 8) put_code(w, 1, m - 4, 2, raw < 0);
+    else put_code(w, m / 8 + 1, m % 8, 3, raw < 0);
+}
+
+static void put_chroma_dc(bit_writer *w, int fine) {
+    if (fine / 2) put_bits(w, (unsigned)abs(fine) & 1, 1);
+    else put_bits(w, fine ? 2u | (fine < 0) : 0, fine ? 2 : 1);
+}
+
+static void put_chroma_ac(bit_writer *w, unsigned count, unsigned limit) {
+    static const uint8_t code[2][2] = { { 0, 1 }, { 12, 27 } }, length[2][2] = { { 2, 2 }, { 4, 5 } }; /* K.5, run 0..1, size 1..2 */
+    unsigned k = 0;
+    for (; count > 0 && k + 1 < limit; count--) {
+        unsigned run = golden_random() % 2, size = golden_random() % 2;
+        put_bits(w, code[run][size], length[run][size]);
+        put_bits(w, golden_random(), size + 1);
+        k += run + 1;
+    }
+    if (k < limit) put_bits(w, 10, 4);
+}
+
+static unsigned coarse_shift(unsigned pos, unsigned threshold) {
+    if (threshold > 14) return pos <= 5 || pos < threshold ? 1 : 3;
+    return pos < threshold ? 3 : 4;
+}
+
+typedef struct { uint8_t *full, *partial; size_t full_length, partial_length; } refinement;
+static uint64_t refinement_cached, refinement_loaded; /* the decoder's cache count and last loaded slot */
+
+static refinement refinement_new(uint32_t w, uint32_t h, unsigned t1, unsigned t2) {
+    uint32_t tiles_x = (w + 7) / 8;
+    size_t tiles = (size_t)tiles_x * ((h + 7) / 8), offset = 6 + (1 + tiles * 4 + 8 + 7) / 8;
+    refinement r = { calloc(offset + tiles * 96 + 64, 1), calloc(tiles * 96 + 64, 1), 0, 0 };
+    bit_writer header = { r.full + 6, 0 }, body = { r.full + offset, 0 }, partial = { r.partial + 3, 0 };
+    r.full[1] = (uint8_t)t1; r.full[2] = (uint8_t)t2;
+    r.full[3] = (uint8_t)(offset >> 16); r.full[4] = (uint8_t)(offset >> 8); r.full[5] = (uint8_t)offset;
+    r.partial[0] = 1; r.partial[1] = 14; r.partial[2] = 19;
+    put_bits(&header, 0, 1);
+    int state_y = 0, state_cb = 0, state_cr = 0;
+    for (size_t i = 0; i < tiles; i++) {
+        unsigned pick = golden_random() % 100, type = pick < 60 ? 5 : pick < 88 ? 0 : pick < 94 ? 1 : 2;
+        if ((type == 1 && i % tiles_x == 0) || (type == 2 && i < tiles_x)) type = 5; /* a copy reads inside the region */
+        put_bits(&header, type << 1, 4);
+        if (type != 5) { put_bits(&partial, type ? 2 : 0, 2); continue; }
+
+        /* The picture: 70% text-like tiles, 20% smooth, 10% flat; a quarter carry colour. */
+        int fine[64] = {0};
+        unsigned shape = golden_random() % 10, count = shape < 7 ? 20 + golden_random() % 44 : shape < 9 ? golden_random() % 12 : 0;
+        unsigned threshold_bit = golden_random() % 2, threshold = threshold_bit ? t2 : t1, last = 0;
+        bool colour = golden_random() % 4 == 0;
+        fine[0] = (int)(golden_random() % 128) - 64;
+        int fine_cb = colour ? (int)(golden_random() % 64) - 32 : 0, fine_cr = colour ? (int)(golden_random() % 64) - 32 : 0;
+        for (unsigned pos = 1; pos <= count; pos++) {
+            if (golden_random() % 100 >= (shape < 7 ? 60u : 40u)) continue;
+            int magnitude = 1 + (int)(golden_random() % (1 + (shape < 7 ? 160u : 24u) / (4 + pos)));
+            fine[pos] = golden_random() % 2 ? -magnitude : magnitude;
+            if (fine[pos] / (1 << coarse_shift(pos, threshold))) last = pos;
+        }
+
+        put_bits(&body, threshold_bit, 3); /* not a repeat, coded chroma DC, threshold */
+        put_dc_rice(&body, state_cb / 2 - fine_cb / 2);
+        put_dc_rice(&body, state_cr / 2 - fine_cr / 2);
+        put_dc_rice(&body, state_y - fine[0]);
+        state_y = fine[0]; state_cb = fine_cb / 2 * 2; state_cr = fine_cr / 2 * 2;
+        for (unsigned pos = 1; pos <= last; pos++) put_full_ac(&body, fine[pos] / (1 << coarse_shift(pos, threshold)), pos);
+        if (last < 63) put_bits(&body, 2, 4);
+
+        uint64_t slots = refinement_cached < MVS_CACHE_SLOTS - 1 ? refinement_cached : MVS_CACHE_SLOTS - 1;
+        if (slots && golden_random() % 100 < 8) {
+            if (refinement_loaded < slots && golden_random() % 2) { refinement_loaded++; put_bits(&partial, 7, 3); }
+            else { refinement_loaded = 1 + golden_random() % slots; put_bits(&partial, 6, 3); put_bits(&partial, (uint32_t)refinement_loaded, 16); }
+            continue;
+        }
+        refinement_cached++;
+        put_bits(&partial, 1, 2);
+        put_bits(&partial, count, 6);
+        for (unsigned pos = 1; pos <= count; pos++) {
+            unsigned shift = coarse_shift(pos, threshold);
+            int v = fine[pos], coarse = v / (1 << shift);
+            if (coarse) put_bits(&partial, (unsigned)abs(v) & ((1u << shift) - 1), shift);
+            else if (shift == 1) put_bits(&partial, v ? 2u | (v < 0) : 0, v ? 2 : 1);
+            else put_dc_rice(&partial, v);
+        }
+        put_chroma_dc(&partial, fine_cr);
+        put_chroma_ac(&partial, colour ? golden_random() % 5 : 0, 14);
+        put_chroma_dc(&partial, fine_cb);
+        put_chroma_ac(&partial, colour ? golden_random() % 5 : 0, 19);
+    }
+    put_bits(&header, 0x6d, 8);
+    put_bits(&body, 0x6d, 8);
+    put_bits(&partial, 0x6d7673, 24);
+    r.full_length = offset + (body.bits + 7) / 8;
+    r.partial_length = 3 + (partial.bits + 7) / 8;
+    return r;
+}
+static void refinement_free(refinement *r) { free(r->full); free(r->partial); }
+
 static void test_golden_sequence(void) {
     enum { W = 157, H = 99, UPDATES = 4000 };
-    static uint8_t payload[1 << 16];
-    static bit_writer header;
+    static uint8_t payload[1 << 16], header_bytes_buffer[16384];
+    bit_writer header = { header_bytes_buffer, 0 };
     uint8_t *pixels = calloc((size_t)W * H, 4);
     mvs_surface surface = { pixels, W, H, W * 4, 0, 8, 16 };
     mvs_decoder *d = mvs_create();
@@ -458,7 +584,8 @@ static void test_golden_sequence(void) {
             for (int q = 1; q < 129; q++) payload[q] = (uint8_t)(1 + golden_random() % range);
             length = 129;
         } else if (kind < 50) {
-            memset(&header, 0, sizeof header);
+            memset(header_bytes_buffer, 0, sizeof header_bytes_buffer);
+            header.bits = 0;
             put_bits(&header, 0, 1);
             for (size_t done = 0; done < tiles;) {
                 unsigned type = done ? golden_type() : 5, form = golden_random() % 100;
@@ -505,7 +632,105 @@ static void test_golden_sequence(void) {
     CHECK(golden_hash == 0xb4edd7871227d5fbull);
 }
 
+/* Every code of a valid partial update, in both threshold ranges and with
+ * custom quantization, pinned like the golden sequence. */
+static void test_refinement_sequence(void) {
+    enum { W = 157, H = 99, REGIONS = 300 };
+    uint8_t *pixels = calloc((size_t)W * H, 4);
+    mvs_surface surface = { pixels, W, H, W * 4, 16, 8, 0 };
+    mvs_decoder *d = mvs_create();
+    golden_state = 22;
+    golden_hash = 0xcbf29ce484222325ull;
+    refinement_cached = refinement_loaded = 0;
+    long errors = 0;
+    for (int i = 0; i < REGIONS; i++) {
+        mvs_stats stats;
+        if (i % 16 == 15) {
+            uint8_t quant[129] = { 2 };
+            unsigned range = golden_random() % 3 ? 32 : 255;
+            for (int q = 1; q < 129; q++) quant[q] = (uint8_t)(1 + golden_random() % range);
+            if (mvs_decode(d, &surface, 0, 0, 0, 0, quant, sizeof quant, NULL, NULL, NULL)) errors++;
+        }
+        /* The adapter's geometry: whole tiles, clipped only by the framebuffer edge. */
+        uint32_t x = 8 * (golden_random() % 20), y = 8 * (golden_random() % 13);
+        uint32_t w = 8 * (1 + golden_random() % (20 - x / 8)), h = 8 * (1 + golden_random() % (13 - y / 8));
+        if (x + w > W) w = W - x;
+        if (y + h > H) h = H - y;
+        unsigned t1 = golden_random() % 2 ? 1 + golden_random() % 14 : 15 + golden_random() % 49;
+        unsigned t2 = golden_random() % 2 ? 1 + golden_random() % 14 : 15 + golden_random() % 49;
+        refinement r = refinement_new(w, h, t1, t2);
+        const uint8_t *payloads[2] = { r.full, r.partial };
+        const size_t lengths[2] = { r.full_length, r.partial_length };
+        for (int p = 0; p < 2; p++) {
+            if (mvs_decode(d, &surface, x, y, w, h, payloads[p], lengths[p], hash_write, NULL, &stats)) errors++;
+            hash_bytes(&stats, sizeof stats);
+            hash_bytes(pixels, (size_t)W * H * 4);
+        }
+        refinement_free(&r);
+    }
+    mvs_destroy(d);
+    free(pixels);
+    printf("refinement: %d regions, %ld typed failures, hash %016llx\n", REGIONS, errors, (unsigned long long)golden_hash);
+    CHECK(errors == 0);
+    CHECK(golden_hash == 0x5553aab1b45f89fbull);
+}
+
+/* ---- Benchmark: partial updates on a 3024x1964 desktop ----
+ * Each region gets its coarse full update untimed, then its refining partial
+ * update timed, with the adapter's statistics and written-tile callback. */
+static void count_written(void *context, uint32_t x, uint32_t y, uint32_t w, uint32_t h) {
+    (void)x; (void)y;
+    *(uint64_t *)context += (uint64_t)w * h;
+}
+static int compare_times(const void *a, const void *b) {
+    uint64_t x = *(const uint64_t *)a, y = *(const uint64_t *)b;
+    return (x > y) - (x < y);
+}
+
+static void bench(void) {
+    enum { W = 3024, H = 1964, ROUNDS = 15, KINDS = 2, MOST = 96 };
+    static const struct { const char *name; uint32_t w, h; int count; } kinds[KINDS] = {
+        { "text edit", 640, 32, MOST }, { "scroll", 1200, 800, 8 },
+    };
+    static uint64_t times[KINDS][ROUNDS * MOST];
+    uint8_t *pixels = calloc((size_t)W * H, 4);
+    mvs_surface surface = { pixels, W, H, W * 4, 16, 8, 0 };
+    uint64_t written = 0;
+    for (int round = 0; round < ROUNDS; round++) {
+        mvs_decoder *d = mvs_create();
+        golden_state = 23;
+        refinement_cached = refinement_loaded = 0;
+        for (int k = 0; k < KINDS; k++) {
+            for (int i = 0; i < kinds[k].count; i++) {
+                uint32_t w = kinds[k].w, h = kinds[k].h;
+                uint32_t x = 8 * (golden_random() % ((W - w) / 8 + 1)), y = 8 * (golden_random() % ((H - h) / 8 + 1));
+                refinement r = refinement_new(w, h, 15, 25);
+                mvs_stats stats;
+                CHECK(mvs_decode(d, &surface, x, y, w, h, r.full, r.full_length, count_written, &written, &stats) == MVS_OK);
+                uint64_t start = clock_gettime_nsec_np(CLOCK_UPTIME_RAW);
+                mvs_error e = mvs_decode(d, &surface, x, y, w, h, r.partial, r.partial_length, count_written, &written, &stats);
+                times[k][round * kinds[k].count + i] = clock_gettime_nsec_np(CLOCK_UPTIME_RAW) - start;
+                CHECK(e == MVS_OK);
+                refinement_free(&r);
+            }
+        }
+        mvs_destroy(d);
+    }
+    for (int k = 0; k < KINDS; k++) {
+        int n = ROUNDS * kinds[k].count;
+        qsort(times[k], (size_t)n, sizeof times[k][0], compare_times);
+        double median = (double)times[k][n / 2] / 1000.0, megapixels = (double)kinds[k].w * kinds[k].h / 1e6;
+        printf("bench %-9s %4ux%-4u median %9.1f us/update  %7.1f megapixels/s  %6.1f ns/tile  (%d updates)\n", kinds[k].name,
+               kinds[k].w, kinds[k].h, median, megapixels / (median / 1e6), median * 1000.0 / (kinds[k].w / 8 * (kinds[k].h / 8)), n);
+    }
+    golden_hash = 0xcbf29ce484222325ull;
+    hash_bytes(pixels, (size_t)W * H * 4);
+    printf("bench written pixels %llu, final picture hash %016llx\n", (unsigned long long)written, (unsigned long long)golden_hash);
+    free(pixels);
+}
+
 int main(int argc, char **argv) {
+    if (argc > 1 && !strcmp(argv[1], "bench")) { bench(); return failures != 0; }
     build_vectors();
     test_regional_initialization();
     test_raw_coverage_and_geometry_reset();
@@ -516,6 +741,7 @@ int main(int argc, char **argv) {
     test_cache_bounds();
     test_memory();
     test_golden_sequence();
+    test_refinement_sequence();
     test_fuzz(argc > 1 ? atol(argv[1]) : 200000);
     if (failures) { fprintf(stderr, "%d failures\n", failures); return 1; }
     printf("all decoder tests passed\n");
