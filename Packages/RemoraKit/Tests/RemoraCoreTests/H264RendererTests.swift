@@ -1,6 +1,7 @@
 import CFreeRDPReference
 import CoreVideo
 import Metal
+import Synchronization
 import Testing
 
 @testable import RemoraCore
@@ -230,4 +231,46 @@ func avc444MatchesFreeRDPByteForByte(chroma: H264Renderer.Layout) throws {
             #expect(part[offset..<(offset + area.width * 4)] == whole[start..<(start + area.width * 4)])
         }
     }
+}
+
+/// A GPU error discards the framebuffer once and tells the loss observers at once, so a session can ask the server
+/// for a redraw before any later frame. The next draw reports the loss. Apple GPUs drop writes to bad addresses
+/// instead of failing the command buffer, so the test reports the error as the command buffer's completion does.
+@Test func gpuErrorDiscardsTheFramebufferOnceAndTellsLossObservers() throws {
+    var random = SplitMix64(state: 3)
+    let desktop = try MetalDesktop(device: #require(MTLCreateSystemDefaultDevice()))
+    let renderer = try H264Renderer(desktop: desktop)
+    let observed = Mutex(0)
+    let observer = desktop.addLossObserver { observed.withLock { $0 += 1 } }
+    defer { desktop.removeLossObserver(observer) }
+    let target = H264Renderer.Target(
+        surface: 1, surfaceWidth: 64, surfaceHeight: 48, originX: 0, originY: 0, visibleWidth: 64, visibleHeight: 48,
+        desktopWidth: 64, desktopHeight: 48)
+    func draw() throws -> Bool {
+        let image = try picture(width: 64, height: 48, using: &random)
+        return try renderer.draw(
+            target, passes: [.init(layout: .yuv420, image: image, rectangles: [.init(left: 0, top: 0, right: 64, bottom: 48)], convertHeight: 48)])
+    }
+
+    #expect(try draw())
+    var drawn: (any MTLTexture)?
+    _ = try desktop.submit { texture, _ in drawn = texture }
+    let lost = try #require(drawn)
+    // A CPU update staged after the failed command holds a staging slot, which the discard must return.
+    let update = [UInt8](repeating: 0, count: 64 * 48 * 4)
+    _ = try update.withUnsafeBytes {
+        try desktop.ingest(
+            BorrowedFrame(pixels: $0.baseAddress!, width: 64, height: 48, stride: 256, dirtyRectangles: [.init(x: 0, y: 0, width: 8, height: 8)]))
+    }
+    desktop.discardFramebuffer(drawnInto: lost)
+    #expect(observed.withLock { $0 } == 1)
+    #expect(desktop.losses == 1)
+    #expect(desktop.size == nil)
+
+    #expect(try draw() == false)
+    // A late error from the discarded framebuffer leaves the new one.
+    desktop.discardFramebuffer(drawnInto: lost)
+    #expect(observed.withLock { $0 } == 1)
+    #expect(desktop.size == DesktopSize(width: 64, height: 48))
+    #expect(try draw())
 }
