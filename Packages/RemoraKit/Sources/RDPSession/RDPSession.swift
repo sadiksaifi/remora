@@ -342,7 +342,7 @@ public final class RDPSession: AgentInputSession, @unchecked Sendable {
             case RMRDP_CLIPBOARD_UNAVAILABLE: value = .unavailable
             case RMRDP_CLIPBOARD_REMOTE_TEXT: value = .text(string(text))
             case RMRDP_CLIPBOARD_FAILED: value = .failed
-            case RMRDP_CLIPBOARD_LOCAL_TEXT: value = .offered(string(text))
+            case RMRDP_CLIPBOARD_LOCAL_TEXT: value = .offered([.text(string(text))])
             default: value = .notReady
             }
             session(user).emit(.clipboardChanged(revision: revision, status: value))

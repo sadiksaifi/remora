@@ -1,5 +1,6 @@
 import Foundation
 import RemoraControl
+import RemoraCore
 
 extension CommandLineController {
     func handleClipboard(_ request: ControlRequest) async throws -> ControlValue {
@@ -23,7 +24,9 @@ extension CommandLineController {
                 return .object(["session": .string(id.uuidString), "offered": .bool(true)])
             }
             switch session.remoteClipboard.status {
-            case .text(let text), .offered(let text): return .object(["session": .string(id.uuidString), "text": .string(text)])
+            case .received(let flavors), .offered(let flavors):
+                guard let text = RemoteClipboard.plainText(in: flavors) else { throw ControlFailure(.unsupported, "The remote clipboard does not offer text.") }
+                return .object(["session": .string(id.uuidString), "text": .string(text)])
             case .unavailable: throw ControlFailure(.unsupported, "The remote clipboard does not offer text.")
             case .failed: throw ControlFailure(.backendFailed, "The remote clipboard transfer failed.")
             case .notReady, .unknown, .pending: break

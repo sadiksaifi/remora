@@ -209,7 +209,8 @@ final class Sink: FrameSink, @unchecked Sendable {
                 if resizeRequestSent, !value { resizeCapabilityLost = true }
             case .clipboardChanged(let revision, let status):
                 switch status {
-                case .text(let text):
+                case .received(let flavors):
+                    guard let text = RemoteClipboard.plainText(in: flavors) else { break }
                     print("CLIPBOARD \(revision) TEXT \(text)")
                     if text == "Remora clipboard: Grüße 日本語 🐟" { clipboardReceived = true }
                 default: print("CLIPBOARD \(revision) \(status)")

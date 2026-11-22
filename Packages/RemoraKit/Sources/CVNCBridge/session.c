@@ -333,6 +333,10 @@ static void cursor(rfbClient *c, int x, int y, int w, int h, int bpp) {
     s->cb.cursor(s->user, pixels, w, h, x, y);
     free(pixels);
 }
+static void clipboard_item(rfbClient *c,const rfbRemoraClipboardFlavor *flavors,int count) {
+    RMVNC *s=owner(c);
+    s->cb.clipboardItem(s->user,flavors,count);
+}
 static void clipboard(rfbClient *c, const char *text, int length) {
     RMVNC *s = owner(c);
     if (length >= 0 && length <= 1048576 && s->cb.clipboard) s->cb.clipboard(s->user, text, length, false);
@@ -504,6 +508,7 @@ bool rm_vnc_connect(RMVNC *s) {
     c->RemoraDisplays=displays_changed; c->RemoraFrameComplete=complete_frame;
     c->RemoraUpdateAllowed=update_allowed;
     c->MallocFrameBuffer=allocate; c->GotFrameBufferUpdate=frame; c->GotCursorShape=cursor;
+    if(s->apple && s->cb.clipboardItem) c->RemoraClipboard=clipboard_item;
     c->GotXCutText=clipboard; c->GotXCutTextUTF8=clipboard_utf8;
     c->GetPassword=password; c->GetCredential=credential; c->GetX509CertFingerprintMismatchDecision=trust;
     c->appData.encodingsString="tight zrle hextile copyrect raw";
@@ -686,6 +691,12 @@ bool rm_vnc_pointer(RMVNC *s,uint16_t x,uint16_t y,uint8_t mask) {
     s->inputBusy++;
     bool sent = SendPointerEvent(s->client,x,y,mask);
     s->inputBusy--; performance_input(s,2,sent); return sent;
+}
+int rm_vnc_clipboard_item(RMVNC *s,const rfbRemoraClipboardFlavor *flavors,unsigned count) {
+    rfbRemoraRuntimeMessage(s->client, RFB_REMORA_WRITE);
+    s->inputBusy++;
+    int result=rfbRemoraSendClipboard(s->client,flavors,count);
+    s->inputBusy--; return result;
 }
 bool rm_vnc_clipboard_utf8(RMVNC *s) { return s->apple || s->client->extendedClipboardServerCapabilities != 0; }
 bool rm_vnc_clipboard(RMVNC *s,const char *text,int len,bool utf8) {

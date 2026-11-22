@@ -15,10 +15,16 @@
      ${LIBVNCCLIENT_DIR}/rfbclient.c
 --- a/include/rfb/rfbclient.h
 +++ b/include/rfb/rfbclient.h
-@@ -320,6 +320,13 @@
+@@ -320,6 +320,19 @@
  enum { RFB_REMORA_PERF_REQUEST_BEGIN=1, RFB_REMORA_PERF_REQUEST_OK,
         RFB_REMORA_PERF_REQUEST_FAILED, RFB_REMORA_PERF_PARSED };
  
++typedef struct {
++    const char *uti;
++    const uint8_t *data;
++    uint32_t length;
++} rfbRemoraClipboardFlavor;
++
 +/* Bounded Apple DisplayInfo2 entries, in server desktop coordinates. */
 +typedef struct {
 +    uint32_t id;
@@ -29,7 +35,7 @@
  typedef struct _rfbClient {
  	uint8_t* frameBuffer;
  	int width, height;
-@@ -589,7 +596,23 @@
+@@ -589,7 +602,27 @@
          uint16_t remoraLastResizeWidth, remoraLastResizeHeight;
          void (*RemoraDesktopSize)(struct _rfbClient*, rfbBool requested);
          void (*RemoraResizeReply)(struct _rfbClient*, unsigned int result, uint16_t width, uint16_t height);
@@ -40,9 +46,13 @@
 +  int remoraAppleError;
 +  rfbRemoraDisplay remoraDisplays[64];
 +  uint32_t remoraDisplayCount, remoraDisplayID;
++  /* Borrowed until return. -1 pending, 0 unavailable, positive count for one item. */
++  void (*RemoraClipboard)(struct _rfbClient*, const rfbRemoraClipboardFlavor*, int count);
 +  void (*RemoraDisplays)(struct _rfbClient*);
 +  void (*RemoraFrameComplete)(struct _rfbClient*);
  } rfbClient;
++/* 1 sent, 0 transport failure, -1 rejected locally (no wire write). */
++int rfbRemoraSendClipboard(rfbClient*, const rfbRemoraClipboardFlavor*, unsigned count);
 +rfbBool rfbRemoraRecordPending(rfbClient *);
 +rfbBool rfbRemoraAppleSetDemand(rfbClient *, rfbBool);
 +rfbBool rfbRemoraSelectDisplay(rfbClient *, uint32_t);

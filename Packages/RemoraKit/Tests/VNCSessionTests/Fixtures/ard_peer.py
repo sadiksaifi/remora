@@ -226,6 +226,22 @@ def packed_flavor(uti, data, tags=()):
 TEXT_UTI = b'public.utf8-plain-text'
 
 
+# One item, with PNG, TIFF, RTF, HTML and an optional plain-text alternative.
+def rich_item(prefix, with_text=True, tags=()):
+    flavors = [(b'public.png', b'\x89PNG\r\n\x1a\n' + prefix),
+               (b'public.tiff', b'II*\0' + prefix), (b'public.rtf', b'{\\rtf1 ' + prefix + b'}'),
+               (b'public.html', b'<b>' + prefix + b'</b>')]
+    if with_text: flavors.append((TEXT_UTI, prefix))
+    return struct.pack('>I', len(flavors)) + b''.join(packed_flavor(uti, data, tags) for uti, data in flavors)
+
+
+def boundary_item():
+    uti = b'public.html'
+    size = 8 * 1024 * 1024 - 20 - len(uti)
+    data = b'<b>' + b'x' * (size - 7) + b'</b>'
+    return struct.pack('>I', 1) + packed_flavor(uti, data)
+
+
 def apple_clipboard(outcome, client_message, send, report):
     def reply(archive, sync=False, declared=None):
         send(bytes.fromhex('14 00 00 04 00 01 00 02'))
@@ -248,6 +264,14 @@ def apple_clipboard(outcome, client_message, send, report):
         reply(None, declared=(1, large, bytes(large)))
         reply(None, declared=(large, 16, bytes(16)))
         reply(text_item(b'after a large image'))
+    elif outcome == 'apple-clipboard-rich':
+        reply(rich_item(b'Mac', tags=[(b'public.filename-extension', b'test')]), sync=True)
+        while not report['clipboard_uploads']: client_message()
+        # Keep these representations together even when another item offers plain text.
+        reply(bytes(4) + rich_item(b'Mac', with_text=False) + text_item(b'separate item'))
+    elif outcome == 'apple-clipboard-boundary':
+        reply(boundary_item())
+        while not report['clipboard_uploads']: client_message()
     elif outcome == 'apple-clipboard-wire-limit':
         reply(None, declared=(1, 100 * 1024 * 1024 + 1, b''))
     elif outcome == 'apple-clipboard-length':
@@ -257,12 +281,12 @@ def apple_clipboard(outcome, client_message, send, report):
         # A complete text item followed by a flavor with a truncated UTI.
         reply(text_item(b'do not publish') + struct.pack('>II', 1, 100) + b'x')
     else:
-        rich = packed_flavor(b'public.rtf', hashlib.shake_256(b'fixture').digest(1_100_000),
+        rich = packed_flavor(b'org.example.other', hashlib.shake_256(b'fixture').digest(1_100_000),
                              [(b'public.mime-type', b'text/rtf')])
         reply(struct.pack('>I', 2) + rich + packed_flavor(TEXT_UTI, 'from Mac ✓\0'.encode()), sync=True)
         while len(report['clipboard_uploads']) < 2: client_message()
         reply(text_item(b'\xff'))
-        reply(struct.pack('>I', 1) + packed_flavor(b'public.png', b'image bytes'))
+        reply(struct.pack('>I', 1) + packed_flavor(b'org.example.other', b'other bytes'))
         reply(text_item(b'x' * (1024 * 1024 + 1)))
 
 
@@ -307,17 +331,23 @@ def apple_frames(outcome, exact, send, report, connection):
             if flags or reserved or request in report['clipboard_requests']:
                 raise ValueError('full clipboard request with a fresh ID required')
             report['clipboard_requests'].append(request)
-        elif kind == 0x1f and outcome == 'apple-clipboard':
+        elif kind == 0x1f and outcome in ('apple-clipboard', 'apple-clipboard-rich', 'apple-clipboard-boundary'):
             padding, flags, reserved, request, plain, compressed = struct.unpack('>BBBIII', exact(15))
             if padding or flags or reserved or request or not 0 < compressed <= 2 * 1024 * 1024:
                 raise ValueError('clipboard upload header')
             inflater = zlib.decompressobj()
-            archive = inflater.decompress(exact(compressed), 2 * 1024 * 1024)
+            archive = inflater.decompress(exact(compressed), 8 * 1024 * 1024)
             if len(archive) != plain or inflater.unused_data or inflater.unconsumed_tail:
                 raise ValueError('clipboard upload length')
             index = len(report['clipboard_uploads'])
             wanted = 'from viewer 🦀'.encode() if index == 0 else b''
             expected = struct.pack('>I', 1) + packed_flavor(TEXT_UTI, wanted) if wanted else bytes(4)
+            if outcome == 'apple-clipboard-rich':
+                expected = rich_item(b'viewer')
+                wanted = b'rich'
+            elif outcome == 'apple-clipboard-boundary':
+                expected = boundary_item()
+                wanted = b'boundary'
             if archive != expected: raise ValueError('clipboard upload archive')
             report['clipboard_uploads'].append(wanted.decode())
         elif kind == 3:

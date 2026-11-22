@@ -145,17 +145,63 @@ private final class ApplePixels: FrameSink, @unchecked Sendable {
         onClipboard: { session, status in
             statuses.append(status)
             if status == .text("from Mac ✓\0") { session.setLocalClipboard(text: "from viewer 🦀") }
-            if status == .offered("from viewer 🦀") { session.setLocalClipboard(text: "") }
+            if status == .offered([.text("from viewer 🦀")]) { session.setLocalClipboard(text: "") }
         })
 
     #expect(wire["pasteboard_monitoring"] as? Bool == true)
     #expect(wire["clipboard_uploads"] as? [String] == ["from viewer 🦀", ""])
     #expect(
         statuses == [
-            .unknown, .pending, .text("from Mac ✓\0"), .offered("from viewer 🦀"), .offered(""), .pending, .failed, .pending, .unavailable,
+            .unknown, .pending, .text("from Mac ✓\0"), .offered([.text("from viewer 🦀")]), .offered([.text("")]), .pending, .failed, .pending, .unavailable,
             .pending, .unavailable,
         ])
     #expect(pixels.samples.count == 3)
+}
+
+private func richFlavors(_ source: String) -> [RemoteClipboard.Flavor] {
+    [
+        .init(.png, Data([0x89]) + Data("PNG\r\n\u{1a}\n\(source)".utf8)),
+        .init(.tiff, Data("II*\0\(source)".utf8)),
+        .init(.rtf, Data("{\\rtf1 \(source)}".utf8)),
+        .init(.html, Data("<b>\(source)</b>".utf8)),
+        .text(source),
+    ]
+}
+
+@Test @MainActor func appleClipboardExchangesAllFlavorsOfOneItem() async throws {
+    let incoming = richFlavors("Mac")
+    let outgoing = richFlavors("viewer")
+    var statuses: [RemoteClipboard.Status] = []
+    let (wire, _, _) = try await appleSession(
+        "apple-clipboard-rich",
+        onClipboard: { session, status in
+            statuses.append(status)
+            if status == .received(incoming) { session.setLocalClipboard(flavors: outgoing) }
+        })
+    #expect(wire["clipboard_uploads"] as? [String] == ["rich"])
+    #expect(statuses == [.unknown, .pending, .received(incoming), .offered(outgoing), .pending, .received(Array(incoming.dropLast()))])
+}
+
+@Test @MainActor func appleClipboardArchiveAtEightMiBRoundTripsAfterAnOversizedOffer() async throws {
+    var received: [RemoteClipboard.Flavor] = []
+    var rejected = false
+    let (wire, _, _) = try await appleSession(
+        "apple-clipboard-boundary",
+        onClipboard: { session, status in
+            switch status {
+            case .received(let flavors):
+                received = flavors
+                guard let html = flavors.first, html.format == .html else { return }
+                #expect(html.data.count == 8 * 1024 * 1024 - 20 - "public.html".utf8.count)
+                session.setLocalClipboard(flavors: [.init(.html, html.data + Data([0]))])
+            case .failed where !rejected:
+                rejected = true
+                session.setLocalClipboard(flavors: received)
+            default: break
+            }
+        })
+    #expect(rejected)
+    #expect(wire["clipboard_uploads"] as? [String] == ["boundary"])
 }
 
 @Test @MainActor func appleClipboardOverTheLocalLimitIsSkippedWithoutEndingTheSession() async throws {
