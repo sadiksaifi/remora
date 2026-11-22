@@ -43,11 +43,14 @@ public final class VNCSession: AgentInputSession, @unchecked Sendable {
         (events, continuation) = AsyncStream.makeStream()
     }
 
+    /// macOS delays each rejected Apple login longer than the last, and srp.c waits 30 seconds for the result.
+    private var networkBudget: Duration { configuration.vncMode == .apple ? .seconds(40) : .seconds(20) }
+
     public func connect() {
         state.lock.withLock {
             guard !state.started else { return }
             state.started = true
-            state.networkDeadline = .now.advanced(by: .seconds(20))
+            state.networkDeadline = .now.advanced(by: networkBudget)
             continuation.yield(.stateChanged(.connecting))
             let worker = Thread { [self] in run() }
             worker.name = "Remora VNC session"
@@ -461,7 +464,7 @@ public final class VNCSession: AgentInputSession, @unchecked Sendable {
                             )
                         case 19:
                             .protocolError(
-                                "The computer that answered couldn't prove that it knows this account's password. Someone might be impersonating the Mac."
+                                "The computer that answered couldn't prove that it has this account's password on record. Someone might be impersonating the Mac."
                             )
                         case 14: .protocolError("Apple session encryption could not be established. Check that the Mac supports encrypted Screen Sharing.")
                         case 9: .protocolError("The Apple desktop update could not be decoded.")
@@ -617,7 +620,7 @@ public final class VNCSession: AgentInputSession, @unchecked Sendable {
         let answer = wait.answer()
         state.lock.withLock {
             state.cancelChallenge = nil
-            state.networkDeadline = .now.advanced(by: .seconds(20))
+            state.networkDeadline = .now.advanced(by: networkBudget)
         }
         return answer
     }

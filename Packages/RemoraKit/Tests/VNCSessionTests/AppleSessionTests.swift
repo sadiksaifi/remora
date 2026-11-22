@@ -180,7 +180,7 @@ private func richFlavors(_ source: String) -> [RemoteClipboard.Flavor] {
             if status == .received(incoming) { session.setLocalClipboard(flavors: outgoing) }
         })
     #expect(wire["clipboard_uploads"] as? [String] == ["rich"])
-    #expect(statuses == [.unknown, .pending, .received(incoming), .offered(outgoing), .pending, .received(Array(incoming.dropLast()))])
+    #expect(statuses == [.unknown, .pending, .received(incoming), .offered(outgoing), .pending, .received(incoming.dropLast() + [.text("separate item")])])
 }
 
 @Test @MainActor func appleClipboardArchiveAtEightMiBRoundTripsAfterAnOversizedOffer() async throws {
@@ -203,6 +203,8 @@ private func richFlavors(_ source: String) -> [RemoteClipboard.Flavor] {
         })
     #expect(rejected)
     #expect(wire["clipboard_uploads"] as? [String] == ["boundary"])
+    // The fixed random bytes keep the upload above 3 MiB after compression.
+    #expect(try #require(wire["clipboard_upload_compressed"] as? Int) > 3 * 1024 * 1024)
 }
 
 @Test @MainActor func appleClipboardOverTheLocalLimitIsSkippedWithoutEndingTheSession() async throws {
@@ -435,7 +437,7 @@ private func richFlavors(_ source: String) -> [RemoteClipboard.Flavor] {
 @MainActor func appleEndsTheLoginWhenTheServerCannotProveItHoldsTheVerifier(_ claim: String) async throws {
     // The peer has no verifier for the account. It answers with a made-up proof, or with a bare success result.
     let (wire, terminals, pixels) = try await appleSession("apple-impersonator-\(claim)")
-    // The peer could not verify the client's proof.
+    // The client's proof told the peer only that its one password guess was wrong.
     #expect(wire["proof_verified"] as? Bool == false)
     // The client then closed without ClientInit, records or input.
     #expect(wire["closed_after_proof"] as? Bool == true)
@@ -443,12 +445,12 @@ private func richFlavors(_ source: String) -> [RemoteClipboard.Flavor] {
     #expect(pixels.samples.isEmpty)
     #expect(
         terminals == [
-            .protocolError("The computer that answered couldn't prove that it knows this account's password. Someone might be impersonating the Mac.")
+            .protocolError("The computer that answered couldn't prove that it has this account's password on record. Someone might be impersonating the Mac.")
         ])
 }
 
 @Test(arguments: [
-    "group", "generator", "public-zero", "public-modulus", "iterations-zero", "iterations-low", "iterations-excessive", "options", "flag", "trailing",
+    "group", "generator", "public-zero", "public-modulus", "iterations-zero", "iterations-excessive", "options", "flag", "trailing",
 ])
 @MainActor func appleSendsNoProofForUnsupportedSRPParameters(_ fault: String) async throws {
     let (wire, terminals, pixels) = try await appleSession("apple-srp-\(fault)")
@@ -460,6 +462,11 @@ private func richFlavors(_ source: String) -> [RemoteClipboard.Flavor] {
     } else {
         Issue.record("Expected an unsupported Apple profile for \(fault)")
     }
+}
+
+@Test @MainActor func appleRejectionAfterTwentyTwoSecondsStillReportsAuthenticationFailure() async throws {
+    let (_, terminals, _) = try await appleSession("apple-slow-reject", password: "wrong-password", patience: .seconds(35))
+    #expect(terminals == [.authenticationFailed])
 }
 
 @Test @MainActor func appleWrongPasswordFailsAuthenticationAtTheGenuineServer() async throws {

@@ -11,8 +11,10 @@ import ctypes
 import hashlib
 import json
 import os
+import random
 import struct
 import sys
+import time
 import zlib
 
 PRIME_HEX = (
@@ -51,7 +53,7 @@ SRP_N = int(
 SRP_G = 5
 SRP_SIZE = 512
 SRP_SALT = hashlib.sha256(b'ARD synthetic SRP salt').digest()
-SRP_ITERATIONS = 10000
+SRP_ITERATIONS = 2048
 SRP_OPTIONS = b'mda=SHA-512,replay_detection,conf+int=ChaCha20-Poly1305,kdf=SALTED-SHA512-PBKDF2'
 
 
@@ -162,7 +164,7 @@ def srp_login(outcome, exact, send, report):
     # macOS answers an unknown account with a random salt.
     salt = SRP_SALT if known else os.urandom(32)
     iterations = SRP_ITERATIONS
-    # The impersonator has no verifier for the account. It builds its challenge from a made-up password.
+    # The impersonator has no verifier for the account. It commits to one password guess.
     impersonator = outcome.startswith('apple-impersonator-')
     verifier = srp_verifier(b'impersonator guess' if impersonator else PASSWORD, salt, iterations)
     k = int.from_bytes(srp_hash(srp_pad(SRP_N), srp_pad(SRP_G)), 'big')
@@ -174,7 +176,6 @@ def srp_login(outcome, exact, send, report):
     elif outcome == 'apple-srp-public-zero': B = 0
     elif outcome == 'apple-srp-public-modulus': B = SRP_N
     elif outcome == 'apple-srp-iterations-zero': iterations = 0
-    elif outcome == 'apple-srp-iterations-low': iterations = 9999
     elif outcome == 'apple-srp-iterations-excessive': iterations = 1 << 40
     elif outcome == 'apple-srp-options': options = options.replace(b'kdf=SALTED-SHA512-PBKDF2', b'kdf=SALTED-SHA512')
     elif outcome == 'apple-srp-flag': flag = 1
@@ -194,7 +195,7 @@ def srp_login(outcome, exact, send, report):
     report['credentials_valid'] = known and report['proof_verified'] and not impersonator
     report['stage'] = 'security_result'
     if impersonator:
-        # Its made-up password was wrong, so it cannot compute the client's K. It claims success anyway.
+        # Its one guess failed, so it cannot compute the client's K. It claims success anyway.
         if report['proof_verified']: raise ValueError('impersonator verified the proof')
         if outcome == 'apple-impersonator-proof':
             send(srp_frame(srp_pack('oos', srp_hash(srp_pad(A), proof, K), os.urandom(16), b'') + bytes(4)))
@@ -202,9 +203,16 @@ def srp_login(outcome, exact, send, report):
         expect_close('closed_after_proof')
         return None
     if not report['credentials_valid'] or outcome == 'apple-reject':
+        # macOS delays each rejection longer than the last, past 20 seconds after several.
+        if outcome == 'apple-slow-reject': time.sleep(22)
         send(struct.pack('>I', 1))
         expect_close('closed_without_input')
         report['security_result'] = 1
+        return None
+    if outcome == 'apple-proof-truncated':
+        # A correct M2 without the IV, session ID and TTL that follow it.
+        send(srp_frame(srp_pack('o', srp_hash(srp_pad(A), proof, K))) + struct.pack('>I', 0))
+        expect_close('closed_after_proof')
         return None
     send(srp_frame(srp_pack('oos', srp_hash(srp_pad(A), proof, K), os.urandom(16), b'') + bytes(4)))
     return hashlib.sha256(K).digest()[:16], A
@@ -369,7 +377,9 @@ def rich_item(prefix, with_text=True, tags=()):
 def boundary_item():
     uti = b'public.html'
     size = 8 * 1024 * 1024 - 20 - len(uti)
-    data = b'<b>' + b'x' * (size - 7) + b'</b>'
+    # 3 MiB of fixed random bytes keep the compressed archive above 3 MiB in both directions.
+    noise = random.Random(1).randbytes(3 * 1024 * 1024)
+    data = b'<b>' + noise + b'x' * (size - 7 - len(noise)) + b'</b>'
     return struct.pack('>I', 1) + packed_flavor(uti, data)
 
 
@@ -398,7 +408,7 @@ def apple_clipboard(outcome, client_message, send, report):
     elif outcome == 'apple-clipboard-rich':
         reply(rich_item(b'Mac', tags=[(b'public.filename-extension', b'test')]), sync=True)
         while not report['clipboard_uploads']: client_message()
-        # Keep these representations together even when another item offers plain text.
+        # An item without text takes the text of the item after it, so the CLI can still read text.
         reply(bytes(4) + rich_item(b'Mac', with_text=False) + text_item(b'separate item'))
     elif outcome == 'apple-clipboard-boundary':
         reply(boundary_item())
@@ -464,7 +474,7 @@ def apple_frames(outcome, exact, send, report, connection):
             report['clipboard_requests'].append(request)
         elif kind == 0x1f and outcome in ('apple-clipboard', 'apple-clipboard-rich', 'apple-clipboard-boundary'):
             padding, flags, reserved, request, plain, compressed = struct.unpack('>BBBIII', exact(15))
-            if padding or flags or reserved or request or not 0 < compressed <= 2 * 1024 * 1024:
+            if padding or flags or reserved or request or not 0 < compressed <= 8 * 1024 * 1024:
                 raise ValueError('clipboard upload header')
             inflater = zlib.decompressobj()
             archive = inflater.decompress(exact(compressed), 8 * 1024 * 1024)
@@ -481,6 +491,7 @@ def apple_frames(outcome, exact, send, report, connection):
                 wanted = b'boundary'
             if archive != expected: raise ValueError('clipboard upload archive')
             report['clipboard_uploads'].append(wanted.decode())
+            report['clipboard_upload_compressed'] = max(report.get('clipboard_upload_compressed', 0), compressed)
         elif kind == 3:
             request = struct.unpack('>BHHHH', exact(9))
             if request != (0,0,0,16,8): raise ValueError('full non-incremental request required')
@@ -629,7 +640,7 @@ def serve_once(offer_mode, outcome, port):
     withheld = outcome.endswith(('init-withheld', 'init-withheld-once'))
     withheld_public = None
     stalled = outcome.startswith('apple-init-stalled-')
-    deadline = time.monotonic() + (16 if withheld or stalled or 'display-timeout' in outcome or outcome == 'apple-retry-hidden' else 10)
+    deadline = time.monotonic() + (30 if outcome == 'apple-slow-reject' else 16 if withheld or stalled or 'display-timeout' in outcome or outcome == 'apple-retry-hidden' else 10)
     offers = {
         'apple-mixed': OFFERS,
         'ard-only': [30],

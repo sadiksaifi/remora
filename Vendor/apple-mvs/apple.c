@@ -210,7 +210,15 @@ static rfbBool clipboardItem(const uint8_t *cursor,uint32_t length,unsigned supp
             }
             const uint8_t *data=counted(&cursor,end,&size);
             if(!data) return FALSE;
-            if(!select) continue;
+            if(!select) {
+                /* An item without text, such as an image, takes the first text of a later item. */
+                rfbBool text=FALSE;
+                for(int i=0;i<*count;i++) text|=selected[i].uti==clipboardTypes[0];
+                if(!text && *count<CLIPBOARD_TYPES && size<=CLIPBOARD_TEXT_LIMIT && strlen(clipboardTypes[0])==typeLength &&
+                   !memcmp(type,clipboardTypes[0],typeLength))
+                    selected[(*count)++]=(rfbRemoraClipboardFlavor){clipboardTypes[0],data,size};
+                continue;
+            }
             for(unsigned k=0;k<supported;k++) {
                 if((seen & (1u<<k)) || strlen(clipboardTypes[k])!=typeLength || memcmp(type,clipboardTypes[k],typeLength)) continue;
                 if(k==0 ? size>CLIPBOARD_TEXT_LIMIT : size==0) continue;

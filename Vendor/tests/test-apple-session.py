@@ -35,9 +35,9 @@ with tempfile.TemporaryDirectory(prefix='remora-apple-sanitizers-') as temporary
         # A server that does not offer the SRP login gets no selection and no credentials.
         *(('apple-policy-reject', 0, '18', offers) for offers in ('ard-only', 'apple-ard', 'tls-ard', 'none-only')),
         # Unsupported SRP parameters end the login before the proof. A server without the verifier ends it after.
-        *(('apple-srp-'+case, 0, '8') for case in ('group', 'generator', 'public-zero', 'public-modulus', 'iterations-zero', 'iterations-low',
+        *(('apple-srp-'+case, 0, '8') for case in ('group', 'generator', 'public-zero', 'public-modulus', 'iterations-zero',
                                                     'iterations-excessive', 'options', 'flag', 'trailing')),
-        ('apple-impersonator-proof', 0, '19'), ('apple-impersonator-result', 0, '19'),
+        ('apple-impersonator-proof', 0, '19'), ('apple-proof-truncated', 0, '19'), ('apple-impersonator-result', 0, '19'),
     ]
     # The last login runs against corecrypto's own SRP server arithmetic. srp_oracle.py describes it.
     runs = [(peer_source, *case) for case in cases] + [(root/'tests/srp_oracle.py', 'apple-sequence', 3)]

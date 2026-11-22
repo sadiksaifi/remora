@@ -58,9 +58,12 @@ static void richClipboard(rfbClient *c,const rfbRemoraClipboardFlavor *flavors,i
         FLAVOR("public.png","\211PNG\r\n\032\nMac"), FLAVOR("public.tiff","II*\0Mac"),
         FLAVOR("public.rtf","{\\rtf1 Mac}"), FLAVOR("public.html","<b>Mac</b>"), FLAVOR("public.utf8-plain-text","Mac")
     };
-    int expectedCount=clipboardMessages++==0?5:4;
-    if(count!=expectedCount) { failures++; return; }
-    for(int i=0;i<count;i++) {
+    /* The second item has no text, so the client adds the text of the item after it. */
+    int second=clipboardMessages++>0;
+    if(count!=5) { failures++; return; }
+    if(second && (strcmp(flavors[4].uti,"public.utf8-plain-text") || flavors[4].length!=13 ||
+                  memcmp(flavors[4].data,"separate item",13))) failures++;
+    for(int i=0;i<(second?4:5);i++) {
         if(strcmp(wanted[i].uti,flavors[i].uti) || flavors[i].length!=wanted[i].length ||
             memcmp(wanted[i].data,flavors[i].data,wanted[i].length)) failures++;
     }

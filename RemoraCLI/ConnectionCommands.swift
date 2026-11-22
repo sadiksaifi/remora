@@ -13,7 +13,7 @@ struct ConnectionFields: ParsableArguments {
         String?
     @Option(
         help:
-            "VNC mode: standard, or apple for Apple Screen Sharing's encrypted connection and faster, lossy encoding (Macs only; the Mac must prove that it knows the account's password)."
+            "VNC mode: standard, or apple for Apple Screen Sharing's encrypted connection and faster, lossy encoding (Macs only; the Mac must prove that it has the account's password on record)."
     ) var vncMode: String?
     @Flag(help: "Read the password from UTF-8 stdin, removing one trailing line ending.") var passwordStdin = false
 

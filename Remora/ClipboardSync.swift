@@ -9,6 +9,8 @@ private let clipboardLog = Logger(subsystem: "com.peblon.remora", category: "Cli
 final class ClipboardSync {
     private let session: any RemoteSession
     private var changeCount: Int?
+    /// The Mac pasteboard's change count when the remote clipboard last changed.
+    private var pendingChangeCount: Int?
     private var attemptedPrompt = false
     private var connected = false
     private let canSync: () -> Bool
@@ -26,9 +28,15 @@ final class ClipboardSync {
         sendLocalItemIfChanged()
     }
 
+    func remoteChangePending() {
+        pendingChangeCount = NSPasteboard.general.changeCount
+    }
+
     func receiveRemoteItem(_ flavors: [RemoteClipboard.Flavor]) {
-        guard canSync() else { return }
         let pasteboard = NSPasteboard.general
+        // A copy on this Mac after the remote change is newer than the remote item, so it stays.
+        defer { pendingChangeCount = nil }
+        guard canSync(), pendingChangeCount.map({ $0 == pasteboard.changeCount }) ?? true else { return }
         let item = NSPasteboardItem()
         for flavor in flavors {
             item.setData(flavor.data, forType: .init(flavor.format.rawValue))
