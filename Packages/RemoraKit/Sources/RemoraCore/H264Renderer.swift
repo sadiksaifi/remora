@@ -74,6 +74,8 @@ public final class H264Renderer: @unchecked Sendable {
     private let pipelines: [String: any MTLComputePipelineState]
     /// FreeRDP's persistent YUV444 buffers, one set per surface. They start zeroed, as FreeRDP's do.
     private var planes: [UInt16: Planes] = [:]
+    /// The desktop's loss count at the last draw.
+    private var losses: Int
 
     /// Core Video buffers held until a command buffer completes. Only released, never read, on the handler's thread.
     private final class Retained: @unchecked Sendable {
@@ -104,6 +106,7 @@ public final class H264Renderer: @unchecked Sendable {
     public init(desktop: MetalDesktop) throws {
         self.desktop = desktop
         device = desktop.device
+        losses = desktop.losses
         var cache: CVMetalTextureCache?
         guard CVMetalTextureCacheCreate(nil, nil, device, nil, &cache) == kCVReturnSuccess, let cache else {
             throw CaptureFailure.image("No Metal texture cache.")
@@ -119,7 +122,13 @@ public final class H264Renderer: @unchecked Sendable {
     }
 
     /// Runs the passes in order, as FreeRDP's `avc420_decompress` and `avc444_decompress` do.
-    public func draw(_ target: Target, passes: [Pass]) throws {
+    /// Returns false when the desktop lost earlier drawing since the last draw, after a GPU error.
+    /// Those pixels, and the 4:4:4 planes, are gone; only a full refresh from the server restores them.
+    public func draw(_ target: Target, passes: [Pass]) throws -> Bool {
+        let current = desktop.losses
+        let kept = current == losses
+        losses = current
+        if !kept { planes.removeAll() }
         var keep: [CVMetalTexture] = []
         var sources: [[any MTLTexture]] = []
         for pass in passes {
@@ -151,6 +160,7 @@ public final class H264Renderer: @unchecked Sendable {
             }
         }
         CVMetalTextureCacheFlush(cache, 0)
+        return kept
     }
 
     /// Copies desktop rectangles as BGRA, after all earlier drawing. See `MetalDesktop.read`.

@@ -77,6 +77,14 @@ typedef struct {
     size_t pass_count;
 } RMRDPVideoFrame;
 
+typedef enum {
+    RMRDP_VIDEO_DRAWN,
+    /* Drawn, but a GPU error discarded the desktop's earlier GPU drawing since the last frame. */
+    RMRDP_VIDEO_DRAWN_AFTER_LOSS,
+    /* Not drawn. The update is dropped. */
+    RMRDP_VIDEO_FAILED,
+} RMRDPVideoResult;
+
 /* Callbacks are synchronous and may run on different background threads.
  * All callback arguments are borrowed for the duration of that call. */
 typedef struct {
@@ -100,8 +108,8 @@ typedef struct {
     bool (*trust)(void *user, const char *host, uint16_t port, const char *subject,
                   const char *issuer, const char *fingerprint, const char *old_fingerprint);
     /* Optional, with video_read. Draws H.264 on the GPU into the desktop instead of through frame.
-     * The images are borrowed: retain them to use them after returning. false drops the update. */
-    bool (*video_frame)(void *user, const RMRDPVideoFrame *frame);
+     * The images are borrowed: retain them to use them after returning. */
+    RMRDPVideoResult (*video_frame)(void *user, const RMRDPVideoFrame *frame);
     /* Copies desktop rectangles, as BGRA32, after all earlier drawing, into an image whose top-left
      * pixel is the desktop pixel at origin_x, origin_y. */
     bool (*video_read)(void *user, const RMRDPVideoRectangle *rectangles, size_t count, uint32_t origin_x,

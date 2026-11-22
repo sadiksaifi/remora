@@ -20,6 +20,8 @@ public final class MetalDesktop: CaptureSource, Sendable {
 
     public var size: DesktopSize? { state.withLock { $0.storage?.size } }
     public var revision: Int { state.withLock { $0.revision } }
+    /// How many times a GPU error discarded the framebuffer. Pixels drawn only on the GPU went with it.
+    public var losses: Int { state.withLock { $0.losses } }
     public var lastFrameArrival: TimeInterval? { state.withLock { $0.storage == nil ? nil : $0.arrival } }
 
     /// Each view tracks its submitted revision. Captures may upload that frame first.
@@ -127,6 +129,7 @@ public final class MetalDesktop: CaptureSource, Sendable {
                         if $0.storage === storage {
                             $0.dropPending()
                             $0.storage = nil
+                            $0.losses += 1
                         }
                     }
                 }
@@ -255,6 +258,7 @@ public final class MetalDesktop: CaptureSource, Sendable {
         var observers: [UUID: @Sendable (TimeInterval) -> Void] = [:]
         var revision = 0
         var arrival: TimeInterval = 0
+        var losses = 0
 
         mutating func dropPending() {
             if let pending, let storage { storage.slots[pending].available.signal() }

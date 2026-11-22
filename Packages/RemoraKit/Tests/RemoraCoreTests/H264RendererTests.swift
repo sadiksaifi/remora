@@ -103,7 +103,7 @@ private struct Comparison {
                 }
             }
         }
-        try renderer.draw(target, passes: passes)
+        #expect(try renderer.draw(target, passes: passes))
     }
 
     /// The first desktop pixel where the GPU's blue, green, or red differs from FreeRDP's surface pixel,

@@ -242,13 +242,13 @@ public final class RDPSession: AgentInputSession, @unchecked Sendable {
             do {
                 video.renderer = try H264Renderer(desktop: desktop)
                 callbacks.video_frame = { user, frame in
-                    guard let frame, let renderer = session(user).video.renderer else { return false }
+                    guard let frame, let renderer = session(user).video.renderer else { return RMRDP_VIDEO_FAILED }
                     do {
-                        try renderer.draw(videoTarget(frame.pointee), passes: try videoPasses(frame.pointee))
-                        return true
+                        let kept = try renderer.draw(videoTarget(frame.pointee), passes: try videoPasses(frame.pointee))
+                        return kept ? RMRDP_VIDEO_DRAWN : RMRDP_VIDEO_DRAWN_AFTER_LOSS
                     } catch {
                         rdpLog.error("GPU H.264 drawing failed: \(error.localizedDescription, privacy: .public)")
-                        return false
+                        return RMRDP_VIDEO_FAILED
                     }
                 }
                 callbacks.video_read = { user, rectangles, count, originX, originY, pixels, stride in

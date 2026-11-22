@@ -19,6 +19,9 @@ DWORD rm_display_process(RMDisplay *display);
 void rm_display_connected(RMDisplay *display);
 /* Call after each frame reaches the frame callback. */
 void rm_display_frame(RMDisplay *display);
+/* Any thread. Asks a server that honors Refresh Rect to send the whole desktop again, from the
+ * session thread. A paused server gets the request when it resumes, which redraws anyway. */
+void rm_display_request_refresh(RMDisplay *display);
 /* Called by DesktopResize, including on the GFX worker. Returns the change's origin. */
 bool rm_display_resized(RMDisplay *display, uint32_t width, uint32_t height);
 RMDisplay *rm_rdp_display(RMRDPSession *session);

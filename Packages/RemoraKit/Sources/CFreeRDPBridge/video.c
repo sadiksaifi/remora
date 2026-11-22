@@ -17,9 +17,11 @@
 #define TRUE true
 #define FALSE false
 
-/* gdi_surface_invalidate_rect bounds its region the same way: a region this fragmented is
- * replaced by its extents. */
+/* A stale region this fragmented is read back at once. Replacing it with its extents, as FreeRDP
+ * bounds an invalid region, would copy desktop pixels over surface pixels that are newer. */
 #define MAX_STALE_RECTS 256
+/* After this many GPU drawing failures in a row, H.264 goes back to FreeRDP's CPU path. */
+#define MAX_FAILURES 3
 
 typedef struct {
     UINT16 surface;
@@ -32,6 +34,9 @@ struct RMVideo {
     os_log_t log;
     RMStale *stale;
     size_t stale_count, stale_capacity;
+    unsigned failures;
+    /* Set after MAX_FAILURES; stays for the session. */
+    bool cpu_only;
     pcRdpgfxSurfaceCommand surface_command;
     pcRdpgfxSolidFill solid_fill;
     pcRdpgfxSurfaceToSurface surface_to_surface;
@@ -116,13 +121,7 @@ static bool mark_stale(RMVideo *video, UINT16 surface, const RECTANGLE_16 *rect)
         stale->surface = surface;
         region16_init(&stale->region);
     }
-    if (!region16_union_rect(&stale->region, &stale->region, rect))
-        return false;
-    if (region16_n_rects(&stale->region) <= MAX_STALE_RECTS)
-        return true;
-    const RECTANGLE_16 extents = *region16_extents(&stale->region);
-    region16_clear(&stale->region);
-    return region16_union_rect(&stale->region, &stale->region, &extents);
+    return region16_union_rect(&stale->region, &stale->region, rect);
 }
 
 /* The output area a surface drew into when its stale areas were rendered. */
@@ -132,8 +131,8 @@ static void visible_size(const rdpGdi *gdi, const gdiGfxSurface *surface, uint32
 }
 
 /* Copies the surface's GPU-drawn areas back into its CPU pixels, in one GPU round trip. Areas the GPU
- * clipped away outside the output keep their previous pixels, and so do all of them if the read fails:
- * FreeRDP never ends a session over a picture problem, and neither does this. */
+ * clipped away outside the output keep their previous pixels. If the read fails, all of them do until the
+ * server redraws: FreeRDP never ends a session over a picture problem, and neither does this. */
 static void read_back(RMVideo *video, RdpgfxClientContext *gfx, UINT16 id) {
     RMStale *stale = find_stale(video, id);
     if (!stale)
@@ -157,10 +156,12 @@ static void read_back(RMVideo *video, RdpgfxClientContext *gfx, UINT16 id) {
                                                                          surface->scanline));
             free(areas);
         }
-        if (read)
-            os_log_info(video->log, "Read back %u GPU-drawn rectangles of surface %u for a CPU command", count, id);
-        else
-            os_log_error(video->log, "Could not read back the GPU-drawn areas of surface %u; they keep older pixels", id);
+        if (read) {
+            os_log_info(video->log, "Read back %u GPU-drawn rectangles of surface %u", count, id);
+        } else {
+            os_log_error(video->log, "Could not read back the GPU-drawn areas of surface %u; asking the server to redraw", id);
+            rm_display_request_refresh(rm_rdp_display((RMRDPSession *)gdi->context));
+        }
     }
     forget(video, id);
 }
@@ -176,8 +177,9 @@ static void read_back_all(RMVideo *video, RdpgfxClientContext *gfx) {
  * H.264 conversion leaves their alpha untouched and the desktop is drawn opaque, so alpha is not kept.
  * AVC444 keeps 4:4:4 planes on the GPU and in FreeRDP separately, so when a surface moves between the
  * paths mid-stream, its colors are off until the server next sends the views that cover them. */
-static bool draws_on_gpu(RdpgfxClientContext *gfx, const rdpGdi *gdi, const gdiGfxSurface *surface) {
-    if (!surface->outputMapped || surface->windowMapped || surface->outputTargetWidth != surface->mappedWidth ||
+static bool draws_on_gpu(const RMVideo *video, RdpgfxClientContext *gfx, const rdpGdi *gdi,
+                         const gdiGfxSurface *surface) {
+    if (video->cpu_only || !surface->outputMapped || surface->windowMapped || surface->outputTargetWidth != surface->mappedWidth ||
         surface->outputTargetHeight != surface->mappedHeight || (surface->format != PIXEL_FORMAT_BGRX32 && surface->format != PIXEL_FORMAT_BGRA32) ||
         surface->outputOriginX + surface->mappedWidth > (UINT32)gdi->width ||
         surface->outputOriginY + surface->mappedHeight > (UINT32)gdi->height)
@@ -327,9 +329,24 @@ static UINT draw_h264(RMVideo *video, RdpgfxClientContext *gfx, rdpGdi *gdi, gdi
         visible_size(gdi, surface, &frame.visible_width, &frame.visible_height);
         frame.desktop_width = (uint32_t)gdi->width;
         frame.desktop_height = (uint32_t)gdi->height;
-        if (!video->callbacks.video_frame(video->user, &frame)) {
-            os_log_error(video->log, "GPU drawing failed on surface %u; the update is ignored", surface->surfaceId);
+        RMDisplay *display = rm_rdp_display((RMRDPSession *)gdi->context);
+        const RMRDPVideoResult result = video->callbacks.video_frame(video->user, &frame);
+        if (result == RMRDP_VIDEO_FAILED) {
+            /* The picture is decoded, so FreeRDP cannot convert it now. The server redraws the area. */
+            video->cpu_only = ++video->failures >= MAX_FAILURES;
+            if (video->cpu_only)
+                os_log_error(video->log, "GPU drawing failed %u times in a row; H.264 goes back to the CPU", video->failures);
+            else
+                os_log_error(video->log, "GPU drawing failed on surface %u; the update is ignored", surface->surfaceId);
+            rm_display_request_refresh(display);
         } else {
+            video->failures = 0;
+            if (result == RMRDP_VIDEO_DRAWN_AFTER_LOSS) {
+                /* Earlier GPU drawing is gone, so reading it back would return nothing useful. */
+                os_log_error(video->log, "A GPU error discarded the desktop; asking the server to redraw it");
+                forget_all(video);
+                rm_display_request_refresh(display);
+            }
             for (size_t p = 0; p < frame.pass_count && status == CHANNEL_RC_OK; p++)
                 for (size_t r = 0; r < frame.passes[p].count; r++) {
                     const RMRDPVideoRectangle *v = &frame.passes[p].rectangles[r];
@@ -339,7 +356,10 @@ static UINT draw_h264(RMVideo *video, RdpgfxClientContext *gfx, rdpGdi *gdi, gdi
                         break;
                     }
                 }
-            rm_display_frame(rm_rdp_display((RMRDPSession *)gdi->context));
+            const RMStale *stale = find_stale(video, surface->surfaceId);
+            if (stale && region16_n_rects(&stale->region) > MAX_STALE_RECTS)
+                read_back(video, gfx, surface->surfaceId);
+            rm_display_frame(display);
         }
     }
     for (size_t i = 0; i < count; i++) {
@@ -358,7 +378,7 @@ static UINT surface_command(RdpgfxClientContext *gfx, const RDPGFX_SURFACE_COMMA
     gdiGfxSurface *surface = surface_of(gfx, cmd->surfaceId);
     rdpGdi *gdi = gfx->custom;
     UINT status = CHANNEL_RC_OK;
-    if (h264 && surface && draws_on_gpu(gfx, gdi, surface)) {
+    if (h264 && surface && draws_on_gpu(video, gfx, gdi, surface)) {
         /* CPU drawing earlier in this frame reaches the desktop at the end of the frame, and would then
          * cover this newer picture. Send it now, so the desktop takes it before the GPU draws. */
         if (!region16_is_empty(&surface->invalidRegion))

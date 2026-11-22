@@ -40,6 +40,8 @@ struct RMDisplay {
     uint64_t unwanted_at, paused_at;
     /* A resume of a paused server owes a redraw. redraw_sent: its request is on the wire. */
     bool redraw_owed, redraw_sent;
+    /* A whole-desktop Refresh Rect is wanted, for example after pixels drawn on the GPU were lost. */
+    bool refresh_wanted;
 };
 
 static UINT display_caps(DispClientContext *channel, UINT32 monitors, UINT32 a, UINT32 b) {
@@ -206,6 +208,13 @@ void rm_display_frame(RMDisplay *d) {
     pthread_mutex_unlock(&d->lock);
 }
 
+void rm_display_request_refresh(RMDisplay *d) {
+    pthread_mutex_lock(&d->lock);
+    d->refresh_wanted = true;
+    SetEvent(d->wake);
+    pthread_mutex_unlock(&d->lock);
+}
+
 bool rm_rdp_awaits_redraw(RMRDPSession *session) {
     RMDisplay *d = rm_rdp_display(session);
     pthread_mutex_lock(&d->lock);
@@ -214,16 +223,20 @@ bool rm_rdp_awaits_redraw(RMRDPSession *session) {
     return owed;
 }
 
-/* A failed write surfaces through the event loop like any other. */
-static void send_display_updates(RMDisplay *d, bool allow) {
-    rdpContext *context = d->context;
+static RECTANGLE_16 whole_desktop(const rdpContext *context) {
     const UINT32 width = freerdp_settings_get_uint32(context->settings, FreeRDP_DesktopWidth);
     const UINT32 height = freerdp_settings_get_uint32(context->settings, FreeRDP_DesktopHeight);
     /* TS_RECTANGLE16 bounds are inclusive. */
-    const RECTANGLE_16 desktop = {
+    return (RECTANGLE_16){
         .left = 0, .top = 0,
         .right = (UINT16)(width > 0 ? width - 1 : 0), .bottom = (UINT16)(height > 0 ? height - 1 : 0)
     };
+}
+
+/* A failed write surfaces through the event loop like any other. */
+static void send_display_updates(RMDisplay *d, bool allow) {
+    rdpContext *context = d->context;
+    const RECTANGLE_16 desktop = whole_desktop(context);
     const BOOL sent = allow
         ? context->update->SuppressOutput(context, 1, &desktop) && context->update->RefreshRect(context, 1, &desktop)
         : context->update->SuppressOutput(context, 0, NULL);
@@ -247,6 +260,10 @@ DWORD rm_display_process(RMDisplay *d) {
             updates_timeout = (DWORD)(due - now);
         }
     }
+    /* A pause, or a resume with its own Refresh Rect, serves the request: the resume redraws anyway. */
+    const bool refresh = d->refresh_wanted && updates && d->updates_sent && !updates_changed;
+    if (refresh || !updates || updates_changed)
+        d->refresh_wanted = false;
     const bool changed = d->available != d->reported_available;
     const bool available = d->available;
     d->reported_available = available;
@@ -286,6 +303,11 @@ DWORD rm_display_process(RMDisplay *d) {
             d->redraw_sent = d->redraw_owed;
             pthread_mutex_unlock(&d->lock);
         }
+    }
+    if (refresh && freerdp_settings_get_bool(d->context->settings, FreeRDP_RefreshRect)) {
+        const RECTANGLE_16 desktop = whole_desktop(d->context);
+        const BOOL sent = d->context->update->RefreshRect(d->context, 1, &desktop);
+        os_log_info(d->log, "Refresh of the whole desktop requested, status=%d", sent);
     }
     if (changed && d->callbacks.dynamic_resize)
         d->callbacks.dynamic_resize(d->user, available);
