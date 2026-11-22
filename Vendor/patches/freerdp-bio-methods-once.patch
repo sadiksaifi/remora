@@ -116,3 +116,56 @@
  }
  
  char* freerdp_tcp_address_to_string(const struct sockaddr_storage* addr, BOOL* pIPv6)
+--- a/libfreerdp/core/transport.c
++++ b/libfreerdp/core/transport.c
+@@ -2260,23 +2260,35 @@
+ 	return 1;
+ }
+ 
+-BIO_METHOD* BIO_s_transport_layer(void)
++/* Remora: build the method table exactly once. Two sessions can connect at the same time,
++ * and the lazy version published its pointer before setting the callbacks. */
++static INIT_ONCE transport_layer_methods_once = INIT_ONCE_STATIC_INIT;
++static BIO_METHOD* transport_layer_methods = nullptr;
++
++static BOOL CALLBACK transport_layer_methods_init(WINPR_ATTR_UNUSED PINIT_ONCE once,
++                                                  WINPR_ATTR_UNUSED PVOID param,
++                                                  WINPR_ATTR_UNUSED PVOID* context)
+ {
+-	static BIO_METHOD* bio_methods = nullptr;
++	BIO_METHOD* methods = BIO_meth_new(BIO_TYPE_SIMPLE, "TransportLayer");
+ 
+-	if (bio_methods == nullptr)
+-	{
+-		if (!(bio_methods = BIO_meth_new(BIO_TYPE_SIMPLE, "TransportLayer")))
+-			return nullptr;
++	if (!methods)
++		return FALSE;
+ 
+-		BIO_meth_set_write(bio_methods, transport_layer_bio_write);
+-		BIO_meth_set_read(bio_methods, transport_layer_bio_read);
+-		BIO_meth_set_puts(bio_methods, transport_layer_bio_puts);
+-		BIO_meth_set_gets(bio_methods, transport_layer_bio_gets);
+-		BIO_meth_set_ctrl(bio_methods, transport_layer_bio_ctrl);
+-		BIO_meth_set_create(bio_methods, transport_layer_bio_new);
+-		BIO_meth_set_destroy(bio_methods, transport_layer_bio_free);
+-	}
++	BIO_meth_set_write(methods, transport_layer_bio_write);
++	BIO_meth_set_read(methods, transport_layer_bio_read);
++	BIO_meth_set_puts(methods, transport_layer_bio_puts);
++	BIO_meth_set_gets(methods, transport_layer_bio_gets);
++	BIO_meth_set_ctrl(methods, transport_layer_bio_ctrl);
++	BIO_meth_set_create(methods, transport_layer_bio_new);
++	BIO_meth_set_destroy(methods, transport_layer_bio_free);
++	transport_layer_methods = methods;
++	return TRUE;
++}
+ 
+-	return bio_methods;
++BIO_METHOD* BIO_s_transport_layer(void)
++{
++	if (!InitOnceExecuteOnce(&transport_layer_methods_once, transport_layer_methods_init, nullptr,
++	                         nullptr))
++		return nullptr;
++	return transport_layer_methods;
+ }

@@ -331,7 +331,16 @@ private func richFlavors(_ source: String) -> [RemoteClipboard.Flavor] {
     let hiddenMilliseconds = baselineWhileHidden ? 1300 : 11_000
     // The peer stamps the request's arrival with the same system-wide clock, so the order holds however slowly either side starts.
     let resumed = OSAllocatedUnfairLock<UInt64?>(initialState: nil)
-    let (wire, _, pixels) = try await appleSession(outcome, updatesEnabled: false, patience: .seconds(15)) { session, frames in
+    // A slow runner can take seconds to start either side, so the session's deadline leaves room for that.
+    let (wire, _, pixels) = try await appleSession(outcome, updatesEnabled: false, patience: .seconds(30)) { session, frames in
+        if baselineWhileHidden {
+            // The hidden time starts at the baseline, so it spans a retry interval however late the baseline arrives.
+            let deadline = ContinuousClock.now + .seconds(10)
+            while frames.samples.isEmpty {
+                try #require(ContinuousClock.now < deadline, "The baseline never arrived.")
+                try await Task.sleep(for: .milliseconds(10))
+            }
+        }
         try await Task.sleep(for: .milliseconds(hiddenMilliseconds))
         #expect(frames.samples.count == (baselineWhileHidden ? 1 : 0))
         resumed.withLock { $0 = clock_gettime_nsec_np(CLOCK_UPTIME_RAW) }
