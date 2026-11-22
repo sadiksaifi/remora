@@ -1,4 +1,4 @@
-/* Remora's opt-in plaintext Apple 003.889 profile. GPL-3.0-or-later. */
+/* Remora's opt-in encrypted Apple 003.889 profile. GPL-3.0-or-later. */
 #ifndef REMORA_APPLE_H
 #define REMORA_APPLE_H
 #include <rfb/rfbclient.h>
@@ -14,6 +14,6 @@ void rfbRemoraAppleBegin(rfbClient *);
 int rfbRemoraAppleRect(rfbClient *, const rfbFramebufferUpdateRectHeader *);
 void rfbRemoraAppleRaw(rfbClient *, const rfbFramebufferUpdateRectHeader *);
 rfbBool rfbRemoraAppleEnd(rfbClient *);
-rfbBool rfbRemoraAppleKey(rfbClient *, uint32_t, rfbBool);
+rfbBool rfbRemoraAppleEncrypt(rfbClient *);
 rfbBool rfbRemoraApplePointer(rfbClient *, int, int, int);
 #endif

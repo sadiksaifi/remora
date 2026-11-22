@@ -46,7 +46,7 @@ def fixed(value):
     return value.to_bytes(SIZE, 'big')
 
 
-def aes_ecb(key, data, decrypt=False):
+def aes(key, data, decrypt=False, iv=None):
     if len(key) != 16 or len(data) % 16:
         raise ValueError('AES input size')
     library = ctypes.CDLL('/usr/lib/system/libcommonCrypto.dylib')
@@ -61,7 +61,7 @@ def aes_ecb(key, data, decrypt=False):
     output_buffer = ctypes.create_string_buffer(len(data) + 16)
     moved = ctypes.c_size_t()
     # kCCEncrypt=0 / kCCDecrypt=1; kCCAlgorithmAES=0; kCCOptionECBMode=2.
-    status = crypt(int(decrypt), 0, 2, key_buffer, len(key), None,
+    status = crypt(int(decrypt), 0, 2 if iv is None else 0, key_buffer, len(key), iv,
                    input_buffer, len(data), output_buffer, len(output_buffer), ctypes.byref(moved))
     if status != 0 or moved.value != len(data):
         raise ValueError('CommonCrypto status/length')
@@ -72,10 +72,52 @@ def known_answer_check():
     key = bytes.fromhex('2b7e151628aed2a6abf7158809cf4f3c')
     plaintext = bytes.fromhex('6bc1bee22e409f96e93d7e117393172a')
     ciphertext = bytes.fromhex('3ad77bb40d7a3660a89ecaf32466ef97')
-    if aes_ecb(key, plaintext) != ciphertext or aes_ecb(key, ciphertext, True) != plaintext:
+    if aes(key, plaintext) != ciphertext or aes(key, ciphertext, True) != plaintext:
         raise ValueError('NIST AES ECB known-answer mismatch')
     if P.bit_length() != 1024 or len(bytes.fromhex(PRIME_HEX)) != SIZE:
         raise ValueError('RFC group size mismatch')
+
+
+class AppleRecords:
+    """Independent CommonCrypto CBC stream, with deliberately nonzero filler."""
+    def __init__(self, exact, send):
+        self.raw_read, self.raw_send = exact, send
+        self.key, self.iv = os.urandom(16), os.urandom(16)
+        self.rx_iv = self.tx_iv = self.iv
+        self.rx_seq = self.tx_seq = 0
+        self.pending = bytearray()
+
+    def record(self, body, fault=None):
+        prefix = struct.pack('>H', len(body) + (16 if fault == 'body-length' else 0)) + body
+        prefix += bytes([0xa5]) * (-(len(prefix) + 20) % 16)
+        digest = hashlib.sha1(struct.pack('>I', self.tx_seq + (fault == 'sequence')) + prefix).digest()
+        cipher = aes(self.key, prefix + (bytes(20) if fault == 'digest' else digest), iv=self.tx_iv)
+        self.tx_seq += 1
+        self.tx_iv = cipher[-16:]
+        return struct.pack('>H', len(cipher)) + cipher
+
+    def send(self, body):
+        # Split messages at an interior byte and coalesce the resulting records.
+        parts = [body[:3]] + [body[i:i+65498] for i in range(3, len(body), 65498)]
+        self.raw_send(b''.join(self.record(part) for part in parts if part))
+
+    def exact(self, size):
+        while len(self.pending) < size:
+            length, = struct.unpack('>H', self.raw_read(2))
+            if length < 32 or length % 16: raise ValueError('invalid client record length')
+            cipher = self.raw_read(length)
+            plain = aes(self.key, cipher, True, self.rx_iv)
+            self.rx_iv = cipher[-16:]
+            count, = struct.unpack('>H', plain[:2])
+            if length != (count + 37) // 16 * 16: raise ValueError('invalid client body length')
+            digest = hashlib.sha1(struct.pack('>I', self.rx_seq) + plain[:-20]).digest()
+            if digest != plain[-20:]: raise ValueError('invalid client digest')
+            if any(plain[2+count:-20]): raise ValueError('client filler was not zero')
+            self.rx_seq += 1
+            self.pending.extend(plain[2:2+count])
+        result = bytes(self.pending[:size])
+        del self.pending[:size]
+        return result
 
 
 def mvs_bits(*parts):
@@ -94,7 +136,7 @@ def display_info(width, height, selected=1, displays=None):
     return struct.pack('>H', len(body))+body
 
 
-def display_frames(outcome, exact, send, key, report):
+def display_frames(outcome, exact, send, report):
     import time
     apple = outcome.startswith('apple-')
     displays = [(7, -16, 0, 16, 8, False), (42, 0, 0, 16, 8, True)]
@@ -126,11 +168,6 @@ def display_frames(outcome, exact, send, key, report):
             if combine or pad: raise ValueError('combined display request')
             report['display_selections'].append(ident)
             return ('select',ident)
-        if kind == 0x10:
-            exact(1)
-            b=aes_ecb(key,exact(16),True)
-            report['display_inputs'].append(list(b[:6] if b[0]==255 else b[10:]))
-            return ('input',)
         if kind == 4:
             down,_,symbol=struct.unpack('>BHI',exact(7))
             report['display_inputs'].append([255,down,symbol]); return ('input',)
@@ -179,7 +216,7 @@ def display_frames(outcome, exact, send, key, report):
     report['stage'] = 'display_switches_complete'
 
 
-def apple_frames(outcome, exact, send, key, report, connection):
+def apple_frames(outcome, exact, send, report, connection):
     import select
     import time
     began = time.monotonic()
@@ -192,28 +229,15 @@ def apple_frames(outcome, exact, send, key, report, connection):
     def update(payload, encoding=1011, rect=(0,0,16,8)):
         send(struct.pack('>BBHHHHHi',0,0,1,*rect,encoding) + (struct.pack('>I',len(payload)) if encoding==1011 else b'') + payload)
     report['keys'] = []; report['pointers'] = []; report['scrolls'] = []
-    report['combined_pointers'] = 0
     report['requests_after_initial'] = 0; report['subscriptions'] = []
     def client_message():
         kind = exact(1)[0]
         if kind == 9:
             fields = struct.unpack('>BHIHHHH',exact(15))
             report['subscriptions'].append(list(fields))
-        elif kind == 0x10:
-            flags = exact(1)[0]
-            plain = aes_ecb(key,exact(16),True)
-            if flags != 0: raise ValueError('encrypted event flags')
-            if plain[0] == 255:
-                if any(plain[10:]): raise ValueError('key-only event framing')
-                down, symbol, timestamp = plain[1], int.from_bytes(plain[2:6],'big'), int.from_bytes(plain[6:10],'big')
-                if down not in (0,1): raise ValueError('key direction')
-                report['keys'].append([symbol,down,timestamp])
-            elif plain[10] == 255:
-                if any(plain[:6]): raise ValueError('pointer-only event framing')
-                mask,x,y = struct.unpack('>BHH',plain[11:])
-                report['pointers'].append([mask,x,y])
-                report['combined_pointers'] += 1
-            else: raise ValueError('missing combined event marker')
+        elif kind == 4:
+            down, _, symbol = struct.unpack('>BHI', exact(7))
+            report['keys'].append([symbol, down])
         elif kind == 5:
             mask,x,y = struct.unpack('>BHH',exact(5))
             report['pointers'].append([mask,x,y])
@@ -238,6 +262,17 @@ def apple_frames(outcome, exact, send, key, report, connection):
     if report['subscriptions'][-1] != [0,1,0,0,0,16,8]: raise ValueError('subscription region')
     report['subscribed_before_baseline'] = True
     send(bytes([0x51])+display_info(16, 8))
+    if outcome == 'apple-large-records':
+        # Each direction carries one ordinary RFB message larger than a record.
+        expected = b'x' * 70000
+        envelope = struct.pack('>B3xI', 3, len(expected))
+        send(envelope + expected)
+        if [client_message(), client_message()] != [4, 4] or report['keys'] != [[0xffe7,1], [0xffe7,0]]:
+            raise ValueError('encrypted key events')
+        if exact(8) != bytes([6]) + envelope[1:] or exact(len(expected)) != expected:
+            raise ValueError('large encrypted CutText')
+        update(full)
+        return
     if outcome in ('apple-regions', 'apple-region-uninitialized'):
         one_header = mvs_bits('0', '101 0', marker('m'))
         one_body = mvs_bits('0 0 0', '00', '00', '1110 010 1', '0 01 0', marker('m'))
@@ -282,7 +317,7 @@ def apple_frames(outcome, exact, send, key, report, connection):
         # A valid Raw rectangle followed by an invalid encoding must not publish a half frame.
         send(struct.pack('>BBH',0,0,2)+struct.pack('>HHHHi',0,0,16,8,0)+bytes(16*8*4)+struct.pack('>HHHHi',0,0,16,8,123456)); return
     if outcome == 'apple-control-encryption':
-        update(b'',1103); return
+        update(struct.pack('>I', 2) + bytes(32), 1103, (0,0,0,0)); return
     if outcome == 'apple-damage':
         # Quantization, skips and invalid match sources write no pixels.
         update(bytes([1,14,19])+mvs_bits('00 00',marker('mvs')))
@@ -447,7 +482,7 @@ def serve_once(offer_mode, outcome, port):
                 if withheld_public is not None:
                     report['fresh_exchange'] = client_public != withheld_public
                 shared = fixed(pow(client_public, SERVER_EXPONENT, P))
-                plaintext = aes_ecb(hashlib.md5(shared).digest(), ciphertext, True)
+                plaintext = aes(hashlib.md5(shared).digest(), ciphertext, True)
                 fields = [plaintext[:64], plaintext[64:]]
                 valid = all(b'\x00' in field for field in fields)
                 valid = valid and fields[0].split(b'\x00', 1)[0] == USERNAME and fields[1].split(b'\x00', 1)[0] == PASSWORD
@@ -518,12 +553,43 @@ def serve_once(offer_mode, outcome, port):
                     except EOFError:
                         report['unsupported_init_rejected']=True; return report
                     raise ValueError('profile continued after unsupported ServerInit')
+                records = None
                 report['stage'] = 'framebuffer_request'
                 for _ in range(8):
                     kind = exact(1)[0]
+                    if apple and records is None and kind not in (10, 0x12):
+                        raise ValueError('clear application write before encryption')
                     if kind == 10 and apple:
                         if exact(3) != bytes([0, 0, 1]): raise ValueError('control SetMode required')
                         report['control_mode'] = True
+                    elif kind == 0x12 and apple:
+                        if not report.get('control_mode'): raise ValueError('SetMode required')
+                        if exact(11) != bytes.fromhex('00 0001 0001 0001 00000001'): raise ValueError('SetEncryption proposal')
+                        if exact(8) != bytes.fromhex('1200 0002 0001 0000'): raise ValueError('SetEncryption activation')
+                        records = AppleRecords(exact, send)
+                        key_rect = struct.pack('>BBHHHHHiI', 0, 0, 1, 0, 0, 0, 0, 1103, 1)
+                        key_rect += aes(hashlib.md5(shared).digest(), records.key + records.iv)
+                        if outcome == 'apple-no-key':
+                            try: exact(1)
+                            except EOFError: return report
+                            raise ValueError('client sent clear application data')
+                        if outcome == 'apple-refuse':
+                            # The server ignores the proposal and sends a clear pixel rectangle.
+                            send(struct.pack('>BBHHHHHi', 0, 0, 1, 0, 0, 1, 1, 0) + bytes(4))
+                            return report
+                        # Prefetch a record header alongside the key. Split its ciphertext across TCP reads.
+                        first = records.record(bytes([7, 7]))
+                        send(bytes([2, 0x14, 0, 0, 4, 0, 0, 0, 0]) + key_rect + first[:5])
+                        time.sleep(0.015)
+                        send(first[5:])
+                        exact, send = records.exact, records.send
+                        if outcome.startswith('apple-invalid-'):
+                            fault = outcome[len('apple-invalid-'):]
+                            frame = struct.pack('>BBHHHHHi', 0, 0, 1, 0, 0, 16, 8, 0) + bytes(512)
+                            records.raw_send(bytes.fromhex('0021') if fault == 'length' else records.record(frame, fault))
+                            connection.shutdown(socket.SHUT_WR)
+                            while connection.recv(4096): pass
+                            return report
                     elif kind == 0:
                         exact(19)
                     elif kind == 2:
@@ -531,17 +597,18 @@ def serve_once(offer_mode, outcome, port):
                         count = int.from_bytes(header[1:], 'big')
                         if count > 512:
                             raise ValueError('encoding count bound')
-                        exact(count * 4)
+                        encodings = struct.unpack('>' + 'i'*count, exact(count * 4))
+                        if apple and not {1011, 1103}.issubset(encodings): raise ValueError('Apple encodings missing')
                     elif kind == 3:
                         request = exact(9)
                         if apple and (not report.get('control_mode') or request != struct.pack('>BHHHH',0,0,0,dimension,height)):
                             raise ValueError('initial full request must follow SetMode')
                         if outcome in ('apple-displays','standard-displays','apple-display-timeout','standard-display-timeout'):
-                            display_frames(outcome,exact,send,hashlib.md5(shared).digest(),report); return report
+                            display_frames(outcome,exact,send,report); return report
                         if not apple and outcome == 'success':
                             send(bytes([0x51])+display_info(16,16))
                         if apple and outcome != 'apple-success':
-                            apple_frames(outcome,exact,send,hashlib.md5(shared).digest(),report,connection)
+                            apple_frames(outcome,exact,send,report,connection)
                             # Deliver every queued frame before closing, including when
                             # the native driver has sent input that this case ignores.
                             connection.shutdown(socket.SHUT_WR)

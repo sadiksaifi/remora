@@ -63,6 +63,11 @@ int main(int argc,char **argv) {
     int ready=ConnectToRFBServer(c,"127.0.0.1",atoi(argv[1])) && rfbClientInitialise(c);
     if(ready) {
         if(!SendKeyEvent(c,0xffe9,TRUE) || !SendKeyEvent(c,0xffe9,FALSE)) return 3;
+        if(argc==4 && !strcmp(argv[3],"large")) {
+            char text[70000];
+            memset(text,'x',sizeof(text));
+            if(!SendClientCutText(c,text,sizeof(text))) return 3;
+        }
         for(unsigned i=0;i<64;i++) {
             int n=WaitForMessage(c,100000);
             if(n<0 || (n>0 && !HandleRFBServerMessage(c))) break;
@@ -74,6 +79,9 @@ int main(int argc,char **argv) {
             }
             if(!rfbRemoraAppleRetryBaseline(c)) return 3;
         }
+    }
+    if(argc==4 && atoi(argv[3]) && c->remoraAppleError!=atoi(argv[3])) {
+        fprintf(stderr,"native error=%d expected=%s\n",c->remoraAppleError,argv[3]); failures++;
     }
     free(c->frameBuffer); c->frameBuffer=NULL; rfbClientCleanup(c);
     if(frames!=expected) { fprintf(stderr,"frames=%u expected=%u\n",frames,expected); return 1; }

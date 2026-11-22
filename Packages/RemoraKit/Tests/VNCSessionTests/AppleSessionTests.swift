@@ -56,6 +56,7 @@ private final class AppleFrames: FrameSink, @unchecked Sendable {
     #expect(result["subscription"] as? [Int] == [0, 1, 0, 0, 0, 16, 16])
     #expect(result["error_class"] == nil)
     #expect(connected)
+    #expect(session.negotiatedSecurity == "Apple ARD (AES-128-CBC session)")
     #expect(frames.count == 1)
 }
 
@@ -220,7 +221,7 @@ private final class ApplePixels: FrameSink, @unchecked Sendable {
     #expect(pixels.snapshots == expected)
 }
 
-@Test @MainActor func appleKeyEncryptionAndSourceOwnershipReachTheIndependentPeer() async throws {
+@Test @MainActor func appleInputReachesTheIndependentPeerInSessionRecords() async throws {
     let (wire, _, frames) = try await appleSession("apple-input") { session, frames in
         let deadline = ContinuousClock.now.advanced(by: .seconds(2))
         while frames.samples.count < 3, ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(2)) }
@@ -230,7 +231,6 @@ private final class ApplePixels: FrameSink, @unchecked Sendable {
         session.sendKey(.init(keyCode: 56, isDown: true))
         session.sendKey(.init(keyCode: 56, isDown: false))
         session.sendKey(.init(keyCode: 58, isDown: true))
-        try await Task.sleep(for: .milliseconds(200))
         session.sendKey(.init(keyCode: 58, isDown: false))
         try await request.send(.unicode("α"), deadline: deadline)
         try await request.send(.pointer(.init(x: 3, y: 4), .left), deadline: deadline)
@@ -244,16 +244,10 @@ private final class ApplePixels: FrameSink, @unchecked Sendable {
     }
     let keys = try #require(wire["keys"] as? [[Int]])
     #expect(
-        keys.map { Array($0.prefix(2)) } == [
+        keys == [
             [0xffe1, 1], [0xffe7, 1], [0xffe7, 0], [0x0100_03b1, 1], [0x0100_03b1, 0], [0xffbe, 1], [0xffbe, 0], [0xffe1, 0],
         ])
-    #expect(keys.allSatisfy { $0.count == 3 })
-    // Apple sends elapsed microseconds since the preceding combined input event.
-    // The held key has a longer interval than the immediately following Unicode event.
-    #expect((100_000...2_000_000).contains(keys[2][2]))
-    #expect(keys[3][2] < keys[2][2])
     let pointers = try #require(wire["pointers"] as? [[Int]])
-    #expect(wire["combined_pointers"] as? Int == pointers.count)
     #expect(pointers.contains([3, 9, 7]))
     #expect(pointers.suffix(2) == [[1, 9, 7], [0, 9, 7]])
     #expect(wire["scrolls"] as? [[Int]] == [[0, 1, 0, 65536, 0, 1, 9, 7], [-1, 0, -65536, 0, -1, 0, 9, 7]])
@@ -286,6 +280,26 @@ private final class ApplePixels: FrameSink, @unchecked Sendable {
         #expect(frames.samples.count == count, "\(mode)")
         #expect(terminals.count == 1)
         if case .serverEndedSession = terminals.first {} else { Issue.record("Expected a typed runtime end for \(mode)") }
+    }
+}
+
+@Test @MainActor func appleRejectsClearPixelsWhenTheServerRefusesEncryption() async throws {
+    let (_, terminals, pixels) = try await appleSession("apple-refuse")
+    #expect(pixels.samples.isEmpty)
+    if case .protocolError(let detail) = terminals.first {
+        #expect(detail.contains("session encryption could not be established"))
+    } else {
+        Issue.record("Expected an encryption negotiation failure")
+    }
+}
+
+@Test @MainActor func appleRejectsRecordsWithAnInvalidDigest() async throws {
+    let (_, terminals, pixels) = try await appleSession("apple-invalid-digest")
+    #expect(pixels.samples.isEmpty)
+    if case .serverEndedSession(let detail) = terminals.first {
+        #expect(detail.contains("record failed validation"))
+    } else {
+        Issue.record("Expected an encrypted record failure")
     }
 }
 
