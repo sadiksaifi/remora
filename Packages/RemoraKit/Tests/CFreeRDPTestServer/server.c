@@ -115,14 +115,20 @@ static void *serve(void *argument) {
         const int connection = accept(s->listener, NULL, NULL);
         if (connection >= 0) {
             pthread_mutex_lock(&s->lock);
-            const bool stopping = s->stopping;
-            if (!stopping)
+            if (!s->stopping)
                 s->connection = dup(connection);
+            const bool serving = s->connection >= 0;
             pthread_mutex_unlock(&s->lock);
-            if (stopping)
+            if (!serving) {
                 close(connection);
-            else
+            } else {
                 serve_connection(s, connection);
+                /* The duplicate must not hold the connection open after FreeRDP has finished with it. */
+                pthread_mutex_lock(&s->lock);
+                close(s->connection);
+                s->connection = -1;
+                pthread_mutex_unlock(&s->lock);
+            }
         }
     }
     atomic_store(&s->ended, true);

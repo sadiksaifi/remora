@@ -58,32 +58,45 @@ private final class DesktopSink: FrameSink, @unchecked Sendable {
     /// Connects, trusts the test identity, runs `connected` once the server has activated the connection, and
     /// returns the terminal reason after the session ends. `connected` must end the session.
     func run(_ connected: @escaping @MainActor () async throws -> Void) async throws -> DisconnectReason? {
-        let fallback = Task { [session] () -> Bool in
-            guard (try? await Task.sleep(for: .seconds(20))) != nil else { return false }
-            session.disconnect()
-            return true
-        }
-        var work: Task<Void, Error>?
-        var reason: DisconnectReason?
-        session.connect()
-        for await event in session.events {
-            switch event {
-            case .trustChallenge(let challenge): challenge.responder.respond(.trust)
-            case .stateChanged(.connected):
-                work = Task {
-                    // The client can finish connecting just before the server's activation callback returns.
-                    try #require(try await eventually(within: .seconds(5)) { rm_test_rdp_server_activated(self.server) })
-                    try await connected()
+        let session = session
+        let events = Task { () -> (reason: DisconnectReason?, work: Task<Void, Error>?) in
+            var work: Task<Void, Error>?
+            var reason: DisconnectReason?
+            for await event in session.events {
+                switch event {
+                case .trustChallenge(let challenge): challenge.responder.respond(.trust)
+                case .stateChanged(.connected):
+                    work = Task {
+                        do {
+                            // The client can finish connecting just before the server's activation callback returns.
+                            try #require(try await eventually(within: .seconds(5)) { rm_test_rdp_server_activated(self.server) })
+                            try await connected()
+                        } catch {
+                            session.disconnect()
+                            throw error
+                        }
+                    }
+                case .stateChanged(.disconnected(let terminal)): reason = terminal
+                default: break
                 }
-            case .stateChanged(.disconnected(let terminal)): reason = terminal
-            default: break
             }
+            return (reason, work)
         }
-        fallback.cancel()
-        let timedOut = await fallback.value
+        // Cancelling the wait ends it even if the session never finishes its events.
+        let deadline = Task {
+            try await Task.sleep(for: .seconds(20))
+            events.cancel()
+        }
+        session.connect()
+        let outcome = await events.value
+        deadline.cancel()
+        let timedOut = events.isCancelled
+        if timedOut { outcome.work?.cancel() }
+        // The work must finish before the caller stops the server it reads.
+        let finished = await outcome.work?.result
         try #require(!timedOut, "The session was still open after 20 seconds.")
-        try await #require(work, "The session never connected.").value
-        return reason
+        try #require(finished, "The session never connected.").get()
+        return outcome.reason
     }
 
     /// A GPU error as the command buffer's completion reports it. The framebuffer needs a frame first.
@@ -120,20 +133,19 @@ private final class DesktopSink: FrameSink, @unchecked Sendable {
 @Test @MainActor func aGPULossOnAConnectedSessionAsksTheServerForARedraw() async throws {
     let connection = try Connection()
     defer { connection.close() }
-    var before: UInt32 = 0
-    var after: UInt32 = 0
     let reason = try await connection.run {
-        // Let any request the connection itself sends arrive first.
-        try await Task.sleep(for: .milliseconds(300))
-        before = connection.refreshes
+        // The client sends no Refresh Rect of its own, so the only one must come from the loss.
+        try #require(connection.refreshes == 0)
         try connection.loseFramebuffer()
-        _ = try await eventually(within: .seconds(5)) { connection.refreshes > before }
-        after = connection.refreshes
+        _ = try await eventually(within: .seconds(5)) { connection.refreshes > 0 }
         connection.session.disconnect()
     }
-    #expect(after == before + 1)
-    #expect(connection.desktop.losses == 1)
     #expect(reason == .cancelledByUser)
+    // The server has read everything the client sent once it has ended.
+    let ended = try await eventually(within: .seconds(5)) { rm_test_rdp_server_ended(connection.server) }
+    #expect(ended)
+    #expect(connection.refreshes == 1)
+    #expect(connection.desktop.losses == 1)
 }
 
 /// The session removes its loss observer before it reports the end. A later loss sends nothing and does not crash.
