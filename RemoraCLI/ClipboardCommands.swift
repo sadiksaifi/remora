@@ -5,6 +5,7 @@ import RemoraControl
 struct ClipboardCommand: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "clipboard", abstract: "Read or offer remote clipboard text without accessing the Mac clipboard.",
+        discussion: "RDP, standard VNC, and Apple Screen Sharing sessions can exchange plain text.",
         subcommands: [Get.self, Set.self])
     @OptionGroup var options: CommonOptions
 

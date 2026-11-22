@@ -339,7 +339,10 @@ static void clipboard(rfbClient *c, const char *text, int length) {
 }
 static void clipboard_utf8(rfbClient *c, const char *text, int length) {
     RMVNC *s = owner(c);
-    if (length >= 0 && length <= 1048576 && s->cb.clipboard) s->cb.clipboard(s->user, text, length, true);
+    if (length < 0 || length > 1048576 || !s->cb.clipboard) return;
+    /* Extended clipboard counts a terminal NUL. Apple flavor data is exact. */
+    if (!s->apple && text && length && text[length-1] == '\0') length--;
+    s->cb.clipboard(s->user, text, length, true);
 }
 static char *password(rfbClient *c) {
     RMVNC *s = owner(c);
@@ -684,12 +687,11 @@ bool rm_vnc_pointer(RMVNC *s,uint16_t x,uint16_t y,uint8_t mask) {
     bool sent = SendPointerEvent(s->client,x,y,mask);
     s->inputBusy--; performance_input(s,2,sent); return sent;
 }
-bool rm_vnc_clipboard_utf8(RMVNC *s) { return s->client->extendedClipboardServerCapabilities != 0; }
+bool rm_vnc_clipboard_utf8(RMVNC *s) { return s->apple || s->client->extendedClipboardServerCapabilities != 0; }
 bool rm_vnc_clipboard(RMVNC *s,const char *text,int len,bool utf8) {
     rfbRemoraRuntimeMessage(s->client, RFB_REMORA_WRITE);
     s->inputBusy++;
-    if (s->apple) { s->inputBusy--; return false; }
-    bool sent = utf8 ? SendClientCutTextUTF8(s->client,(char*)text,len) : SendClientCutText(s->client,(char*)text,len);
+    bool sent = (s->apple || utf8) ? SendClientCutTextUTF8(s->client,(char*)text,len) : SendClientCutText(s->client,(char*)text,len);
     s->inputBusy--; return sent;
 }
 void rm_vnc_free(RMVNC *s) {

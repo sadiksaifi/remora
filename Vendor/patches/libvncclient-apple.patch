@@ -190,7 +190,15 @@
    rfbKeyEventMsg ke;
  
    if (!SupportsClient2Server(client, rfbKeyEvent)) return TRUE;
-@@ -2153,6 +2185,10 @@
+@@ -2009,6 +2041,7 @@
+ rfbBool
+ SendClientCutTextUTF8(rfbClient* client, char *str, int len)
+ {
++    if (client->remoraApple889) return rfbRemoraAppleClipboard(client, str, len);
+ #ifdef LIBVNCSERVER_HAVE_LIBZ
+     return client->extendedClipboardServerCapabilities && sendExtClientCutTextProvide(client, str, len);
+ #else
+@@ -2153,6 +2186,10 @@
  
    if (!client->remoraRuntime.failure) client->remoraRuntime.messageType = msg.type;
    rfbRemoraRuntimeStage(client, RFB_REMORA_MESSAGE);
@@ -201,7 +209,7 @@
    switch (msg.type) {
  
    case rfbSetColourMapEntries:
-@@ -2202,6 +2238,7 @@
+@@ -2202,6 +2239,7 @@
        return FALSE;
  
      msg.fu.nRects = rfbClientSwap16IfLE(msg.fu.nRects);
@@ -209,7 +217,7 @@
      if (client->remoraPerf.enabled) {
        client->remoraPerf.declaredRects = msg.fu.nRects;
        client->remoraPerf.header = client->RemoraPerformanceClock();
-@@ -2238,6 +2275,11 @@
+@@ -2238,6 +2276,11 @@
          client->remoraRuntime.x = rect.r.x; client->remoraRuntime.y = rect.r.y;
          client->remoraRuntime.width = rect.r.w; client->remoraRuntime.height = rect.r.h;
        }
@@ -221,7 +229,7 @@
        if (rect.encoding == rfbEncodingLastRect) break;
        rfbRemoraRuntimeStage(client, RFB_REMORA_DECODE);
  
-@@ -2314,6 +2356,14 @@
+@@ -2314,6 +2357,14 @@
            }
          }
  
@@ -236,7 +244,7 @@
          /* Status 4 means forwarded, not rejected. It carries requested geometry,
           * not confirmed framebuffer dimensions, and preserves the capability. */
          if (!forwardedResize || screens != 1 || invalidScreen)
-@@ -2730,13 +2780,18 @@
+@@ -2730,13 +2781,18 @@
        /* Now we may discard "soft cursor locks". */
        client->SoftCursorUnlockScreen(client);
  

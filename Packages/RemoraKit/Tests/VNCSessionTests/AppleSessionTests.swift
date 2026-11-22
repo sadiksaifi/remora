@@ -79,7 +79,8 @@ private final class ApplePixels: FrameSink, @unchecked Sendable {
 
 @MainActor private func appleSession(
     _ outcome: String, offers: String = "ard-only", updatesEnabled: Bool = true, mode: VNCMode = .apple, password: String? = "fixture-password",
-    patience: Duration = .seconds(4), actions: (@MainActor @Sendable (VNCSession, ApplePixels) async throws -> Void)? = nil
+    patience: Duration = .seconds(4), actions: (@MainActor @Sendable (VNCSession, ApplePixels) async throws -> Void)? = nil,
+    onClipboard: ((VNCSession, RemoteClipboard.Status) -> Void)? = nil
 ) async throws -> ([String: Any], [DisconnectReason], ApplePixels) {
     let peer = Process()
     peer.executableURL = URL(fileURLWithPath: "/usr/bin/python3")
@@ -122,11 +123,11 @@ private final class ApplePixels: FrameSink, @unchecked Sendable {
         }
         if case .stateChanged(.connected) = event {
             #expect(!session.supportsDynamicResize)
-            #expect(!session.supportsClipboardSynchronization)
+            #expect(session.supportsClipboardSynchronization)
             session.requestResize(.init(width: 32, height: 16), scale: 1)
-            session.setLocalClipboard(text: "not sent in Apple mode")
             if let actions { work = Task { try await actions(session, frames) } }
         }
+        if case .clipboardChanged(_, let status) = event { onClipboard?(session, status) }
         if case .stateChanged(.disconnected(let reason)) = event, let reason { terminals.append(reason) }
     }
     try await work?.value
@@ -134,6 +135,32 @@ private final class ApplePixels: FrameSink, @unchecked Sendable {
     let result = try #require(JSONSerialization.jsonObject(with: output.fileHandleForReading.readDataToEndOfFile()) as? [String: Any])
     #expect(result["error_class"] == nil, "\(outcome): stage=\(result["stage"] ?? "unknown")")
     return (result, terminals, frames)
+}
+
+@Test @MainActor func appleClipboardExchangesPlainTextThroughThePublicSession() async throws {
+    var statuses: [RemoteClipboard.Status] = []
+    let (wire, _, pixels) = try await appleSession(
+        "apple-clipboard",
+        onClipboard: { session, status in
+            statuses.append(status)
+            if status == .text("from Mac ✓\0") { session.setLocalClipboard(text: "from viewer 🦀") }
+            if status == .offered("from viewer 🦀") { session.setLocalClipboard(text: "") }
+        })
+
+    #expect(wire["pasteboard_monitoring"] as? Bool == true)
+    #expect(wire["clipboard_uploads"] as? [String] == ["from viewer 🦀", ""])
+    #expect(statuses == [.unknown, .text("from Mac ✓\0"), .offered("from viewer 🦀"), .offered(""), .failed, .unavailable, .unavailable])
+    #expect(pixels.samples.count == 3)
+}
+
+@Test(arguments: ["limit", "wire-limit", "length", "malformed"])
+@MainActor func appleClipboardRejectsInvalidArchivesWithoutPublishingText(_ mode: String) async throws {
+    var statuses: [RemoteClipboard.Status] = []
+    let (_, terminals, pixels) = try await appleSession("apple-clipboard-\(mode)", onClipboard: { _, status in statuses.append(status) })
+
+    #expect(statuses == [.unknown])
+    #expect(terminals == [.serverEndedSession("The Apple clipboard archive is invalid or exceeds the size limit.")])
+    #expect(pixels.samples.count == 1)
 }
 
 @Test @MainActor func appleFullPartialAndCacheUpdatesUseSubscriptionWithoutIncrementalRequests() async throws {

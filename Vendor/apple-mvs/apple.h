@@ -9,6 +9,7 @@ rfbBool rfbRemoraAppleSetup(rfbClient *);
 rfbBool rfbRemoraAppleRetryBaseline(rfbClient *);
 rfbBool rfbRemoraAppleEncodings(rfbClient *);
 int rfbRemoraAppleMessage(rfbClient *, unsigned char type);
+rfbBool rfbRemoraAppleClipboard(rfbClient *, const char *, int);
 void rfbRemoraAppleBegin(rfbClient *);
 /* -1 failure, 0 Raw handled by the existing decoder, 1 handled MVS/control. */
 int rfbRemoraAppleRect(rfbClient *, const rfbFramebufferUpdateRectHeader *);

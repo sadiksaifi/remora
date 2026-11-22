@@ -10,6 +10,7 @@ import json
 import os
 import struct
 import sys
+import zlib
 
 PRIME_HEX = (
     'FFFFFFFFFFFFFFFFC90FDAA22168C234C4C6628B80DC1CD1'
@@ -179,6 +180,51 @@ def display_frames(outcome, exact, send, key, report):
     report['stage'] = 'display_switches_complete'
 
 
+def packed_flavor(uti, data, tags=()):
+    def counted(value): return struct.pack('>I', len(value)) + value
+    return (counted(uti) + struct.pack('>II', 0, len(tags))
+            + b''.join(counted(key) + counted(value) for key, value in tags) + counted(data))
+
+
+TEXT_UTI = b'public.utf8-plain-text'
+
+
+def apple_clipboard(outcome, client_message, send, report):
+    def reply(archive, sync=False, declared=None):
+        send(bytes.fromhex('14 00 00 04 00 01 00 02'))
+        while client_message() != 0x0b: pass
+        request = report['clipboard_requests'][-1]
+        if archive is None:
+            plain, compressed = declared
+            send(struct.pack('>BBBBIII', 0x1f, 0, 0, 0, request, plain, compressed))
+            return
+        compressor = zlib.compressobj()
+        payload = compressor.compress(archive) + compressor.flush(zlib.Z_SYNC_FLUSH if sync else zlib.Z_FINISH)
+        plain = len(archive) if declared is None else declared
+        send(struct.pack('>BBBBIII', 0x1f, 0, 0, 0, request, plain, len(payload)) + payload)
+
+    def text_item(data): return struct.pack('>I', 1) + packed_flavor(TEXT_UTI, data)
+
+    if outcome == 'apple-clipboard-limit':
+        reply(None, declared=(8 * 1024 * 1024 + 1, 1))
+    elif outcome == 'apple-clipboard-wire-limit':
+        reply(None, declared=(1, 8 * 1024 * 1024 + 1))
+    elif outcome == 'apple-clipboard-length':
+        archive = text_item(b'longer than declared')
+        reply(archive, declared=len(archive) - 1)
+    elif outcome == 'apple-clipboard-malformed':
+        # A complete text item followed by a flavor with a truncated UTI.
+        reply(text_item(b'do not publish') + struct.pack('>II', 1, 100) + b'x')
+    else:
+        rich = packed_flavor(b'public.rtf', hashlib.shake_256(b'fixture').digest(1_100_000),
+                             [(b'public.mime-type', b'text/rtf')])
+        reply(struct.pack('>I', 2) + rich + packed_flavor(TEXT_UTI, 'from Mac ✓\0'.encode()), sync=True)
+        while len(report['clipboard_uploads']) < 2: client_message()
+        reply(text_item(b'\xff'))
+        reply(struct.pack('>I', 1) + packed_flavor(b'public.png', b'image bytes'))
+        reply(text_item(b'x' * (1024 * 1024 + 1)))
+
+
 def apple_frames(outcome, exact, send, key, report, connection):
     import select
     import time
@@ -194,6 +240,10 @@ def apple_frames(outcome, exact, send, key, report, connection):
     report['keys'] = []; report['pointers'] = []; report['scrolls'] = []
     report['combined_pointers'] = 0
     report['requests_after_initial'] = 0; report['subscriptions'] = []
+    if outcome.startswith('apple-clipboard'):
+        report['clipboard_requests'] = []
+        report['clipboard_uploads'] = []
+
     def client_message():
         kind = exact(1)[0]
         if kind == 9:
@@ -224,6 +274,24 @@ def apple_frames(outcome, exact, send, key, report, connection):
             fixedx,fixedy,_,pointx,pointy = struct.unpack('>iiiii',b[13:33])
             x,y = struct.unpack('>HH',b[53:57])
             report['scrolls'].append([dx,dy,fixedx,fixedy,pointx,pointy,x,y])
+        elif kind == 0x0b and outcome.startswith('apple-clipboard'):
+            flags, reserved, request = struct.unpack('>BHI', exact(7))
+            if flags or reserved or request in report['clipboard_requests']:
+                raise ValueError('full clipboard request with a fresh ID required')
+            report['clipboard_requests'].append(request)
+        elif kind == 0x1f and outcome == 'apple-clipboard':
+            padding, flags, reserved, request, plain, compressed = struct.unpack('>BBBIII', exact(15))
+            if padding or flags or reserved or request or not 0 < compressed <= 2 * 1024 * 1024:
+                raise ValueError('clipboard upload header')
+            inflater = zlib.decompressobj()
+            archive = inflater.decompress(exact(compressed), 2 * 1024 * 1024)
+            if len(archive) != plain or inflater.unused_data or inflater.unconsumed_tail:
+                raise ValueError('clipboard upload length')
+            index = len(report['clipboard_uploads'])
+            wanted = 'from viewer 🦀'.encode() if index == 0 else b''
+            expected = struct.pack('>I', 1) + packed_flavor(TEXT_UTI, wanted) if wanted else bytes(4)
+            if archive != expected: raise ValueError('clipboard upload archive')
+            report['clipboard_uploads'].append(wanted.decode())
         elif kind == 3:
             request = struct.unpack('>BHHHH', exact(9))
             if request != (0,0,0,16,8): raise ValueError('full non-incremental request required')
@@ -283,6 +351,11 @@ def apple_frames(outcome, exact, send, key, report, connection):
         send(struct.pack('>BBH',0,0,2)+struct.pack('>HHHHi',0,0,16,8,0)+bytes(16*8*4)+struct.pack('>HHHHi',0,0,16,8,123456)); return
     if outcome == 'apple-control-encryption':
         update(b'',1103); return
+    if outcome.startswith('apple-clipboard'):
+        apple_clipboard(outcome, client_message, send, report)
+        if outcome == 'apple-clipboard':
+            update(partial); update(cache)
+        return
     if outcome == 'apple-damage':
         # Quantization, skips and invalid match sources write no pixels.
         update(bytes([1,14,19])+mvs_bits('00 00',marker('mvs')))
@@ -302,10 +375,9 @@ def apple_frames(outcome, exact, send, key, report, connection):
         # The decoder writes a tile before rejecting this marker. Never publish it.
         update(partial[:-1]+bytes([partial[-1]^0x80]))
         return
-    # Known control messages and discarded clipboard may precede the next update.
+    # Known control messages and discarded legacy clipboard may precede the next update.
     send(bytes([4,7,0x14,0,0,4,0,0,0,0]))
     send(bytes([3,0,0,0])+struct.pack('>I',5)+b'owned')
-    send(bytes([0x1f,0,0,0])+struct.pack('>III',0,5,5)+b'owned')
     update(partial); update(cache)
     report['stage'] = 'apple_updates_sent'
     if outcome == 'apple-input':
@@ -521,9 +593,18 @@ def serve_once(offer_mode, outcome, port):
                 report['stage'] = 'framebuffer_request'
                 for _ in range(8):
                     kind = exact(1)[0]
-                    if kind == 10 and apple:
+                    if kind == 0x21 and apple:
+                        wanted = (struct.pack('>BHH7I', 0, 62, 1, 2, 6, 1, 0, 26, 6, 2)
+                                  + bytes.fromhex('b0 00 0c 03 90 00 00 00 00 00 40') + bytes(21))
+                        if exact(65) != wanted: raise ValueError('ViewerInfo framing')
+                        report['viewer_info'] = True
+                    elif kind == 10 and apple:
                         if exact(3) != bytes([0, 0, 1]): raise ValueError('control SetMode required')
                         report['control_mode'] = True
+                    elif kind == 0x15 and apple:
+                        if not report.get('viewer_info') or not report.get('control_mode') or exact(7) != bytes.fromhex('00 00 01 00 00 00 00'):
+                            raise ValueError('AutoPasteboard must follow ViewerInfo and SetMode')
+                        report['pasteboard_monitoring'] = True
                     elif kind == 0:
                         exact(19)
                     elif kind == 2:
@@ -536,6 +617,8 @@ def serve_once(offer_mode, outcome, port):
                         request = exact(9)
                         if apple and (not report.get('control_mode') or request != struct.pack('>BHHHH',0,0,0,dimension,height)):
                             raise ValueError('initial full request must follow SetMode')
+                        if outcome.startswith('apple-clipboard') and not report.get('pasteboard_monitoring'):
+                            raise ValueError('pasteboard monitoring required during startup')
                         if outcome in ('apple-displays','standard-displays','apple-display-timeout','standard-display-timeout'):
                             display_frames(outcome,exact,send,hashlib.md5(shared).digest(),report); return report
                         if not apple and outcome == 'success':
