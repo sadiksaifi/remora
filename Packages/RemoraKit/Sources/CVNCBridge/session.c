@@ -547,10 +547,7 @@ static bool reconcile_resize(RMVNC *s) {
     s->wireResizeWidth = s->resizeWidth; s->wireResizeHeight = s->resizeHeight;
     rfbRemoraRuntimeMessage(c, RFB_REMORA_WRITE);
     s->inputBusy++;
-    /* LibVNCClient writes this message in two parts. One deadline covers both. */
-    rfbRemoraBeginMessage(c, sz_rfbSetDesktopSizeMsg + sz_rfbExtDesktopScreen);
     bool sent = SendExtDesktopSize(c, s->resizeWidth, s->resizeHeight);
-    rfbRemoraEndMessage(c);
     s->inputBusy--;
     return sent;
 }
@@ -707,10 +704,7 @@ bool rm_vnc_clipboard_utf8(RMVNC *s) { return s->apple || s->client->extendedCli
 bool rm_vnc_clipboard(RMVNC *s,const char *text,int len,bool utf8) {
     rfbRemoraRuntimeMessage(s->client, RFB_REMORA_WRITE);
     s->inputBusy++;
-    /* The header and text are separate writes of one message. The allowance covers zlib's worst-case growth. */
-    rfbRemoraBeginMessage(s->client, (size_t)len + (size_t)len / 512 + 64);
     bool sent = (s->apple || utf8) ? SendClientCutTextUTF8(s->client,(char*)text,len) : SendClientCutText(s->client,(char*)text,len);
-    rfbRemoraEndMessage(s->client);
     s->inputBusy--; return sent;
 }
 void rm_vnc_free(RMVNC *s) {

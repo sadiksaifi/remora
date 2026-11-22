@@ -159,7 +159,15 @@ private final class ApplePixels: FrameSink, @unchecked Sendable {
         mode == .apple ? "apple-write-stall" : "runtime-write-stall", offers: mode == .apple ? "apple-mixed" : "ard-only", mode: mode,
         patience: .seconds(25),
         actions: { session, pixels in
-            while pixels.samples.isEmpty { try await Task.sleep(for: .milliseconds(10)) }
+            let firstFrame = ContinuousClock.now.advanced(by: .seconds(10))
+            while pixels.samples.isEmpty {
+                guard ContinuousClock.now < firstFrame else {
+                    Issue.record("The session showed no frame within 10 s.")
+                    session.disconnect()
+                    return
+                }
+                try await Task.sleep(for: .milliseconds(10))
+            }
             started.withLock { $0 = .now }
             session.setLocalClipboard(text: text)
         },
