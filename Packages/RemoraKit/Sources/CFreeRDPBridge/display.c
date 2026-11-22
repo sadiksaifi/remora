@@ -215,6 +215,8 @@ void rm_display_request_refresh(RMDisplay *d) {
     pthread_mutex_unlock(&d->lock);
 }
 
+void rm_rdp_request_refresh(RMRDPSession *session) { rm_display_request_refresh(rm_rdp_display(session)); }
+
 bool rm_rdp_awaits_redraw(RMRDPSession *session) {
     RMDisplay *d = rm_rdp_display(session);
     pthread_mutex_lock(&d->lock);
@@ -260,9 +262,10 @@ DWORD rm_display_process(RMDisplay *d) {
             updates_timeout = (DWORD)(due - now);
         }
     }
-    /* A pause, or a resume with its own Refresh Rect, serves the request: the resume redraws anyway. */
-    const bool refresh = d->refresh_wanted && updates && d->updates_sent && !updates_changed;
-    if (refresh || !updates || updates_changed)
+    /* A server that still sends updates redraws now, during the pause delay too. A paused server keeps the
+     * request until it resumes, and the resume's own Refresh Rect serves it. */
+    const bool refresh = d->refresh_wanted && d->updates_sent && !updates_changed;
+    if (refresh || updates_changed)
         d->refresh_wanted = false;
     const bool changed = d->available != d->reported_available;
     const bool available = d->available;

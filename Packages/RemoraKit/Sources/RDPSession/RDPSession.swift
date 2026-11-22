@@ -196,6 +196,7 @@ public final class RDPSession: AgentInputSession, @unchecked Sendable {
                     if state.cancelled { rm_rdp_abort(handle) }
                 }
                 rm_rdp_run(handle)
+                video.endLossObserver?()
                 state.lock.withLock {
                     state.connected = false
                     state.handle = nil
@@ -241,6 +242,9 @@ public final class RDPSession: AgentInputSession, @unchecked Sendable {
         if let desktop = frameSink.metalDesktop {
             do {
                 video.renderer = try H264Renderer(desktop: desktop)
+                // A frame drawn just before the loss may be the last one for a while, so no later draw would notice.
+                let observer = desktop.addLossObserver { [weak self] in self?.enqueue { rm_rdp_request_refresh($0) } }
+                video.endLossObserver = { desktop.removeLossObserver(observer) }
                 callbacks.video_frame = { user, frame in
                     guard let frame, let renderer = session(user).video.renderer else { return RMRDP_VIDEO_FAILED }
                     do {
@@ -432,6 +436,7 @@ public final class RDPSession: AgentInputSession, @unchecked Sendable {
 
 private final class VideoBox: @unchecked Sendable {
     var renderer: H264Renderer?
+    var endLossObserver: (() -> Void)?
 }
 
 private func videoTarget(_ frame: RMRDPVideoFrame) -> H264Renderer.Target {

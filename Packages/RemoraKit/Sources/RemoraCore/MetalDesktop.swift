@@ -41,6 +41,15 @@ public final class MetalDesktop: CaptureSource, Sendable {
 
     public func removeFrameObserver(_ id: UUID) { _ = state.withLock { $0.observers.removeValue(forKey: id) } }
 
+    /// Runs on a Metal thread each time a GPU error discards the framebuffer, and pixels drawn only on the GPU with it.
+    public func addLossObserver(_ observer: @escaping @Sendable () -> Void) -> UUID {
+        let id = UUID()
+        state.withLock { $0.lossObservers[id] = observer }
+        return id
+    }
+
+    public func removeLossObserver(_ id: UUID) { _ = state.withLock { $0.lossObservers.removeValue(forKey: id) } }
+
     /// Only the renderer's original dirty-rectangle copies. No capture work unless an observer is installed.
     @discardableResult
     public func ingest(_ frame: BorrowedFrame) throws -> Int {
@@ -125,13 +134,14 @@ public final class MetalDesktop: CaptureSource, Sendable {
             command.addCompletedHandler { [self] command in
                 slot?.available.signal()
                 if command.status == .error {
-                    self.state.withLock {
-                        if $0.storage === storage {
-                            $0.dropPending()
-                            $0.storage = nil
-                            $0.losses += 1
-                        }
+                    let observers = self.state.withLock { state -> [@Sendable () -> Void] in
+                        guard state.storage === storage else { return [] }
+                        state.dropPending()
+                        state.storage = nil
+                        state.losses += 1
+                        return Array(state.lossObservers.values)
                     }
+                    for observer in observers { observer() }
                 }
             }
             state.pending = nil
@@ -256,6 +266,7 @@ public final class MetalDesktop: CaptureSource, Sendable {
         var nextSlot = 0
         var damage = FrameDamage()
         var observers: [UUID: @Sendable (TimeInterval) -> Void] = [:]
+        var lossObservers: [UUID: @Sendable () -> Void] = [:]
         var revision = 0
         var arrival: TimeInterval = 0
         var losses = 0
