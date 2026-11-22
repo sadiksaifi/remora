@@ -2,6 +2,7 @@
  * README.md, "Login", gives the message layouts, the derivation and their sources.
  * This is Remora's own implementation on OpenSSL. It contains no Apple code. */
 #include "apple.h"
+#include "records.h"
 #include <openssl/bn.h>
 #include <openssl/crypto.h>
 #include <openssl/err.h>
@@ -9,6 +10,7 @@
 #include <openssl/rand.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 /* The RFC 5054 4096-bit group with SHA-512. The iteration bound keeps a peer from stalling the client in PBKDF2. */
 enum { GROUP = 512, HASH = 64, STRETCHED = 128, MAX_NAME = 255, MAX_MESSAGE = 4096, MAX_ITERATIONS = 2000000 };
@@ -205,9 +207,12 @@ rfbBool rfbRemoraAppleLogin(rfbClient *c) {
     if (!WriteToRFBServer(c, (char *)message, (unsigned)(p - message))) goto out;
     rfbRemoraDiagnosticComplete(c, RFB_REMORA_ARD_WRITE);
 
-    /* macOS answers a wrong proof with a bare SecurityResult. */
+    /* macOS answers a wrong proof with a bare SecurityResult. It delays each rejection longer than
+     * the last, past 10 seconds by the third, so this read waits up to 30 seconds. */
     rfbRemoraDiagnosticBegin(c, RFB_REMORA_AUTH_RESULT);
-    if (!ReadFromRFBServer(c, (char *)header, 4)) goto out;
+    struct timespec now;
+    clock_gettime(CLOCK_MONOTONIC, &now);
+    if (!rfbRemoraReadWire(c, (char *)header, 4, now.tv_sec + now.tv_nsec / 1e9 + 30)) goto out;
     outer = be32(header);
     if (outer == rfbVncAuthFailed || outer == rfbVncAuthTooMany) {
         c->remoraAuthFailed = TRUE;
