@@ -522,10 +522,12 @@ private func animatesThroughout(_ times: [Double], from start: Double, to end: D
     }
     let restingArea = glyphArea(rest)
     // Pressing shrinks the glyph about the same target tip, and it stays pressed until the release 0.65 s later.
-    // The pressed window is 0.47 s long and the animation check allows 0.4 s between frames, so it holds a frame.
+    // A frame in the first 0.19 s must show it pressed. A slow encoder can skip that span, so the whole pressed
+    // window counts only then. It is 0.47 s long and the animation check allows 0.4 s between frames.
     // Every pressed frame shows no agent click ring at radius 14. An erroneous ring fades over 0.5 s, so this
     // check is strongest on the frames nearest the press.
-    #expect(pressed.contains { Double(glyphArea($0.buffer)) < 0.85 * Double(restingArea) })
+    let early = pressed.filter { $0.time < 0.19 }
+    #expect((early.isEmpty ? pressed : early).contains { Double(glyphArea($0.buffer)) < 0.85 * Double(restingArea) })
     for (_, press) in pressed {
         #expect(rgb(press, 500 + Int(14 * unit), 140)[2] < 135)
         #expect(rgb(press, 500, 140).allSatisfy { $0 > 125 })
