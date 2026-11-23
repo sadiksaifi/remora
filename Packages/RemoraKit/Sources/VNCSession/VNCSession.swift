@@ -465,11 +465,11 @@ public final class VNCSession: AgentInputSession, @unchecked Sendable {
                         case 5: .certificateRejected
                         case 8:
                             .protocolError(
-                                "Apple mode requires RFB 003.889, the SRP login, and a supported shared desktop with session encryption."
+                                "Apple Screen Sharing mode requires RFB 003.889, the SRP login, and a supported shared desktop with session encryption."
                             )
                         case 18:
                             .protocolError(
-                                "The Mac didn't offer the SRP login, which proves its identity. Apple mode requires that login, which never sends the password."
+                                "The Mac didn't offer the SRP login, which proves its identity. Apple Screen Sharing mode requires that login, which never sends the password."
                             )
                         case 19:
                             .protocolError(

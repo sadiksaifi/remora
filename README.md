@@ -19,7 +19,7 @@
 
 ## Highlights
 
-- **Protocols**: Remora supports both RDP and VNC, so you can connect to Mac, Linux and Windows machines.
+- **Protocols**: Remora supports RDP and VNC (including Apple Screen Sharing), so you can connect to Mac, Linux and Windows machines.
 - **Rendering**: Metal and hardware video decoding keep the remote desktop sharp and responsive.
 - **Computer use**: Your AI agents, such as Claude Code and Codex, can drive your remote machines.
 - **Screen capture**: Take a screenshot or record a video of any remote desktop.
