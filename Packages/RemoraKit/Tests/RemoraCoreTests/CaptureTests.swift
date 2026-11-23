@@ -479,14 +479,16 @@ private func animatesThroughout(_ times: [Double], from start: Double, to end: D
     }
     #expect(animatesThroughout(times, from: moveAt, to: humanAt))
     // The cursor travels between resting centers near x 84-96 and 504-514, and a spring settles it at each.
-    // Progress is the center along the leg's direction, from the first frame that leaves the start until the
-    // first that reaches the destination. Each frame stays within 1 px of the furthest progress so far, so a
-    // step back, a stall that slides back, or a jump to the start fails. Compression moves a still cursor's
+    // Progress is the center along the leg's direction, from the first frame that leaves the start to the end
+    // of the leg's window. It is capped at the destination band's edge, so the spring's recoil there counts as
+    // arrived. Each frame stays within 1 px of the furthest progress so far, so a step back, a slide back in small
+    // steps, a jump to the start, or a jump back from the destination fails. Compression moves a still cursor's
     // measured center by up to about 0.25 px, and a slow encoder can record about the same position twice.
-    // In at least one leg, two of these frames are more than 20 px apart, and some leg covers 200 px.
+    // In at least one leg, two frames between the bands are more than 20 px apart, and some leg covers 200 px.
     let progress = zip(legs, centers).map { leg, centers in
         let along = centers.map { leg.outbound ? $0 : -$0 }
-        return Array(along.drop { $0 < (leg.outbound ? 105 : -500) }.prefix { $0 < (leg.outbound ? 500 : -105) })
+        let arrived: Double = leg.outbound ? 500 : -105
+        return along.drop { $0 < (leg.outbound ? 105 : -500) }.map { min($0, arrived) }
     }
     func advances(_ along: [Double]) -> Bool {
         var furthest = -Double.infinity
@@ -497,7 +499,8 @@ private func animatesThroughout(_ times: [Double], from start: Double, to end: D
     }
     let travel = "centers by leg: \(centers.map { $0.map { ($0 * 10).rounded() / 10 } })"
     #expect(progress.allSatisfy(advances), "\(travel)")
-    #expect(progress.contains { ($0.last ?? 0) - ($0.first ?? 0) > 20 }, "\(travel)")
+    let travelled = zip(legs, progress).map { leg, along in along.filter { $0 < (leg.outbound ? 500 : -105) } }
+    #expect(travelled.contains { ($0.last ?? 0) - ($0.first ?? 0) > 20 }, "\(travel)")
     #expect(centers.contains { ($0.max() ?? 0) - ($0.min() ?? 0) > 200 }, "\(travel)")
     let rest = try #require(resting)
     // The stroke covers the target tip. The fill is the specified premultiplied slate mixture.
@@ -520,7 +523,8 @@ private func animatesThroughout(_ times: [Double], from start: Double, to end: D
     let restingArea = glyphArea(rest)
     // Pressing shrinks the glyph about the same target tip, and it stays pressed until the release 0.65 s later.
     // The pressed window is 0.47 s long and the animation check allows 0.4 s between frames, so it holds a frame.
-    // Every pressed frame shows no agent click ring at radius 14.
+    // Every pressed frame shows no agent click ring at radius 14. An erroneous ring fades over 0.5 s, so this
+    // check is strongest on the frames nearest the press.
     #expect(pressed.contains { Double(glyphArea($0.buffer)) < 0.85 * Double(restingArea) })
     for (_, press) in pressed {
         #expect(rgb(press, 500 + Int(14 * unit), 140)[2] < 135)
