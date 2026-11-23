@@ -49,6 +49,8 @@ public enum VNCServerProbe {
         } onCancel: {
             connection.cancel()
         }
+        // The greeting can arrive just before the cancellation.
+        guard !Task.isCancelled else { return nil }
         return greeting.flatMap(mode(forGreeting:))
     }
 }

@@ -2,6 +2,7 @@ import Darwin
 import Foundation
 import RemoraCore
 import Testing
+import os
 
 @Test func onlyAppleScreenSharingsGreetingSuggestsAppleMode() {
     #expect(VNCServerProbe.mode(forGreeting: Data("RFB 003.889\n".utf8)) == .apple)
@@ -14,9 +15,12 @@ import Testing
 }
 
 /// A loopback socket bound to a free port. A listening one accepts one connection, sends
-/// `greeting`, and holds the connection open until the client closes it. The thread owns the socket.
-private struct GreetingServer {
+/// `greeting`, and records what the client sends until the client closes. The thread owns the socket.
+private final class GreetingServer: Sendable {
     let port: Int
+    /// The client's bytes, set once the client has closed the connection.
+    private let received = OSAllocatedUnfairLock<[UInt8]?>(initialState: nil)
+    private let closed = DispatchSemaphore(value: 0)
 
     init(greeting: String?, listening: Bool = true) throws {
         let listener = socket(AF_INET, SOCK_STREAM, 0)
@@ -37,7 +41,7 @@ private struct GreetingServer {
             throw POSIXError(.EADDRNOTAVAIL)
         }
         port = Int(UInt16(bigEndian: address.sin_port))
-        Thread {
+        Thread { [received, closed] in
             defer { close(listener) }
             // A bound port without a listener refuses connections while the socket stays open.
             guard listening else { return Thread.sleep(forTimeInterval: 3) }
@@ -45,29 +49,61 @@ private struct GreetingServer {
             guard poll(&wait, 1, 5000) > 0 else { return }
             let connection = accept(listener, nil, nil)
             guard connection >= 0 else { return }
+            defer { close(connection) }
             if let greeting { _ = greeting.withCString { write(connection, $0, strlen($0)) } }
-            var byte: UInt8 = 0
-            _ = read(connection, &byte, 1)
-            close(connection)
+            var bytes: [UInt8] = []
+            var buffer = [UInt8](repeating: 0, count: 64)
+            var client = pollfd(fd: connection, events: Int16(POLLIN), revents: 0)
+            while poll(&client, 1, 5000) > 0 {
+                let count = read(connection, &buffer, buffer.count)
+                if count <= 0 {
+                    let sent = bytes
+                    received.withLock { $0 = sent }
+                    closed.signal()
+                    return
+                }
+                bytes += buffer[..<count]
+            }
         }.start()
+    }
+
+    /// What the client sent before it closed the connection, or nil if it never closed it.
+    func clientBytes() -> [UInt8]? {
+        guard closed.wait(timeout: .now() + 5) == .success else { return nil }
+        return received.withLock { $0 }
     }
 }
 
-@Test func theProbeReadsAMacsGreeting() async throws {
+@Test func theProbeReadsAMacsGreetingWithoutSendingAnything() async throws {
     let server = try GreetingServer(greeting: "RFB 003.889\n")
     #expect(await VNCServerProbe.mode(host: "127.0.0.1", port: server.port) == .apple)
+    #expect(server.clientBytes() == [])
 }
 
-@Test func theProbeReadsAnotherServersGreeting() async throws {
+@Test func theProbeReadsAnotherServersGreetingWithoutSendingAnything() async throws {
     let server = try GreetingServer(greeting: "RFB 003.008\n")
     #expect(await VNCServerProbe.mode(host: "127.0.0.1", port: server.port) == .standard)
+    #expect(server.clientBytes() == [])
 }
 
-@Test func theProbeGivesUpOnASilentServer() async throws {
+@Test func theProbeWaitsForASilentServerThenCloses() async throws {
     let server = try GreetingServer(greeting: nil)
     let started = ContinuousClock.now
     #expect(await VNCServerProbe.mode(host: "127.0.0.1", port: server.port, timeout: .milliseconds(300)) == nil)
+    let elapsed = ContinuousClock.now - started
+    #expect(elapsed >= .milliseconds(300) && elapsed < .seconds(2))
+    #expect(server.clientBytes() == [])
+}
+
+@Test func aCancelledProbeReturnsNothing() async throws {
+    let server = try GreetingServer(greeting: nil)
+    let probe = Task { await VNCServerProbe.mode(host: "127.0.0.1", port: server.port, timeout: .seconds(10)) }
+    try await Task.sleep(for: .milliseconds(200))
+    probe.cancel()
+    let started = ContinuousClock.now
+    #expect(await probe.value == nil)
     #expect(ContinuousClock.now - started < .seconds(2))
+    #expect(server.clientBytes() == [])
 }
 
 @Test func theProbeGivesUpOnARefusedConnection() async throws {

@@ -106,7 +106,8 @@ final class ConnectionsViewController: NSViewController, NSTableViewDataSource, 
     // MARK: Actions
 
     @objc func newConnection(_ sender: Any?) {
-        presentEditor(title: "New Connection", for: Connection(name: "", host: "", username: ""), password: "")
+        presentEditor(
+            title: "New Connection", for: Connection(name: "", host: "", username: ""), password: "", identifiesVNCServer: true)
     }
 
     /// Opens each target in a tab, or shows its tab. From the context menu it applies only
@@ -423,14 +424,16 @@ final class ConnectionsViewController: NSViewController, NSTableViewDataSource, 
 
     // MARK: Presentation
 
-    private func presentEditor(title: String, for connection: Connection, password: String) {
+    /// Only a new connection identifies its VNC server. A duplicate keeps the mode it copied.
+    private func presentEditor(title: String, for connection: Connection, password: String, identifiesVNCServer: Bool = false) {
         guard editorController == nil else { return }
         let isNew = !connectionStore.connections.contains { $0.id == connection.id }
         let editor = ConnectionEditor(
             title: title,
             connection: connection,
             password: password,
-            identifyVNCServer: isNew ? { @Sendable host, port in await VNCServerProbe.mode(host: host, port: port) } : nil,
+            identifyVNCServer: identifiesVNCServer
+                ? { @Sendable host, port in await VNCServerProbe.mode(host: host, port: port) } : nil,
             onCancel: { [weak self] in self?.dismissEditor() },
             onSave: { [weak self] draft, editedPassword in
                 self?.save(draft, password: editedPassword, original: connection, originalPassword: password, isNew: isNew)
