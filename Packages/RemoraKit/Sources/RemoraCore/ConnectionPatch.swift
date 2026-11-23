@@ -55,7 +55,7 @@ public struct ConnectionPatch: Sendable {
         if result.kind == .vnc { result.domain = nil }
         if let vncMode { result.vncMode = vncMode }
         if result.kind == .rdp {
-            guard vncMode != .apple else { throw ValidationFailure(message: "Apple mode is only for VNC connections.") }
+            guard vncMode != .apple else { throw ValidationFailure(message: "Apple Screen Sharing mode is only for VNC connections.") }
             result.vncMode = .standard
         }
         if let resolution { result.resolution = resolution }

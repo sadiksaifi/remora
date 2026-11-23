@@ -491,7 +491,9 @@ private func richFlavors(_ source: String) -> [RemoteClipboard.Flavor] {
     #expect(frames.samples.isEmpty)
     #expect(
         terminals == [
-            .protocolError("The Mac didn't offer the SRP login, which proves its identity. Apple mode requires that login, which never sends the password.")
+            .protocolError(
+                "The Mac didn't offer the SRP login, which proves its identity. Apple Screen Sharing mode requires that login, which never sends the password."
+            )
         ])
 }
 

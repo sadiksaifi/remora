@@ -231,7 +231,7 @@ struct ConnectionEditor: View {
                     Section {
                         Picker("Mode", selection: chosenVNCMode) {
                             Text("Standard").tag(VNCMode.standard)
-                            Text("Apple").tag(VNCMode.apple)
+                            Text("Apple Screen Sharing").tag(VNCMode.apple)
                         }
                         .pickerStyle(.menu)
                         .accessibilityIdentifier("editorVNCMode")
@@ -240,7 +240,7 @@ struct ConnectionEditor: View {
                     } footer: {
                         VStack(alignment: .leading, spacing: 4) {
                             if macDetected {
-                                Text("This server looks like a Mac, so Remora chose Apple mode.")
+                                Text("This server looks like a Mac, so Remora chose Apple Screen Sharing.")
                                     .accessibilityIdentifier("editorMacDetected")
                             }
                             Text(
