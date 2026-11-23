@@ -21,6 +21,7 @@ private final class GreetingServer: Sendable {
     /// The client's bytes, set once the client has closed the connection.
     private let received = OSAllocatedUnfairLock<[UInt8]?>(initialState: nil)
     private let closed = DispatchSemaphore(value: 0)
+    private let accepted = DispatchSemaphore(value: 0)
 
     init(greeting: String?, listening: Bool = true) throws {
         let listener = socket(AF_INET, SOCK_STREAM, 0)
@@ -41,7 +42,7 @@ private final class GreetingServer: Sendable {
             throw POSIXError(.EADDRNOTAVAIL)
         }
         port = Int(UInt16(bigEndian: address.sin_port))
-        Thread { [received, closed] in
+        Thread { [received, closed, accepted] in
             defer { close(listener) }
             // A bound port without a listener refuses connections while the socket stays open.
             guard listening else { return Thread.sleep(forTimeInterval: 3) }
@@ -50,6 +51,7 @@ private final class GreetingServer: Sendable {
             let connection = accept(listener, nil, nil)
             guard connection >= 0 else { return }
             defer { close(connection) }
+            accepted.signal()
             if let greeting { _ = greeting.withCString { write(connection, $0, strlen($0)) } }
             var bytes: [UInt8] = []
             var buffer = [UInt8](repeating: 0, count: 64)
@@ -65,6 +67,11 @@ private final class GreetingServer: Sendable {
                 bytes += buffer[..<count]
             }
         }.start()
+    }
+
+    /// Whether a client connected within five seconds.
+    func waitForClient() -> Bool {
+        accepted.wait(timeout: .now() + 5) == .success
     }
 
     /// What the client sent before it closed the connection, or nil if it never closed it.
@@ -98,7 +105,8 @@ private final class GreetingServer: Sendable {
 @Test func aCancelledProbeReturnsNothing() async throws {
     let server = try GreetingServer(greeting: nil)
     let probe = Task { await VNCServerProbe.mode(host: "127.0.0.1", port: server.port, timeout: .seconds(10)) }
-    try await Task.sleep(for: .milliseconds(200))
+    // Cancel only once the probe is connected and waiting for the greeting.
+    try #require(await Task.detached { server.waitForClient() }.value)
     probe.cancel()
     let started = ContinuousClock.now
     #expect(await probe.value == nil)
