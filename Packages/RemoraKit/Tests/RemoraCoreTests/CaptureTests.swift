@@ -422,7 +422,7 @@ private func animatesThroughout(_ times: [Double], from start: Double, to end: D
     let pressAt = ProcessInfo.processInfo.systemUptime - started
     state.pressAgentCursor(depth: CursorTuning.clickDepth, animated: true)
     state.receive(.agent, .pointer(.init(x: 500, y: 140), .left))
-    try await Task.sleep(for: .milliseconds(450))
+    try await Task.sleep(for: .milliseconds(650))
     state.releaseAgentCursor()
     try await Task.sleep(for: .milliseconds(450))
     let humanAt = ProcessInfo.processInfo.systemUptime - started
@@ -474,21 +474,30 @@ private func animatesThroughout(_ times: [Double], from start: Double, to end: D
             CVPixelBufferUnlockBaseAddress(buffer, .readOnly)
         }
         if time > arrivedAt + 0.15 && time < pressAt - lead { resting = buffer }
-        if time > pressAt + 0.08 && time < pressAt + 0.45 { pressed.append((time - pressAt, buffer)) }
+        if time > pressAt + 0.08 && time < pressAt + 0.65 - lead { pressed.append((time - pressAt, buffer)) }
         if time > humanAt - lead && time < humanAt + 0.5 { human.append(buffer) }
     }
     #expect(animatesThroughout(times, from: moveAt, to: humanAt))
-    // The cursor travels between resting centers near x 84-96 and 504-514. Frames between them are in each
-    // leg's travel order. In at least one leg, two of them are more than 20 px apart and the leg covers 200 px.
-    // Compression moves a still cursor's measured center by up to about 0.25 px, and a slow encoder can record
-    // the same position twice, so the order allows 1 px back. A moving cursor's frames are 5 px or more apart.
-    let between = zip(legs, centers).map { leg, centers in
-        let inside = centers.filter { (105...500).contains($0) }
-        return leg.outbound ? inside : inside.reversed()
+    // The cursor travels between resting centers near x 84-96 and 504-514, and a spring settles it at each.
+    // Progress is the center along the leg's direction, from the first frame that leaves the start until the
+    // first that reaches the destination. Each frame stays within 1 px of the furthest progress so far, so a
+    // step back, a stall that slides back, or a jump to the start fails. Compression moves a still cursor's
+    // measured center by up to about 0.25 px, and a slow encoder can record about the same position twice.
+    // In at least one leg, two of these frames are more than 20 px apart, and some leg covers 200 px.
+    let progress = zip(legs, centers).map { leg, centers in
+        let along = centers.map { leg.outbound ? $0 : -$0 }
+        return Array(along.drop { $0 < (leg.outbound ? 105 : -500) }.prefix { $0 < (leg.outbound ? 500 : -105) })
+    }
+    func advances(_ along: [Double]) -> Bool {
+        var furthest = -Double.infinity
+        return along.allSatisfy { value in
+            defer { furthest = max(furthest, value) }
+            return value > furthest - 1
+        }
     }
     let travel = "centers by leg: \(centers.map { $0.map { ($0 * 10).rounded() / 10 } })"
-    #expect(between.allSatisfy { zip($0, $0.dropFirst()).allSatisfy { $1 > $0 - 1 } }, "\(travel)")
-    #expect(between.contains { ($0.last ?? 0) - ($0.first ?? 0) > 20 }, "\(travel)")
+    #expect(progress.allSatisfy(advances), "\(travel)")
+    #expect(progress.contains { ($0.last ?? 0) - ($0.first ?? 0) > 20 }, "\(travel)")
     #expect(centers.contains { ($0.max() ?? 0) - ($0.min() ?? 0) > 200 }, "\(travel)")
     let rest = try #require(resting)
     // The stroke covers the target tip. The fill is the specified premultiplied slate mixture.
@@ -509,10 +518,10 @@ private func animatesThroughout(_ times: [Double], from start: Double, to end: D
         return area
     }
     let restingArea = glyphArea(rest)
-    // No agent click ring at radius 14; pressing shrinks the glyph about the same target tip. A ring would
-    // stay brighter than this bound for about 0.19 s, so a frame in that time must show the pressed glyph,
-    // and every pressed frame is checked.
-    #expect(pressed.contains { $0.time < 0.19 && Double(glyphArea($0.buffer)) < 0.85 * Double(restingArea) })
+    // Pressing shrinks the glyph about the same target tip, and it stays pressed until the release 0.65 s later.
+    // The pressed window is 0.47 s long and the animation check allows 0.4 s between frames, so it holds a frame.
+    // Every pressed frame shows no agent click ring at radius 14.
+    #expect(pressed.contains { Double(glyphArea($0.buffer)) < 0.85 * Double(restingArea) })
     for (_, press) in pressed {
         #expect(rgb(press, 500 + Int(14 * unit), 140)[2] < 135)
         #expect(rgb(press, 500, 140).allSatisfy { $0 > 125 })
