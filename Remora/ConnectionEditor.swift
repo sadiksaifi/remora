@@ -9,6 +9,7 @@ struct ConnectionEditor: View {
     private let originalPassword: String
     private let onCancel: () -> Void
     private let onSave: (Connection, String) -> Void
+    private let identifyVNCServer: (@Sendable (String, Int) async -> VNCMode?)?
 
     @State private var kind: Connection.Kind
     @State private var name: String
@@ -21,6 +22,10 @@ struct ConnectionEditor: View {
     @State private var customWidth: String
     @State private var customHeight: String
     @State private var vncMode: VNCMode
+    /// Detection never overrides a mode the user picked.
+    @State private var vncModeChosen = false
+    /// The address whose greeting came from a Mac. It applies only while the fields still show that address.
+    @State private var detectedMac: ServerAddress?
     @FocusState private var focusedField: Field?
 
     private enum ResolutionChoice: String, CaseIterable {
@@ -45,16 +50,25 @@ struct ConnectionEditor: View {
         case host
     }
 
+    private struct ServerAddress: Equatable {
+        let host: String
+        let port: Int
+    }
+
+    /// With `identifyVNCServer`, the editor reads a VNC server's greeting and picks Apple mode for a Mac.
+    /// Pass it only for a new connection, so a saved or copied mode never changes behind the user's back.
     init(
         title: String,
         connection: Connection,
         password: String,
+        identifyVNCServer: (@Sendable (String, Int) async -> VNCMode?)? = nil,
         onCancel: @escaping () -> Void,
         onSave: @escaping (Connection, String) -> Void
     ) {
         self.title = title
         original = connection
         originalPassword = password
+        self.identifyVNCServer = identifyVNCServer
         self.onCancel = onCancel
         self.onSave = onSave
         _kind = State(initialValue: connection.kind)
@@ -97,6 +111,50 @@ struct ConnectionEditor: View {
             customHeight = String(height)
         }
         vncMode = restores ? original.vncMode : .standard
+        // The reset discards the user's pick, so detection resumes.
+        vncModeChosen = false
+        detectedMac = nil
+    }
+
+    /// The address in the fields, or nil while it is incomplete or invalid.
+    private var serverAddress: ServerAddress? {
+        guard !trimmedHost.isEmpty, hostProblem == nil, let port = parsedPort else { return nil }
+        return ServerAddress(host: trimmedHost, port: port)
+    }
+
+    /// The address to check for a Mac, or nil when there is nothing to check.
+    private var serverToIdentify: ServerAddress? {
+        guard identifyVNCServer != nil, kind == .vnc, !vncModeChosen else { return nil }
+        return serverAddress
+    }
+
+    /// True while the fields show the address of a detected Mac and the user has not picked a mode.
+    private var macDetected: Bool {
+        !vncModeChosen && detectedMac != nil && detectedMac == serverAddress
+    }
+
+    /// The mode shown and saved. Editing the address drops a detected Mac's Apple mode at once.
+    private var effectiveVNCMode: VNCMode {
+        macDetected ? .apple : vncMode
+    }
+
+    private func identify(_ server: ServerAddress?) async {
+        guard let server, let identifyVNCServer else { return }
+        // Wait for typing to pause, so Remora does not connect to every partial host name.
+        guard (try? await Task.sleep(for: .milliseconds(600))) != nil else { return }
+        let mode = await identifyVNCServer(server.host, server.port)
+        guard !Task.isCancelled else { return }
+        detectedMac = mode == .apple ? server : nil
+    }
+
+    /// The user's own pick ends detection for this sheet.
+    private var chosenVNCMode: Binding<VNCMode> {
+        Binding(
+            get: { effectiveVNCMode },
+            set: {
+                vncMode = $0
+                vncModeChosen = true
+            })
     }
 
     /// The password field is cleared, and Save removes a stored password.
@@ -171,22 +229,26 @@ struct ConnectionEditor: View {
                 }
                 if kind == .vnc {
                     Section {
-                        Picker("Mode", selection: $vncMode) {
+                        Picker("Mode", selection: chosenVNCMode) {
                             Text("Standard").tag(VNCMode.standard)
                             Text("Apple").tag(VNCMode.apple)
                         }
                         .pickerStyle(.menu)
                         .accessibilityIdentifier("editorVNCMode")
-                        LabeledContent("Resolution", value: "Set by the Server")
-                            .accessibilityIdentifier("editorResolution")
                     } header: {
                         Text("Display")
                     } footer: {
-                        Text(
-                            vncMode == .apple
-                                ? "Apple mode uses Apple Screen Sharing’s encrypted connection and its faster, lossy encoding. It works only with Macs. The Mac must prove that it has your account’s password on record before the session starts. Display resizing is unavailable."
-                                : "Remora scales the remote screen to fit the window. Servers that allow resizing match the window’s size."
-                        )
+                        VStack(alignment: .leading, spacing: 4) {
+                            if macDetected {
+                                Text("This server looks like a Mac, so Remora chose Apple mode.")
+                                    .accessibilityIdentifier("editorMacDetected")
+                            }
+                            Text(
+                                effectiveVNCMode == .apple
+                                    ? "Encrypted. Works only with Screen Sharing on a Mac and uses your Mac account password."
+                                    : "Works with most VNC servers. Screen Sharing on a Mac isn’t encrypted in this mode."
+                            )
+                        }
                         .foregroundStyle(.secondary)
                     }
                 } else {
@@ -264,6 +326,7 @@ struct ConnectionEditor: View {
         .frame(width: 460)
         // The protocol control comes first, but typing starts in Host.
         .onAppear { focusedField = .host }
+        .task(id: serverToIdentify) { await identify(serverToIdentify) }
     }
 
     private var trimmedHost: String {
@@ -319,7 +382,7 @@ struct ConnectionEditor: View {
         connection.port = port
         connection.username = username.trimmingCharacters(in: .whitespacesAndNewlines)
         connection.domain = kind == .rdp && !trimmedDomain.isEmpty ? trimmedDomain : nil
-        connection.vncMode = kind == .vnc ? vncMode : .standard
+        connection.vncMode = kind == .vnc ? effectiveVNCMode : .standard
         return connection
     }
 
