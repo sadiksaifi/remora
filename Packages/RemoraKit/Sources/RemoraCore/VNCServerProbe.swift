@@ -26,20 +26,33 @@ public enum VNCServerProbe {
         }
         let connection = NWConnection(host: NWEndpoint.Host(host), port: port, using: .tcp)
         let queue = DispatchQueue(label: "Remora VNC server probe")
+        // Whichever comes first, the greeting, a failure, the timeout or cancellation, ends the wait. Cancellation
+        // can come before the continuation exists, so it leaves `finished` for the continuation to see.
+        let outcome = OSAllocatedUnfairLock(initialState: ProbeOutcome())
+        let finish: @Sendable (Data?) -> Void = { data in
+            outcome.withLock { state -> CheckedContinuation<Data?, Never>? in
+                state.finished = true
+                return state.waiting.take()
+            }?.resume(returning: data)
+        }
         defer {
             connection.stateUpdateHandler = nil
             connection.cancel()
         }
         let greeting = await withTaskCancellationHandler {
             await withCheckedContinuation { (continuation: CheckedContinuation<Data?, Never>) in
-                let pending = OSAllocatedUnfairLock<CheckedContinuation<Data?, Never>?>(initialState: continuation)
-                let finish: @Sendable (Data?) -> Void = { data in pending.withLock { $0.take() }?.resume(returning: data) }
+                let finished = outcome.withLock { state in
+                    if !state.finished { state.waiting = continuation }
+                    return state.finished
+                }
+                guard !finished else { return continuation.resume(returning: nil) }
                 connection.stateUpdateHandler = { [weak connection] state in
                     switch state {
                     case .ready:
                         connection?.receive(minimumIncompleteLength: 12, maximumLength: 12) { data, _, _, _ in finish(data) }
-                    // A refused connection can stay in preparing while Network retries it. The timeout ends that.
-                    case .waiting, .failed, .cancelled: finish(nil)
+                    // Waiting covers a Local Network prompt that the user may still accept, and a refused
+                    // connection can stay in preparing while Network retries it. The timeout ends both.
+                    case .failed, .cancelled: finish(nil)
                     default: break
                     }
                 }
@@ -47,10 +60,15 @@ public enum VNCServerProbe {
                 queue.asyncAfter(deadline: .now() + timeout) { finish(nil) }
             }
         } onCancel: {
-            connection.cancel()
+            finish(nil)
         }
         // The greeting can arrive just before the cancellation.
         guard !Task.isCancelled else { return nil }
         return greeting.flatMap(mode(forGreeting:))
     }
+}
+
+private struct ProbeOutcome {
+    var finished = false
+    var waiting: CheckedContinuation<Data?, Never>?
 }
