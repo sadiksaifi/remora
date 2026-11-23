@@ -430,6 +430,7 @@ final class ConnectionsViewController: NSViewController, NSTableViewDataSource, 
             title: title,
             connection: connection,
             password: password,
+            identifyVNCServer: isNew ? { @Sendable host, port in await VNCServerProbe.mode(host: host, port: port) } : nil,
             onCancel: { [weak self] in self?.dismissEditor() },
             onSave: { [weak self] draft, editedPassword in
                 self?.save(draft, password: editedPassword, original: connection, originalPassword: password, isNew: isNew)
