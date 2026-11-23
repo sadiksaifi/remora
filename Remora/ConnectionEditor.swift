@@ -110,6 +110,7 @@ struct ConnectionEditor: View {
             customWidth = String(width)
             customHeight = String(height)
         }
+        vncMode = restores ? original.vncMode : .standard
         // The reset discards the user's pick, so detection resumes.
         vncModeChosen = false
         detectedMac = nil
