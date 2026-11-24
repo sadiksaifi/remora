@@ -21,6 +21,7 @@ final class RemoteDesktopInput: NSObject {
         }
     }
     var onHumanInput: ((SessionControl.HumanInput) -> Void)?
+    var onBlockedInput: (() -> Void)?
     private var connected = false
     private lazy var shortcutCapture = SystemShortcutCapture(
         isFocused: { [weak self] in self?.canCapture == true },
@@ -177,7 +178,10 @@ final class RemoteDesktopInput: NSObject {
             view?.window?.makeFirstResponder(nil)
             return true
         case .remote:
-            guard allowsHumanInput else { return !event.modifierFlags.contains(.command) }
+            guard allowsHumanInput else {
+                if event.type == .keyDown { onBlockedInput?() }
+                return !event.modifierFlags.contains(.command)
+            }
             if event.type == .keyDown { onHumanInput?(.key) }
             let keys =
                 event.type == .flagsChanged
@@ -206,6 +210,7 @@ final class RemoteDesktopInput: NSObject {
     }
 
     func pointer(_ event: NSEvent, down: Bool? = nil) {
+        if !allowsHumanInput, connected, down == true { onBlockedInput?() }
         guard allowsHumanInput, connected, let input, let view else { return }
         if down == true { view.window?.makeFirstResponder(view) }
         let point = view.remotePoint(for: view.convert(event.locationInWindow, from: nil))

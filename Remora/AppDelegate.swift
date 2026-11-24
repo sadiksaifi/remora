@@ -247,7 +247,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         appMenu.addItem(withTitle: "Quit \(AppIdentity.current.name)", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
 
         let fileMenu = addMenu("File", to: mainMenu)
-        fileMenu.addItem(withTitle: "New Connection", action: #selector(newConnection(_:)), keyEquivalent: "n").target = self
+        fileMenu.addItem(withTitle: "New Connection…", action: #selector(newConnection(_:)), keyEquivalent: "n").target = self
         fileMenu.addItem(.separator())
         fileMenu.addItem(withTitle: "Connect", action: #selector(ConnectionsViewController.connect(_:)), keyEquivalent: "o")
         fileMenu.addItem(withTitle: "Edit Connection…", action: #selector(ConnectionsViewController.editConnection(_:)), keyEquivalent: "")
@@ -292,17 +292,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         sessionMenu.addItem(.separator())
         sessionMenu.addItem(withTitle: "Send Ctrl-Alt-Delete", action: #selector(MainWindowController.sendCtrlAltDelete(_:)), keyEquivalent: "")
         sessionMenu.addItem(.separator())
-        for item in MainWindowController.makeCaptureItems() { sessionMenu.addItem(item) }
-        sessionMenu.addItem(.separator())
-        sessionMenu.addItem(withTitle: "Take Over", action: #selector(MainWindowController.toggleAgentControl(_:)), keyEquivalent: "")
-        sessionMenu.addItem(withTitle: "Stop Agent Control", action: #selector(MainWindowController.stopAgentControl(_:)), keyEquivalent: "")
-        sessionMenu.addItem(withTitle: "Stop All Agent Control", action: #selector(MainWindowController.stopAllAgentControl(_:)), keyEquivalent: "")
-        sessionMenu.addItem(.separator())
+        for item in MainWindowController.makeKeyboardItems() { sessionMenu.addItem(item) }
         sessionMenu.addItem(
             withTitle: "Release Keyboard Capture",
             action: #selector(MainWindowController.releaseKeyboardCapture(_:)),
             keyEquivalent: "\u{1b}"
         ).keyEquivalentModifierMask = localChord
+        sessionMenu.addItem(.separator())
+        for item in MainWindowController.makeCaptureItems() { sessionMenu.addItem(item) }
+        sessionMenu.addItem(.separator())
+        sessionMenu.addItem(withTitle: "Take Over", action: #selector(MainWindowController.toggleAgentControl(_:)), keyEquivalent: "")
+        sessionMenu.addItem(withTitle: "Stop Agent Control", action: #selector(MainWindowController.stopAgentControl(_:)), keyEquivalent: "")
+        sessionMenu.addItem(withTitle: "Stop All Agent Control", action: #selector(MainWindowController.stopAllAgentControl(_:)), keyEquivalent: "")
         sessionMenu.addItem(.separator())
         sessionMenu.addItem(withTitle: "Close Tab", action: #selector(MainWindowController.closeTab(_:)), keyEquivalent: "w")
             .keyEquivalentModifierMask = localChord
