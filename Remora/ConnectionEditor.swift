@@ -224,8 +224,12 @@ struct ConnectionEditor: View {
                 } footer: {
                     VStack(alignment: .leading, spacing: 4) {
                         if removesSavedPassword {
-                            Label("Changing the protocol clears the password.", systemImage: "exclamationmark.triangle.fill")
-                                .accessibilityIdentifier("editorPasswordRemoved")
+                            Label {
+                                Text("Changing the protocol clears the password.").foregroundStyle(.primary)
+                            } icon: {
+                                Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.yellow)
+                            }
+                            .accessibilityIdentifier("editorPasswordRemoved")
                         }
                         Text(
                             kind == .vnc
