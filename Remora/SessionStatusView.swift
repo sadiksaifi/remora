@@ -43,7 +43,7 @@ struct SessionStatusView: View {
     }
 
     private var content: some View {
-        VStack(spacing: 14) {
+        VStack(spacing: 16) {
             header
             VStack(spacing: 6) {
                 Text(title)
@@ -59,7 +59,7 @@ struct SessionStatusView: View {
             .fixedSize(horizontal: false, vertical: true)
             actions
                 .controlSize(.large)
-                .padding(.top, 6)
+                .padding(.top, 2)
         }
     }
 
@@ -69,7 +69,7 @@ struct SessionStatusView: View {
         case .connecting, .reconnecting:
             ProgressView()
                 .controlSize(.large)
-                .frame(height: 48)
+                .frame(height: 54)
         case .awaitingCredentials:
             symbol("person.badge.key")
         case .awaitingTrust:
@@ -81,9 +81,9 @@ struct SessionStatusView: View {
 
     private func symbol(_ name: String) -> some View {
         Image(systemName: name)
-            .font(.system(size: 40, weight: .regular))
+            .font(.system(size: 46, weight: .regular))
             .foregroundStyle(.secondary)
-            .frame(height: 48)
+            .frame(height: 54)
             .accessibilityHidden(true)
     }
 
@@ -121,7 +121,7 @@ struct SessionStatusView: View {
         switch status {
         case .connecting: "Connecting to “\(computerName)”"
         case .awaitingCredentials: "Waiting for Credentials"
-        case .awaitingTrust: "Waiting for Certificate Approval"
+        case .awaitingTrust: "Waiting for Approval"
         case .reconnecting: "Reconnecting to “\(computerName)”"
         case .disconnected(let reason): Self.title(for: reason)
         }
