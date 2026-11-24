@@ -58,6 +58,14 @@ private func presenting() -> SessionNotices {
     #expect(notices.visible == nil)
 }
 
+@Test func anAgentThatReleasesControlLetsTheWaitingRecordingNoticeShow() {
+    var notices = presenting()
+    notices.update(control: .active, isRecording: true, at: start)
+    notices.update(control: .idle, isRecording: true, at: after(1))
+    #expect(notices.visible == .recording)
+    #expect(notices.deadline == after(5))
+}
+
 @Test func twoChangesTogetherShowTheAgentFirstThenTheRecording() {
     var notices = presenting()
     notices.update(control: .active, isRecording: true, at: start)

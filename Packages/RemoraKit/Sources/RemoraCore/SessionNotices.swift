@@ -32,7 +32,7 @@ public struct SessionNotices: Sendable {
             case .active: show(.agentInControl, at: now)
             case .paused: show(.agentPaused, at: now)
             case .stopped: show(.agentStopped, at: now)
-            case .idle: if current?.notice != .recording { current = nil }
+            case .idle: if current?.notice != .recording { finish(at: now) }
             }
         }
         guard isRecording != self.isRecording else { return }
@@ -68,7 +68,12 @@ public struct SessionNotices: Sendable {
     /// Ends the notice whose time has passed and shows the recording notice that waited for it.
     public mutating func advance(to now: ContinuousClock.Instant) {
         guard let current, now >= current.until else { return }
-        self.current = nil
+        finish(at: now)
+    }
+
+    /// Ends the showing notice and shows the recording notice that waited for it.
+    private mutating func finish(at now: ContinuousClock.Instant) {
+        current = nil
         if recordingWaits {
             recordingWaits = false
             show(.recording, at: now)

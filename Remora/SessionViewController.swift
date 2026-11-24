@@ -450,7 +450,8 @@ final class SessionViewController: NSViewController {
             let result = await capture.stopRecording()
             self?.updateDesktopAccessibility()
             switch result {
-            case .success: self?.overlays?.confirm("Recording Saved", sound: false)
+            // On the tab's page and not on the desktop, which a disconnect removes before the file is written.
+            case .success: if let self { SessionOverlays.showNote("Recording Saved", in: container) }
             case .failure(let failure):
                 sessionLog.error("Capture: \(failure.localizedDescription, privacy: .public)")
                 self?.presentCaptureFailure(failure)
@@ -685,6 +686,8 @@ final class SessionViewController: NSViewController {
                 clipboardSync?.sessionDidConnect()
                 dismissChallenge()
                 setContent(desktopView)
+                // The desktop may join a window that is already in full screen.
+                overlays?.presentationChanged()
                 if case .reconnecting = previous { announce("Reconnected to “\(connection.name)”") }
                 overlays?.connected()
                 // Leave the keyboard with the search field while the user types in it.
@@ -914,7 +917,8 @@ final class SessionViewController: NSViewController {
         content?.removeFromSuperview()
         newContent.frame = container.bounds
         newContent.autoresizingMask = [.width, .height]
-        container.addSubview(newContent)
+        // Below a note that is still showing.
+        container.addSubview(newContent, positioned: .below, relativeTo: nil)
         content = newContent
     }
 

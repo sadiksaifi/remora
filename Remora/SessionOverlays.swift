@@ -8,13 +8,15 @@ final class SessionOverlays: NSObject {
     private weak var desktop: RemoteDesktopView?
     private var reconnectingView: NSHostingView<SessionStatusView>?
     private var permissionView: NSView?
-    private var confirmationView: NSView?
+    private weak var confirmationView: NSView?
     private var displaySwitchView: NSView?
     private var displaySwitchTask: Task<Void, Never>?
     /// Full screen has no toolbar to carry the agent's and the recording's state, so a capsule reports each change.
     private var notices = SessionNotices()
     private var noticeView: NSView?
     private var shownNotice: SessionNotices.Notice?
+    private var shownAgent = ""
+    private var fadingNotice: NSView?
     private var noticeTask: Task<Void, Never>?
     private var control = SessionControl.State.idle
     private var agent = ""
@@ -113,23 +115,30 @@ final class SessionOverlays: NSObject {
             }
         }
         let notice = notices.visible
-        guard notice != shownNotice else { return }
+        guard notice != shownNotice || (notice != nil && agent != shownAgent) else { return }
         shownNotice = notice
+        shownAgent = agent
         let old = noticeView
         noticeView = nil
+        // A notice that is still fading leaves at once, so two never show together.
+        fadingNotice?.removeFromSuperview()
+        fadingNotice = nil
+        // The permission banner sits in the same place and returns when the notice ends.
+        permissionView?.isHidden = notice != nil
         guard let notice, let desktop else {
             // The last notice fades. One that gives way to the next leaves at once.
-            Task { @MainActor in
+            fadingNotice = old
+            Task { @MainActor [weak self] in
                 await NSAnimationContext.runAnimationGroup {
                     $0.duration = 0.3
                     old?.animator().alphaValue = 0
                 }
                 old?.removeFromSuperview()
+                if let self, fadingNotice === old { fadingNotice = nil }
             }
             return
         }
         old?.removeFromSuperview()
-        removePermissionBanner()
         let view = NSHostingView(
             rootView: SessionNoticeCapsule(
                 notice: notice, agent: agent,
@@ -234,34 +243,40 @@ final class SessionOverlays: NSObject {
     }
 
     /// Shows a short note at the bottom of the desktop. Capture notes play the system screen capture sound,
-    /// like macOS screenshots do. The note is not part of any capture and ignores the pointer.
+    /// like macOS screenshots do.
     func confirm(_ message: String, systemImage: String = "checkmark.circle.fill", sound: Bool = true) {
         confirmationView?.removeFromSuperview()
         guard let desktop else { return }
-        let note = PassthroughHostingView(rootView: CaptureConfirmation(message: message, systemImage: systemImage))
-        note.sizingOptions = .intrinsicContentSize
-        note.translatesAutoresizingMaskIntoConstraints = false
-        desktop.addSubview(note)
-        NSLayoutConstraint.activate([
-            note.bottomAnchor.constraint(equalTo: desktop.bottomAnchor, constant: -16),
-            note.centerXAnchor.constraint(equalTo: desktop.centerXAnchor),
-        ])
-        confirmationView = note
-        NSAccessibility.post(
-            element: note, notification: .announcementRequested,
-            userInfo: [.announcement: message, .priority: NSAccessibilityPriorityLevel.medium.rawValue])
+        confirmationView = Self.showNote(message, systemImage: systemImage, in: desktop)
         if sound, UserDefaults.standard.object(forKey: "com.apple.sound.uiaudio.enabled") as? Bool ?? true {
             Self.captureSound?.play()
         }
-        Task { @MainActor [weak self, weak note] in
+    }
+
+    /// Shows a short note at the bottom of `host` and tells VoiceOver. The note is not part of any capture,
+    /// ignores the pointer and leaves by itself.
+    @discardableResult
+    static func showNote(_ message: String, systemImage: String = "checkmark.circle.fill", in host: NSView) -> NSView {
+        let note = PassthroughHostingView(rootView: CaptureConfirmation(message: message, systemImage: systemImage))
+        note.sizingOptions = .intrinsicContentSize
+        note.translatesAutoresizingMaskIntoConstraints = false
+        host.addSubview(note)
+        NSLayoutConstraint.activate([
+            note.bottomAnchor.constraint(equalTo: host.bottomAnchor, constant: -16),
+            note.centerXAnchor.constraint(equalTo: host.centerXAnchor),
+        ])
+        NSAccessibility.post(
+            element: note, notification: .announcementRequested,
+            userInfo: [.announcement: message, .priority: NSAccessibilityPriorityLevel.medium.rawValue])
+        Task { @MainActor [weak note] in
             try? await Task.sleep(for: .seconds(1.5))
             await NSAnimationContext.runAnimationGroup {
                 $0.duration = 0.3
                 note?.animator().alphaValue = 0
             }
             note?.removeFromSuperview()
-            if let self, confirmationView === note { confirmationView = nil }
         }
+        return note
     }
 
     private static let captureSound = NSSound(
