@@ -27,6 +27,10 @@ struct ConnectionEditor: View {
     @State private var vncModeChosen = false
     /// The address whose greeting came from a Mac. It applies only while the fields still show that address.
     @State private var detectedMac: ServerAddress?
+    /// The address whose check finished, whatever it found.
+    @State private var identifiedServer: ServerAddress?
+    /// Connect waiting for the check of the address it is about to open.
+    @State private var connecting: Task<Void, Never>?
     @FocusState private var focusedField: Field?
 
     private enum ResolutionChoice: String, CaseIterable {
@@ -118,6 +122,7 @@ struct ConnectionEditor: View {
         // The reset discards the user's pick, so detection resumes.
         vncModeChosen = false
         detectedMac = nil
+        identifiedServer = nil
     }
 
     /// The address in the fields, or nil while it is incomplete or invalid.
@@ -149,6 +154,23 @@ struct ConnectionEditor: View {
         let mode = await identifyVNCServer(server.host, server.port)
         guard !Task.isCancelled else { return }
         detectedMac = mode == .apple ? server : nil
+        identifiedServer = server
+    }
+
+    /// Connect opens the connection with the saved mode at once, so it first finishes the check of the
+    /// address in the fields. Save leaves an unfinished check alone, as the mode can still be edited.
+    private func connect(with open: @escaping (Connection, String) -> Void) {
+        guard let server = serverToIdentify, server != identifiedServer, let identifyVNCServer else {
+            return submit(to: open)
+        }
+        connecting = Task {
+            let mode = await identifyVNCServer(server.host, server.port)
+            guard !Task.isCancelled else { return }
+            detectedMac = mode == .apple ? server : nil
+            identifiedServer = server
+            connecting = nil
+            submit(to: open)
+        }
     }
 
     /// The user's own pick ends detection for this sheet.
@@ -314,21 +336,26 @@ struct ConnectionEditor: View {
             .formStyle(.grouped)
             .scrollDisabled(true)
             .fixedSize(horizontal: false, vertical: true)
+            .disabled(connecting != nil)
 
             HStack {
+                if connecting != nil { ProgressView().controlSize(.small) }
                 Spacer()
-                Button("Cancel", role: .cancel, action: onCancel)
-                    .keyboardShortcut(.cancelAction)
-                    .accessibilityIdentifier("editorCancel")
+                Button("Cancel", role: .cancel) {
+                    connecting?.cancel()
+                    onCancel()
+                }
+                .keyboardShortcut(.cancelAction)
+                .accessibilityIdentifier("editorCancel")
                 Button("Save") { submit(to: onSave) }
                     .keyboardShortcut(onConnect == nil ? .defaultAction : nil)
                     .accessibilityIdentifier("editorSave")
-                    .disabled(draft == nil)
+                    .disabled(draft == nil || connecting != nil)
                 if let onConnect {
-                    Button("Connect") { submit(to: onConnect) }
+                    Button("Connect") { connect(with: onConnect) }
                         .keyboardShortcut(.defaultAction)
                         .accessibilityIdentifier("editorConnect")
-                        .disabled(draft == nil)
+                        .disabled(draft == nil || connecting != nil)
                 }
             }
             .controlSize(.large)
