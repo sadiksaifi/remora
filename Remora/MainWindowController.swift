@@ -49,6 +49,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
     private var callout: NSPopover?
     /// The control state the toolbar last showed, which tells an agent's change from a change of tab.
     private var shownControl: (tab: UUID, state: SessionControl.State, agent: String)?
+    private var shownCapture: CaptureControls?
     /// Window > a separator and tab 1 through 9, hidden past the last tab.
     private(set) var tabMenuItems: [NSMenuItem] = []
     private var eventMonitor: Any?
@@ -401,6 +402,11 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
     @objc func takeScreenshot(_ sender: Any?) { targetSession(sender)?.captureScreenshot(copyToClipboard: false) }
     @objc func copyScreenshot(_ sender: Any?) { targetSession(sender)?.captureScreenshot(copyToClipboard: true) }
     @objc func toggleRecording(_ sender: Any?) { targetSession(sender)?.toggleRecording() }
+    /// A tab's menu stops a recording and never starts one. A recording that has ended ignores the request.
+    @objc private func stopRecording(_ sender: Any?) {
+        guard let session = targetSession(sender) else { return }
+        Task { await session.stopRecording() }
+    }
     @objc func showNextDisplay(_ sender: Any?) { sessionTabs.selectedSession?.selectAdjacentDisplay(forward: true) }
     @objc func showPreviousDisplay(_ sender: Any?) { sessionTabs.selectedSession?.selectAdjacentDisplay(forward: false) }
 
@@ -552,6 +558,8 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
             return hasKeyboard
         case #selector(takeScreenshot(_:)), #selector(copyScreenshot(_:)):
             return canCapture(session)
+        case #selector(stopRecording(_:)):
+            return recordingCommand(for: session) == .stop
         case #selector(toggleRecording(_:)):
             switch recordingCommand(for: session) {
             case .stop:
@@ -569,24 +577,35 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
         }
     }
 
+    private struct CaptureControls: Equatable {
+        var hasKeyboard: Bool
+        var isConnected: Bool
+        var canCapture: Bool
+        var recording: RecordingCommand
+    }
+
     /// The capture group follows the same rules as the menu items with the same actions. A click selects its
-    /// segment, so this puts back what the session says: only Capture Keyboard stays selected, while the
-    /// desktop has the keyboard.
-    private func updateCaptureControls() {
+    /// segment, so `afterClick` puts back what the session says: only Capture Keyboard stays selected, while
+    /// the desktop has the keyboard. Otherwise the control changes only when the session does.
+    private func updateCaptureControls(afterClick: Bool = false) {
         let session = sessionTabs.selectedSession
-        captureControl.setSelected(hasKeyboard, forSegment: 0)
+        let controls = CaptureControls(
+            hasKeyboard: hasKeyboard, isConnected: session?.isConnected == true, canCapture: canCapture(session),
+            recording: recordingCommand(for: session))
+        guard afterClick || controls != shownCapture else { return }
+        captureControl.setSelected(controls.hasKeyboard, forSegment: 0)
         captureControl.setSelected(false, forSegment: 1)
         captureControl.setSelected(false, forSegment: 2)
-        captureControl.setEnabled(session?.isConnected == true, forSegment: 0)
-        captureControl.setEnabled(canCapture(session), forSegment: 1)
-        let command = recordingCommand(for: session)
-        let title =
-            switch command {
-            case .start: "Start Recording"
-            case .stop: "Stop Recording"
-            case .finishing: "Finishing Recording"
-            }
-        if captureControl.toolTip(forSegment: 2) != title {
+        captureControl.setEnabled(controls.isConnected, forSegment: 0)
+        captureControl.setEnabled(controls.canCapture, forSegment: 1)
+        let command = controls.recording
+        if command != shownCapture?.recording {
+            let title =
+                switch command {
+                case .start: "Start Recording"
+                case .stop: "Stop Recording"
+                case .finishing: "Finishing Recording"
+                }
             captureControl.setToolTip(title, forSegment: 2)
             captureControl.setImage(
                 command == .stop
@@ -595,7 +614,8 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
                     : NSImage(systemSymbolName: "record.circle", accessibilityDescription: title),
                 forSegment: 2)
         }
-        captureControl.setEnabled(command == .stop || (command == .start && canCapture(session)), forSegment: 2)
+        captureControl.setEnabled(command == .stop || (command == .start && controls.canCapture), forSegment: 2)
+        shownCapture = controls
     }
 
     /// The clicked segment is the one whose selection no longer matches the session.
@@ -608,7 +628,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
         } else if sender.isSelected(forSegment: 0) != hasKeyboard {
             toggleKeyboardCapture(sender)
         }
-        updateCaptureControls()
+        updateCaptureControls(afterClick: true)
     }
 
     // MARK: Menus
@@ -692,7 +712,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
             return item
         }
         var recording: [NSMenuItem] = []
-        if case .recording = session?.capture.recordingState { recording = [item("Stop Recording", #selector(toggleRecording(_:)))] }
+        if recordingCommand(for: session) == .stop { recording = [item("Stop Recording", #selector(stopRecording(_:)))] }
         add(
             [
                 agentControlItems(for: id),
@@ -782,7 +802,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
     func windowDidChangeScreen(_ notification: Notification) { sessionTabs.selectedSession?.windowDidChangeSize() }
 
     /// AppKit sends this after every event. The search field takes the keyboard and the remote display
-    /// changes without a notification of their own.
+    /// changes without a notification of their own, so both are compared here with what the toolbar shows.
     func windowDidUpdate(_ notification: Notification) {
         updateSearchWidth()
         updateCaptureControls()
