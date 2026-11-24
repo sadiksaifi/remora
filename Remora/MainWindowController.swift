@@ -693,10 +693,13 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
 
     /// Opens a tab's menu under the tab, for VoiceOver. The menu opens on the next turn of the main loop,
     /// because `popUp` returns only when the menu closes and the accessibility action must return before that.
+    /// A run loop block carries it: a main-actor task would hold up every other task until the menu closes.
     private func showTabMenu(forTab id: UUID) {
-        Task { @MainActor [weak self] in
-            guard let self, let frame = tabStripLayout.frame(of: id) else { return }
-            tabMenu(for: id).popUp(positioning: nil, at: NSPoint(x: frame.minX, y: frame.maxY), in: tabStrip)
+        RunLoop.main.perform { [weak self] in
+            MainActor.assumeIsolated {
+                guard let self, let frame = self.tabStripLayout.frame(of: id) else { return }
+                self.tabMenu(for: id).popUp(positioning: nil, at: NSPoint(x: frame.minX, y: frame.maxY), in: self.tabStrip)
+            }
         }
     }
 
