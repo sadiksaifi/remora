@@ -168,10 +168,16 @@ final class ConnectionCellView: NSTableCellView {
                 state: tab.state, hasWaitingRequest: tab.needsAttention, control: tab.control, isRecording: isRecording)
             title =
                 switch indicator {
-                case .needsAttention where tab.state == .connected: "Needs Attention"
+                case .needsAttention:
+                    // A waiting sheet is the news, unless the state's own title already names what waits.
+                    switch tab.state {
+                    case .awaitingCredentials, .awaitingTrust: tab.state.statusTitle
+                    case .disconnected(let reason) where reason?.isFailure == true: tab.state.statusTitle
+                    default: "Needs Attention"
+                    }
                 case .agentInControl, .agentPaused: tab.control.agentStatus(tab.agentName) ?? tab.state.statusTitle
                 case .recording: "Recording"
-                case .needsAttention, .connecting, .disconnected, .none: tab.state.statusTitle
+                case .connecting, .disconnected, .none: tab.state.statusTitle
                 }
             mark =
                 switch (indicator, indicator.symbolName) {
