@@ -91,9 +91,7 @@ private struct GeneralPane: View {
             Section("Keyboard") {
                 Toggle(isOn: $captureShortcuts) {
                     Text(Self.captureShortcutsTitle)
-                    Text(
-                        "While a session tab is active, shortcuts like Command-Tab and Command-Space go to the remote computer. Command-Q, Control-Command-F, and the Control-Option-Command tab and capture shortcuts stay on this Mac."
-                    )
+                    Text("While a session tab is active, shortcuts like Command-Tab and Command-Space go to the remote computer.")
                 }
                 // The form shows the label beside the switch; this puts it on the switch itself.
                 .accessibilityLabel(Self.captureShortcutsTitle)
@@ -108,7 +106,7 @@ private struct GeneralPane: View {
                 }
                 .disabled(!captureShortcuts)
             }
-            Section {
+            Section("Key Presses") {
                 Toggle(isOn: $showKeyPresses) {
                     Text(Self.keyPressesTitle)
                     Text("Typed text, including passwords, appears on screen and in recordings.")
@@ -317,7 +315,7 @@ private struct CommandLinePane: View {
                 }
             }
             AgentSkillSection()
-            Section {
+            Section("Pointer") {
                 Toggle(isOn: $showAgentPointer) {
                     Text(Self.pointerTitle)
                     Text("It never appears in screenshots.")
@@ -345,11 +343,6 @@ private struct AgentSkillSection: View {
 
     var body: some View {
         Section {
-            LabeledContent {
-            } label: {
-                Text("Agent skill")
-                Text("Teaches AI agents to use the \(AppIdentity.current.commandName) command.")
-            }
             ForEach(AgentSkill.Folder.allCases, id: \.self) { folder in
                 let link = skill.link(in: folder)
                 LabeledContent {
@@ -376,6 +369,11 @@ private struct AgentSkillSection: View {
                 }
             }
             .accessibilityAction { otherAgentsExpanded.toggle() }
+        } header: {
+            Text("Agent Skill")
+        } footer: {
+            Text("Teaches AI agents to use the \(AppIdentity.current.commandName) command.")
+                .foregroundStyle(.secondary)
         }
         // The command line, Finder or another app may change a skills folder while the pane is open.
         .task { repeat { refresh() } while (try? await Task.sleep(for: .seconds(1))) != nil }
