@@ -107,7 +107,7 @@ final class ConnectionsViewController: NSViewController, NSTableViewDataSource, 
 
     @objc func newConnection(_ sender: Any?) {
         presentEditor(
-            title: "New Connection", for: Connection(name: "", host: "", username: ""), password: "", identifiesVNCServer: true)
+            title: "New Connection", for: Connection(name: "", host: "", username: ""), password: "", isBlank: true)
     }
 
     /// Opens each target in a tab, or shows its tab. From the context menu it applies only
@@ -393,7 +393,9 @@ final class ConnectionsViewController: NSViewController, NSTableViewDataSource, 
     }
 
     /// Saves the connection, then its password. Safe to retry after a partial failure.
-    private func save(_ draft: Connection, password: String, original: Connection, originalPassword: String, isNew: Bool) {
+    /// Returns the saved connection, or nil after showing why it was not saved.
+    @discardableResult
+    private func save(_ draft: Connection, password: String, original: Connection, originalPassword: String, isNew: Bool) -> Connection? {
         var connection = draft
         do {
             if let current = connectionStore.connections.first(where: { $0.id == connection.id }) {
@@ -412,11 +414,12 @@ final class ConnectionsViewController: NSViewController, NSTableViewDataSource, 
             }
         } catch {
             showAlert("Couldn’t Save Connection", error: error, on: editorController?.view.window ?? hostWindow)
-            return
+            return nil
         }
         sessionTabs.update(connection)
         dismissEditor()
         select(id: connection.id)
+        return connection
     }
 
     private func deleteConnections(ids: Set<UUID>) {
@@ -433,19 +436,26 @@ final class ConnectionsViewController: NSViewController, NSTableViewDataSource, 
     // MARK: Presentation
 
     /// Only a new connection identifies its VNC server. A duplicate keeps the mode it copied.
-    private func presentEditor(title: String, for connection: Connection, password: String, identifiesVNCServer: Bool = false) {
+    /// - Parameter isBlank: A connection made from nothing. Its sheet detects a Mac and offers Connect.
+    private func presentEditor(title: String, for connection: Connection, password: String, isBlank: Bool = false) {
         guard editorController == nil else { return }
         let isNew = !connectionStore.connections.contains { $0.id == connection.id }
         let editor = ConnectionEditor(
             title: title,
             connection: connection,
             password: password,
-            identifyVNCServer: identifiesVNCServer
+            identifyVNCServer: isBlank
                 ? { @Sendable host, port in await VNCServerProbe.mode(host: host, port: port) } : nil,
             onCancel: { [weak self] in self?.dismissEditor() },
             onSave: { [weak self] draft, editedPassword in
                 self?.save(draft, password: editedPassword, original: connection, originalPassword: password, isNew: isNew)
-            }
+            },
+            onConnect: isBlank
+                ? { [weak self] draft, editedPassword in
+                    guard let self, let saved = save(draft, password: editedPassword, original: connection, originalPassword: password, isNew: isNew)
+                    else { return }
+                    open([saved])
+                } : nil
         )
         let controller = NSHostingController(rootView: editor)
         controller.sizingOptions = .preferredContentSize

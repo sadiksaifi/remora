@@ -9,6 +9,7 @@ struct ConnectionEditor: View {
     private let originalPassword: String
     private let onCancel: () -> Void
     private let onSave: (Connection, String) -> Void
+    private let onConnect: ((Connection, String) -> Void)?
     private let identifyVNCServer: (@Sendable (String, Int) async -> VNCMode?)?
 
     @State private var kind: Connection.Kind
@@ -57,13 +58,15 @@ struct ConnectionEditor: View {
 
     /// With `identifyVNCServer`, the editor reads a VNC server's greeting and picks Apple mode for a Mac.
     /// Pass it only for a new connection, so a saved or copied mode never changes behind the user's back.
+    /// With `onConnect`, the sheet adds a Connect button, which is then the default instead of Save.
     init(
         title: String,
         connection: Connection,
         password: String,
         identifyVNCServer: (@Sendable (String, Int) async -> VNCMode?)? = nil,
         onCancel: @escaping () -> Void,
-        onSave: @escaping (Connection, String) -> Void
+        onSave: @escaping (Connection, String) -> Void,
+        onConnect: ((Connection, String) -> Void)? = nil
     ) {
         self.title = title
         original = connection
@@ -71,6 +74,7 @@ struct ConnectionEditor: View {
         self.identifyVNCServer = identifyVNCServer
         self.onCancel = onCancel
         self.onSave = onSave
+        self.onConnect = onConnect
         _kind = State(initialValue: connection.kind)
         _name = State(initialValue: connection.name)
         _host = State(initialValue: connection.host)
@@ -169,6 +173,10 @@ struct ConnectionEditor: View {
                 .padding(.top, 20)
             Form {
                 Section {
+                    TextField("Name", text: $name, prompt: Text(trimmedHost.isEmpty ? "Optional" : trimmedHost))
+                        .accessibilityIdentifier("editorName")
+                }
+                Section {
                     Picker("Protocol", selection: $kind) {
                         ForEach([Connection.Kind.rdp, .vnc], id: \.self) { kind in
                             Text(kind.title).tag(kind)
@@ -214,11 +222,11 @@ struct ConnectionEditor: View {
                 } header: {
                     Text("Account")
                 } footer: {
-                    if removesSavedPassword {
-                        Label("Changing the protocol clears the password.", systemImage: "exclamationmark.triangle.fill")
-                            .foregroundStyle(.secondary)
-                            .accessibilityIdentifier("editorPasswordRemoved")
-                    } else {
+                    VStack(alignment: .leading, spacing: 4) {
+                        if removesSavedPassword {
+                            Label("Changing the protocol clears the password.", systemImage: "exclamationmark.triangle.fill")
+                                .accessibilityIdentifier("editorPasswordRemoved")
+                        }
                         Text(
                             kind == .vnc
                                 ? "Some VNC servers ask only for a password. Remora saves the password in your keychain."
@@ -298,13 +306,6 @@ struct ConnectionEditor: View {
                         }
                     }
                 }
-                Section {
-                    TextField("Name", text: $name, prompt: Text(trimmedHost.isEmpty ? "Optional" : trimmedHost))
-                        .accessibilityIdentifier("editorName")
-                } footer: {
-                    Text("Shown in the connections list.")
-                        .foregroundStyle(.secondary)
-                }
             }
             .formStyle(.grouped)
             .scrollDisabled(true)
@@ -315,16 +316,22 @@ struct ConnectionEditor: View {
                 Button("Cancel", role: .cancel, action: onCancel)
                     .keyboardShortcut(.cancelAction)
                     .accessibilityIdentifier("editorCancel")
-                Button("Save", action: save)
-                    .keyboardShortcut(.defaultAction)
+                Button("Save") { submit(to: onSave) }
+                    .keyboardShortcut(onConnect == nil ? .defaultAction : nil)
                     .accessibilityIdentifier("editorSave")
                     .disabled(draft == nil)
+                if let onConnect {
+                    Button("Connect") { submit(to: onConnect) }
+                        .keyboardShortcut(.defaultAction)
+                        .accessibilityIdentifier("editorConnect")
+                        .disabled(draft == nil)
+                }
             }
             .controlSize(.large)
             .padding([.horizontal, .bottom], 20)
         }
         .frame(width: 460)
-        // The protocol control comes first, but typing starts in Host.
+        // The optional name comes first, but typing starts in Host.
         .onAppear { focusedField = .host }
         .task(id: serverToIdentify) { await identify(serverToIdentify) }
     }
@@ -386,9 +393,9 @@ struct ConnectionEditor: View {
         return connection
     }
 
-    private func save() {
+    private func submit(to receive: (Connection, String) -> Void) {
         guard let draft else { return }
-        onSave(draft, password)
+        receive(draft, password)
     }
 }
 
@@ -403,6 +410,5 @@ struct ValidationMessage: View {
     var body: some View {
         Label(text, systemImage: "exclamationmark.circle.fill")
             .foregroundStyle(.red)
-            .font(.callout)
     }
 }
