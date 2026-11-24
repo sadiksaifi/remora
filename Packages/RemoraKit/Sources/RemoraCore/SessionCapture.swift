@@ -91,6 +91,14 @@ public enum RecordingState: Sendable, Equatable {
     case finishing
     case failed(CaptureFailure)
 
+    /// True while the session records or finishes writing a recording.
+    public var isWriting: Bool {
+        switch self {
+        case .recording, .finishing: true
+        case .idle, .failed: false
+        }
+    }
+
     public func elapsed(at uptime: TimeInterval = ProcessInfo.processInfo.systemUptime) -> TimeInterval? {
         guard case .recording(let start) = self else { return nil }
         return max(0, uptime - start)

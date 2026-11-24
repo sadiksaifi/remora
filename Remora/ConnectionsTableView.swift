@@ -1,10 +1,13 @@
 import AppKit
 
-/// Inset connection table that tracks the row under the pointer and connects on Return.
+/// Inset connection table that shows the action button of the row under the pointer and connects on Return.
 @MainActor
 final class ConnectionsTableView: NSTableView {
     var onReturn: (() -> Void)?
-    private(set) var hoveredRow = -1
+    /// The row whose action button shows: the one under the pointer, and none while several rows are selected.
+    var actionRow: Int { selectedRowIndexes.count > 1 ? -1 : hoveredRow }
+    private var hoveredRow = -1
+    private var shownActionRow = -1
     private var hoverArea: NSTrackingArea?
 
     override func updateTrackingAreas() {
@@ -70,7 +73,7 @@ final class ConnectionsTableView: NSTableView {
         }
     }
 
-    /// Recomputes the hovered row from the current pointer location, for example after a reload.
+    /// Recomputes the action row from the pointer location and the selection, for example after a reload.
     func updateHover() {
         guard let window, window.isVisible else {
             setHoveredRow(-1)
@@ -85,10 +88,12 @@ final class ConnectionsTableView: NSTableView {
     }
 
     private func setHoveredRow(_ row: Int) {
-        guard row != hoveredRow else { return }
-        cellView(atRow: hoveredRow)?.isHovered = false
         hoveredRow = row
-        cellView(atRow: row)?.isHovered = true
+        let actionRow = actionRow
+        guard actionRow != shownActionRow else { return }
+        cellView(atRow: shownActionRow)?.showsAction = false
+        shownActionRow = actionRow
+        cellView(atRow: actionRow)?.showsAction = true
     }
 
     private func cellView(atRow row: Int) -> ConnectionCellView? {

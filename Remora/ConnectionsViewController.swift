@@ -39,7 +39,7 @@ final class ConnectionsViewController: NSViewController, NSTableViewDataSource, 
         tableView.addTableColumn(column)
         tableView.headerView = nil
         tableView.style = .inset
-        tableView.rowHeight = 44
+        tableView.rowHeight = 52
         tableView.columnAutoresizingStyle = .uniformColumnAutoresizingStyle
         tableView.allowsMultipleSelection = true
         tableView.dataSource = self
@@ -177,7 +177,7 @@ final class ConnectionsViewController: NSViewController, NSTableViewDataSource, 
         open([rows[row]])
     }
 
-    /// The hover button reads Disconnect for a live session and Connect otherwise.
+    /// The action button reads Disconnect for a live session and Connect otherwise.
     @objc private func actionButtonClicked(_ sender: NSButton) {
         let row = tableView.row(for: sender)
         guard row >= 0, row < rows.count else { return }
@@ -217,11 +217,18 @@ final class ConnectionsViewController: NSViewController, NSTableViewDataSource, 
         let cell =
             tableView.makeView(withIdentifier: ConnectionCellView.identifier, owner: self)
             as? ConnectionCellView ?? makeCell()
+        let id = rows[row].id
         cell.configure(
-            with: rows[row], session: sessionTabs.states[rows[row].id],
-            hovered: row == self.tableView.hoveredRow
+            with: rows[row], tab: sessionTabs.tabs.first { $0.id == id },
+            isRecording: sessionTabs.session(for: id)?.capture.recordingState.isWriting == true,
+            showsAction: row == self.tableView.actionRow
         )
         return cell
+    }
+
+    /// Several selected rows show no action button.
+    func tableViewSelectionDidChange(_ notification: Notification) {
+        tableView.updateHover()
     }
 
     func tableView(_ tableView: NSTableView, typeSelectStringFor tableColumn: NSTableColumn?, row: Int) -> String? {
@@ -318,7 +325,8 @@ final class ConnectionsViewController: NSViewController, NSTableViewDataSource, 
 
     private func observeSessions() {
         withObservationTracking {
-            _ = sessionTabs.states
+            // A row shows its session's one status, which a recording is part of.
+            for tab in sessionTabs.tabs { _ = sessionTabs.session(for: tab.id)?.capture.recordingState }
         } onChange: { [weak self] in
             Task { @MainActor [weak self] in
                 self?.reconfigureRows()
@@ -502,8 +510,8 @@ struct EmptyStateView: View {
             } description: {
                 Text("Add a computer to connect to it.")
             } actions: {
-                Button("Add Connection", action: addConnection)
-                    .accessibilityIdentifier("addConnection")
+                Button("New Connection", action: addConnection)
+                    .accessibilityIdentifier("newConnection")
             }
         case .noResults(let query):
             ContentUnavailableView.search(text: query)
