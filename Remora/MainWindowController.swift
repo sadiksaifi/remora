@@ -19,6 +19,8 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
     /// Below this window width the capture group leaves the toolbar and the agent button keeps only its icon.
     /// The capture commands stay in the More menu.
     private static let compactWidth: CGFloat = 640
+    /// Whether the toolbar last showed its compact set of controls.
+    private var shownCompact = false
     /// Narrower than the search field's minimum, so the toolbar shows the collapsed search button.
     private static let collapsedSearchWidth: CGFloat = 30
     private static let expandedSearchWidth: CGFloat = 240
@@ -59,7 +61,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
         currentPage = connectionsViewController
         tabStrip = NSHostingView(rootView: SessionTabStrip(tabs: sessionTabs, layout: tabStripLayout))
         tabStripWidth = tabStrip.widthAnchor.constraint(
-            lessThanOrEqualToConstant: SessionTabStrip.idealWidth(forTabCount: 1)
+            lessThanOrEqualToConstant: SessionTabStrip.idealTabWidth
         )
         searchWidth = searchToolbarItem.searchField.widthAnchor.constraint(equalToConstant: Self.collapsedSearchWidth)
         let size = NSSize(width: 960, height: 640)
@@ -73,7 +75,6 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
             defer: false
         )
         window.title = "Connections"
-        window.minSize = NSSize(width: 480, height: 320)
         window.isReleasedWhenClosed = false
         // Sessions are tabs inside this one window. Native tabs are separate windows, so window
         // managers such as AeroSpace, yabai and Rectangle would see one window per session.
@@ -95,6 +96,8 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
         toolbar.allowsDisplayModeCustomization = false
         window.toolbar = toolbar
         window.toolbarStyle = .unified
+        // 480 x 320 with the 52 pt toolbar. The toolbar adds its height to a frame minimum when it attaches.
+        window.contentMinSize = NSSize(width: 480, height: 268)
         // Place the window only once the toolbar has its height. A frame restored earlier grows
         // when the toolbar attaches, and Zoom then treats the pre-toolbar frame as the user's size.
         window.center()
@@ -168,7 +171,6 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
         currentPage = page
         window?.contentView?.layoutSubtreeIfNeeded()
         updateChrome()
-        observeRecording()
         if let session = page as? SessionViewController {
             session.didShow()
         } else {
@@ -226,8 +228,11 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
         guard let window else { return }
         let tabs = sessionTabs.tabs
         let session = sessionTabs.selectedSession
-        tabsToolbarItem.isHidden = tabs.isEmpty
-        connectionsToolbarItem.isHidden = tabs.isEmpty
+        shownCompact = isCompact
+        // A compact toolbar has no room for the tabs beside the open search field.
+        let searchTakesTabs = isCompact && session == nil && searchWidth.constant == Self.expandedSearchWidth
+        tabsToolbarItem.isHidden = tabs.isEmpty || searchTakesTabs
+        connectionsToolbarItem.isHidden = tabs.isEmpty || searchTakesTabs
         // A lone shown tab is its pill alone, without the track.
         tabsToolbarItem.isBordered = tabs.count != 1 || session == nil
         connectionsButton.state = session == nil ? .on : .off
@@ -238,7 +243,10 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
         window.titleVisibility = tabs.isEmpty ? .visible : .hidden
         let shown = tabs.first { $0.id == sessionTabs.selection }
         window.title = shown.map { tab in tab.display.map { "\(tab.title) – \($0)" } ?? tab.title } ?? "Connections"
-        tabStripWidth.constant = SessionTabStrip.idealWidth(forTabCount: tabs.count)
+        // In a compact toolbar the tabs beside the shown one keep only their icon.
+        let restingAsIcons = isCompact && session != nil
+        tabStrip.rootView.isCompact = restingAsIcons
+        tabStripWidth.constant = SessionTabStrip.idealWidth(forTabCount: tabs.count, restingAsIcons: restingAsIcons)
         for item in tabMenuItems {
             if item.isSeparatorItem {
                 item.isHidden = tabs.isEmpty
@@ -336,6 +344,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
         select(nil)
         guard currentPage === connectionsViewController else { return }
         searchWidth.constant = Self.expandedSearchWidth
+        updateChrome()
         searchToolbarItem.beginSearchInteraction()
     }
 
@@ -651,6 +660,12 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
         return true
     }
 
+    /// Opens a tab's menu under the tab, for VoiceOver.
+    private func showTabMenu(forTab id: UUID) {
+        guard let frame = tabStripLayout.frame(of: id) else { return }
+        tabMenu(for: id).popUp(positioning: nil, at: NSPoint(x: frame.minX, y: frame.maxY), in: tabStrip)
+    }
+
     /// A tab's menu holds what a tab that is not showing may need: the agent control items, Stop Recording and
     /// Disconnect where they apply, and Close Tab. Everything else is in the shown session's More menu.
     private func tabMenu(for id: UUID) -> NSMenu {
@@ -684,9 +699,12 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
     /// Keeps the field open while a filter is active on the connections list.
     private func updateSearchWidth() {
         let field = searchToolbarItem.searchField
-        searchWidth.constant =
+        let width =
             field.stringValue.isEmpty && field.currentEditor() == nil
             ? Self.collapsedSearchWidth : Self.expandedSearchWidth
+        guard width != searchWidth.constant else { return }
+        searchWidth.constant = width
+        updateChrome()
     }
 
     /// Clears the search and closes the field when the page changes.
@@ -697,6 +715,13 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
         connectionsViewController.searchText = ""
         if editing { searchToolbarItem.endSearchInteraction() }
         updateSearchWidth()
+    }
+
+    /// Escape in the empty search field closes it. With text in it, the field clears the text first.
+    func control(_ control: NSControl, textView: NSTextView, doCommandBy selector: Selector) -> Bool {
+        guard selector == #selector(NSResponder.cancelOperation(_:)), control.stringValue.isEmpty else { return false }
+        window?.makeFirstResponder(connectionsViewController.initialFirstResponder)
+        return true
     }
 
     func controlTextDidBeginEditing(_ notification: Notification) {
@@ -750,7 +775,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
 
     /// Crossing `compactWidth` changes which controls the toolbar holds.
     func windowDidResize(_ notification: Notification) {
-        if captureToolbarItem.isHidden != (sessionTabs.selectedSession == nil || isCompact) { updateChrome() }
+        if isCompact != shownCompact { updateChrome() }
     }
 
     // MARK: Toolbar
@@ -764,7 +789,8 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
             onStopRecording: { [weak self] id in
                 guard let session = self?.sessionTabs.session(for: id) else { return }
                 Task { await session.stopRecording() }
-            }
+            },
+            onShowMenu: { [weak self] id in self?.showTabMenu(forTab: id) }
         )
         tabStrip.sizingOptions = []
         tabStrip.safeAreaRegions = []

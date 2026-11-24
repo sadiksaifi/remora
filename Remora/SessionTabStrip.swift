@@ -3,8 +3,9 @@ import SwiftUI
 
 /// The session tabs at the leading end of the toolbar. The toolbar draws the glass capsule around this view,
 /// which is the track. The shown tab sits on a raised pill. The window controller removes the track around
-/// a lone shown tab and limits the strip's width to `idealWidth(forTabCount:)`.
+/// a lone shown tab and limits the strip's width to `idealWidth(forTabCount:restingAsIcons:)`.
 /// Tabs share the width. When titles no longer fit, resting tabs show only their icon, and past that the strip scrolls.
+/// In a compact toolbar the resting tabs beside the shown tab show only their icon from the start.
 struct SessionTabStrip: View {
     static let idealTabWidth: CGFloat = 220
     static let minimumTabWidth: CGFloat = 76
@@ -16,8 +17,8 @@ struct SessionTabStrip: View {
     private static let fadeWidth: CGFloat = 24
     fileprivate nonisolated static let coordinateSpace = "SessionTabStrip"
 
-    static func idealWidth(forTabCount count: Int) -> CGFloat {
-        CGFloat(max(1, count)) * idealTabWidth
+    static func idealWidth(forTabCount count: Int, restingAsIcons: Bool) -> CGFloat {
+        restingAsIcons ? idealTabWidth + CGFloat(max(0, count - 1)) * iconTabWidth : CGFloat(max(1, count)) * idealTabWidth
     }
 
     /// The shown tab between icon-only tabs, with one of them visible beside it.
@@ -25,9 +26,12 @@ struct SessionTabStrip: View {
 
     let tabs: SessionTabs
     let layout: SessionTabStripLayout
+    /// True in a narrow window, where the resting tabs leave the width to the shown tab.
+    var isCompact = false
     var onSelect: (UUID) -> Void = { _ in }
     var onClose: (UUID) -> Void = { _ in }
     var onStopRecording: (UUID) -> Void = { _ in }
+    var onShowMenu: (UUID) -> Void = { _ in }
     @State private var hovered: UUID?
     @State private var clipped = ClippedEdges()
 
@@ -35,7 +39,7 @@ struct SessionTabStrip: View {
         GeometryReader { proxy in
             let widths = TabWidths(
                 available: proxy.size.width, count: tabs.tabs.count,
-                hasSelection: tabs.tabs.contains { $0.id == tabs.selection })
+                hasSelection: tabs.tabs.contains { $0.id == tabs.selection }, isCompact: isCompact)
             ScrollViewReader { scroller in
                 ScrollView(.horizontal) {
                     HStack(spacing: 0) {
@@ -52,6 +56,7 @@ struct SessionTabStrip: View {
                                 onSelect: { onSelect(tab.id) },
                                 onClose: { onClose(tab.id) },
                                 onStopRecording: { onStopRecording(tab.id) },
+                                onShowMenu: { onShowMenu(tab.id) },
                                 onHover: { inside in
                                     if inside { hovered = tab.id } else if hovered == tab.id { hovered = nil }
                                 }
@@ -79,6 +84,10 @@ struct SessionTabStrip: View {
                 .onChange(of: tabs.selection) { _, selection in
                     guard let selection else { return }
                     withAnimation { scroller.scrollTo(selection) }
+                }
+                // A narrower strip may start to scroll, and the shown tab stays in view.
+                .onChange(of: proxy.size.width) {
+                    if let selection = tabs.selection { scroller.scrollTo(selection) }
                 }
             }
         }
@@ -112,17 +121,21 @@ struct SessionTabStrip: View {
 /// How wide the shown tab and each resting tab are in a strip of a given width.
 /// Tabs are equal while each has `selectedMinimumTabWidth`. Below that the shown tab keeps that width and the
 /// resting tabs share the rest, down to `iconTabWidth`. Then the shown tab gives way, down to `selectedTabWidthAmongIcons`.
+/// A compact strip starts at that last step: icon-wide resting tabs, and the rest for the shown tab.
 @MainActor
 struct TabWidths {
     let selected: CGFloat
     let resting: CGFloat
 
-    init(available: CGFloat, count: Int, hasSelection: Bool) {
+    init(available: CGFloat, count: Int, hasSelection: Bool, isCompact: Bool) {
         let count = CGFloat(max(1, count))
         let equal = available / count
         if !hasSelection {
             selected = 0
             resting = max(SessionTabStrip.iconTabWidth, equal)
+        } else if isCompact, count > 1 {
+            resting = SessionTabStrip.iconTabWidth
+            selected = max(SessionTabStrip.selectedTabWidthAmongIcons, available - SessionTabStrip.iconTabWidth * (count - 1))
         } else if count == 1 || equal >= SessionTabStrip.selectedMinimumTabWidth {
             selected = max(SessionTabStrip.selectedTabWidthAmongIcons, equal)
             resting = equal
@@ -154,6 +167,7 @@ private struct SessionTabView: View {
     let onSelect: () -> Void
     let onClose: () -> Void
     let onStopRecording: () -> Void
+    let onShowMenu: () -> Void
     let onHover: (Bool) -> Void
     @State private var closeHovered = false
 
@@ -199,6 +213,8 @@ private struct SessionTabView: View {
         .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
         .accessibilityAction(.default, onSelect)
         .accessibilityIdentifier("tab-\(tab.id.uuidString)")
+        // VoiceOver's route to the menu that a secondary click opens.
+        .accessibilityAction(.showMenu, onShowMenu)
         .accessibilityAction(named: "Close Tab", onClose)
         .accessibilityActions {
             if recording == .recording {
@@ -324,4 +340,6 @@ final class SessionTabStripLayout {
     func tab(at point: CGPoint) -> UUID? {
         frames.first { $0.value.contains(point) }?.key
     }
+
+    func frame(of tab: UUID) -> CGRect? { frames[tab] }
 }
