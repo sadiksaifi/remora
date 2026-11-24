@@ -243,6 +243,7 @@ extension SessionState {
         }
     }
 
+    /// A failure reads differently from an ordinary ending, like its icon does.
     var statusTitle: String {
         switch self {
         case .connecting: "Connecting…"
@@ -250,7 +251,7 @@ extension SessionState {
         case .awaitingTrust: "Waiting for Approval"
         case .connected: "Connected"
         case .reconnecting: "Reconnecting…"
-        case .disconnected: "Disconnected"
+        case .disconnected(let reason): reason?.isFailure == true ? "Connection Failed" : "Disconnected"
         }
     }
 }
