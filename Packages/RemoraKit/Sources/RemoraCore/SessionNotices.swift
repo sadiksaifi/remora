@@ -60,8 +60,9 @@ public struct SessionNotices: Sendable {
         if isRecording { show(.recording, at: now) }
     }
 
-    /// The person clicked or typed while the agent holds the input. Without the notice the screen would look frozen.
-    public mutating func inputBlocked(at now: ContinuousClock.Instant) {
+    /// Shows the agent's notice again while the agent holds the input. The person clicked or typed, and without
+    /// the notice the screen would look frozen. Or another program took the input, and the notice names it.
+    public mutating func repeatAgentNotice(at now: ContinuousClock.Instant) {
         if isPresenting, control == .active { show(.agentInControl, at: now) }
     }
 

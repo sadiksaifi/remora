@@ -431,7 +431,6 @@ final class SessionViewController: NSViewController {
     var canDisconnect: Bool { session != nil }
     var canReconnect: Bool { session == nil && !closed }
     var isConnected: Bool { state == .connected }
-    var hasKeyboard: Bool { control.allowsHumanInput && state == .connected && view.window?.firstResponder === desktopView }
 
     func disconnectSession() {
         finishCapture()

@@ -8,7 +8,6 @@ final class SessionOverlays: NSObject {
     private weak var desktop: RemoteDesktopView?
     private var reconnectingView: NSHostingView<SessionStatusView>?
     private var permissionView: NSView?
-    private weak var confirmationView: NSView?
     private var displaySwitchView: NSView?
     private var displaySwitchTask: Task<Void, Never>?
     /// Full screen has no toolbar to carry the agent's and the recording's state, so a capsule reports each change.
@@ -53,6 +52,8 @@ final class SessionOverlays: NSObject {
     func controlChanged(_ control: SessionControl, agent: String, announcesStop: Bool) {
         if !control.allowsHumanInput { removePermissionBanner() }
         let changed = control.state != self.control || agent != self.agent
+        // Another program that takes the input from the first is news in full screen, like the first one was.
+        if control.state == .active, self.control == .active, agent != self.agent { notices.repeatAgentNotice(at: .now) }
         self.control = control.state
         self.agent = agent
         guard changed else { return }
@@ -93,7 +94,7 @@ final class SessionOverlays: NSObject {
 
     /// The person clicked or typed while the agent holds the input.
     func inputBlocked() {
-        notices.inputBlocked(at: .now)
+        notices.repeatAgentNotice(at: .now)
         showNotice()
     }
 
@@ -123,22 +124,29 @@ final class SessionOverlays: NSObject {
         // A notice that is still fading leaves at once, so two never show together.
         fadingNotice?.removeFromSuperview()
         fadingNotice = nil
-        // The permission banner sits in the same place and returns when the notice ends.
-        permissionView?.isHidden = notice != nil
         guard let notice, let desktop else {
-            // The last notice fades. One that gives way to the next leaves at once.
+            // The revealed toolbar shows the same state, so its notice leaves at once.
+            guard let old, !notices.isCovered else {
+                old?.removeFromSuperview()
+                permissionView?.isHidden = false
+                return
+            }
+            // A notice whose time is up fades. The permission banner sits in the same place and returns after it.
             fadingNotice = old
             Task { @MainActor [weak self] in
                 await NSAnimationContext.runAnimationGroup {
                     $0.duration = 0.3
-                    old?.animator().alphaValue = 0
+                    old.animator().alphaValue = 0
                 }
-                old?.removeFromSuperview()
-                if let self, fadingNotice === old { fadingNotice = nil }
+                old.removeFromSuperview()
+                guard let self, fadingNotice === old else { return }
+                fadingNotice = nil
+                permissionView?.isHidden = false
             }
             return
         }
         old?.removeFromSuperview()
+        permissionView?.isHidden = true
         let view = NSHostingView(
             rootView: SessionNoticeCapsule(
                 notice: notice, agent: agent,
@@ -175,6 +183,7 @@ final class SessionOverlays: NSObject {
             banner.centerXAnchor.constraint(equalTo: desktop.centerXAnchor),
             banner.widthAnchor.constraint(lessThanOrEqualTo: desktop.widthAnchor, constant: -24),
         ])
+        banner.isHidden = noticeView != nil
         permissionView = banner
     }
 
@@ -242,21 +251,20 @@ final class SessionOverlays: NSObject {
             userInfo: [.announcement: status.message, .priority: NSAccessibilityPriorityLevel.high.rawValue])
     }
 
-    /// Shows a short note at the bottom of the desktop. Capture notes play the system screen capture sound,
-    /// like macOS screenshots do.
+    /// Shows a short note at the bottom of the session's page. Capture notes play the system screen capture
+    /// sound, like macOS screenshots do.
     func confirm(_ message: String, systemImage: String = "checkmark.circle.fill", sound: Bool = true) {
-        confirmationView?.removeFromSuperview()
         guard let desktop else { return }
-        confirmationView = Self.showNote(message, systemImage: systemImage, in: desktop)
+        Self.showNote(message, systemImage: systemImage, in: desktop.superview ?? desktop)
         if sound, UserDefaults.standard.object(forKey: "com.apple.sound.uiaudio.enabled") as? Bool ?? true {
             Self.captureSound?.play()
         }
     }
 
-    /// Shows a short note at the bottom of `host` and tells VoiceOver. The note is not part of any capture,
-    /// ignores the pointer and leaves by itself.
-    @discardableResult
-    static func showNote(_ message: String, systemImage: String = "checkmark.circle.fill", in host: NSView) -> NSView {
+    /// Shows a short note at the bottom of `host` in place of the note that shows there, and tells VoiceOver.
+    /// The note is not part of any capture, ignores the pointer and leaves by itself.
+    static func showNote(_ message: String, systemImage: String = "checkmark.circle.fill", in host: NSView) {
+        for case let shown as PassthroughHostingView<CaptureConfirmation> in host.subviews { shown.removeFromSuperview() }
         let note = PassthroughHostingView(rootView: CaptureConfirmation(message: message, systemImage: systemImage))
         note.sizingOptions = .intrinsicContentSize
         note.translatesAutoresizingMaskIntoConstraints = false
@@ -276,7 +284,6 @@ final class SessionOverlays: NSObject {
             }
             note?.removeFromSuperview()
         }
-        return note
     }
 
     private static let captureSound = NSSound(

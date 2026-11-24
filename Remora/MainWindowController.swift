@@ -24,6 +24,8 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
     /// Narrower than the search field's minimum, so the toolbar shows the collapsed search button.
     private static let collapsedSearchWidth: CGFloat = 30
     private static let expandedSearchWidth: CGFloat = 240
+    /// A filter that is not being edited keeps this width in a compact toolbar, beside the tabs.
+    private static let compactFilterWidth: CGFloat = 96
 
     private let sessionTabs: SessionTabs
     private let connectionsViewController: ConnectionsViewController
@@ -46,7 +48,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
     private let moreToolbarItem = NSMenuToolbarItem(itemIdentifier: MainWindowController.moreItem)
     private var callout: NSPopover?
     /// The control state the toolbar last showed, which tells an agent's change from a change of tab.
-    private var shownControl: (tab: UUID, state: SessionControl.State)?
+    private var shownControl: (tab: UUID, state: SessionControl.State, agent: String)?
     /// Window > a separator and tab 1 through 9, hidden past the last tab.
     private(set) var tabMenuItems: [NSMenuItem] = []
     private var eventMonitor: Any?
@@ -229,10 +231,11 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
         let tabs = sessionTabs.tabs
         let session = sessionTabs.selectedSession
         shownCompact = isCompact
-        // A compact toolbar has no room for the tabs beside the open search field.
-        let searchTakesTabs = isCompact && session == nil && searchWidth.constant == Self.expandedSearchWidth
-        tabsToolbarItem.isHidden = tabs.isEmpty || searchTakesTabs
-        connectionsToolbarItem.isHidden = tabs.isEmpty || searchTakesTabs
+        searchWidth.constant = searchFieldWidth
+        // A compact toolbar has no room for the tabs or the title beside the search field while it has the keyboard.
+        let searchTakesToolbar = isCompact && session == nil && searchWidth.constant == Self.expandedSearchWidth
+        tabsToolbarItem.isHidden = tabs.isEmpty || searchTakesToolbar
+        connectionsToolbarItem.isHidden = tabs.isEmpty || searchTakesToolbar
         // A lone shown tab is its pill alone, without the track.
         tabsToolbarItem.isBordered = tabs.count != 1 || session == nil
         connectionsButton.state = session == nil ? .on : .off
@@ -240,7 +243,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
         captureToolbarItem.isHidden = session == nil || isCompact
         updateAgentControl()
         reportToolbarReveal()
-        window.titleVisibility = tabs.isEmpty ? .visible : .hidden
+        window.titleVisibility = tabs.isEmpty && !searchTakesToolbar ? .visible : .hidden
         let shown = tabs.first { $0.id == sessionTabs.selection }
         window.title = shown.map { tab in tab.display.map { "\(tab.title) – \($0)" } ?? tab.title } ?? "Connections"
         // In a compact toolbar the tabs beside the shown one keep only their icon.
@@ -296,11 +299,12 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
             action: { [weak session] in session?.toggleAgentControl() }
         )
         let previous = shownControl
-        shownControl = session.map { ($0.connection.id, state) }
+        shownControl = session.map { ($0.connection.id, state, $0.agentName) }
         guard let session, let previous, previous.tab == session.connection.id else { return closeCallout() }
-        guard previous.state != state else { return }
+        guard previous.state != state || (state == .active && previous.agent != session.agentName) else { return }
         switch (previous.state, state) {
-        case (.idle, .active): showCallout(.inControl, agent: session.agentName)
+        // A second program that takes the input is news as well.
+        case (.idle, .active), (.active, .active): showCallout(.inControl, agent: session.agentName)
         case (.active, .stopped), (.paused, .stopped): showCallout(.stopped, agent: session.agentName)
         default: closeCallout()
         }
@@ -343,9 +347,10 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
     @objc func startSearch(_ sender: Any?) {
         select(nil)
         guard currentPage === connectionsViewController else { return }
-        searchWidth.constant = Self.expandedSearchWidth
-        updateChrome()
+        // A session hides the search item. The toolbar puts the field back in the window in its next layout.
+        window?.layoutIfNeeded()
         searchToolbarItem.beginSearchInteraction()
+        updateSearchWidth()
     }
 
     @objc func showHome(_ sender: Any?) {
@@ -399,10 +404,16 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
     @objc func showNextDisplay(_ sender: Any?) { sessionTabs.selectedSession?.selectAdjacentDisplay(forward: true) }
     @objc func showPreviousDisplay(_ sender: Any?) { sessionTabs.selectedSession?.selectAdjacentDisplay(forward: false) }
 
+    /// True while the shown session's desktop receives the keys. The session reports each change, which
+    /// covers a window that is no longer the key window and an agent that holds the input.
+    private var hasKeyboard: Bool {
+        sessionTabs.tabs.first { $0.id == sessionTabs.selection }?.isKeyboardCaptured == true
+    }
+
     /// Gives the shown session's desktop the keyboard, or takes it back.
     @objc func toggleKeyboardCapture(_ sender: Any?) {
         guard let session = sessionTabs.selectedSession else { return }
-        if session.hasKeyboard { session.releaseKeyboardCapture() } else { session.focusDesktop() }
+        if hasKeyboard { session.releaseKeyboardCapture() } else { session.focusDesktop() }
     }
 
     /// A global setting, so every session shows the same state.
@@ -518,7 +529,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
         case #selector(closeTab(_:)):
             return session != nil && canChangeTabs
         case #selector(toggleKeyboardCapture(_:)):
-            menuItem.state = session?.hasKeyboard == true ? .on : .off
+            menuItem.state = hasKeyboard ? .on : .off
             return session?.isConnected == true
         case #selector(chooseDisplay(_:)), #selector(showNextDisplay(_:)), #selector(showPreviousDisplay(_:)):
             return sessionTabs.selectedSession?.canChooseDisplay == true
@@ -538,7 +549,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
         case #selector(sendCtrlAltDelete(_:)):
             return session?.isConnected == true && session?.control.allowsHumanInput == true
         case #selector(releaseKeyboardCapture(_:)):
-            return session?.hasKeyboard ?? false
+            return hasKeyboard
         case #selector(takeScreenshot(_:)), #selector(copyScreenshot(_:)):
             return canCapture(session)
         case #selector(toggleRecording(_:)):
@@ -563,7 +574,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
     /// desktop has the keyboard.
     private func updateCaptureControls() {
         let session = sessionTabs.selectedSession
-        captureControl.setSelected(session?.hasKeyboard == true, forSegment: 0)
+        captureControl.setSelected(hasKeyboard, forSegment: 0)
         captureControl.setSelected(false, forSegment: 1)
         captureControl.setSelected(false, forSegment: 2)
         captureControl.setEnabled(session?.isConnected == true, forSegment: 0)
@@ -594,7 +605,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
             session?.captureScreenshot(copyToClipboard: false)
         } else if sender.isSelected(forSegment: 2) {
             session?.toggleRecording()
-        } else if sender.isSelected(forSegment: 0) != (session?.hasKeyboard == true) {
+        } else if sender.isSelected(forSegment: 0) != hasKeyboard {
             toggleKeyboardCapture(sender)
         }
         updateCaptureControls()
@@ -660,10 +671,13 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
         return true
     }
 
-    /// Opens a tab's menu under the tab, for VoiceOver.
+    /// Opens a tab's menu under the tab, for VoiceOver. The menu opens on the next turn of the main loop,
+    /// because `popUp` returns only when the menu closes and the accessibility action must return before that.
     private func showTabMenu(forTab id: UUID) {
-        guard let frame = tabStripLayout.frame(of: id) else { return }
-        tabMenu(for: id).popUp(positioning: nil, at: NSPoint(x: frame.minX, y: frame.maxY), in: tabStrip)
+        Task { @MainActor [weak self] in
+            guard let self, let frame = tabStripLayout.frame(of: id) else { return }
+            tabMenu(for: id).popUp(positioning: nil, at: NSPoint(x: frame.minX, y: frame.maxY), in: tabStrip)
+        }
     }
 
     /// A tab's menu holds what a tab that is not showing may need: the agent control items, Stop Recording and
@@ -696,15 +710,17 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
         connectionsViewController.searchText = sender.stringValue
     }
 
-    /// Keeps the field open while a filter is active on the connections list.
-    private func updateSearchWidth() {
+    /// The field is a button until it has the keyboard or a filter. In a compact toolbar a filter that is
+    /// not being edited keeps a short field, so the tabs fit beside it.
+    private var searchFieldWidth: CGFloat {
         let field = searchToolbarItem.searchField
-        let width =
-            field.stringValue.isEmpty && field.currentEditor() == nil
-            ? Self.collapsedSearchWidth : Self.expandedSearchWidth
-        guard width != searchWidth.constant else { return }
-        searchWidth.constant = width
-        updateChrome()
+        if field.currentEditor() != nil { return Self.expandedSearchWidth }
+        if field.stringValue.isEmpty { return Self.collapsedSearchWidth }
+        return isCompact ? Self.compactFilterWidth : Self.expandedSearchWidth
+    }
+
+    private func updateSearchWidth() {
+        if searchFieldWidth != searchWidth.constant { updateChrome() }
     }
 
     /// Clears the search and closes the field when the page changes.
@@ -722,10 +738,6 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
         guard selector == #selector(NSResponder.cancelOperation(_:)), control.stringValue.isEmpty else { return false }
         window?.makeFirstResponder(connectionsViewController.initialFirstResponder)
         return true
-    }
-
-    func controlTextDidBeginEditing(_ notification: Notification) {
-        updateSearchWidth()
     }
 
     func controlTextDidEndEditing(_ notification: Notification) {
@@ -769,9 +781,12 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
     func windowDidEndLiveResize(_ notification: Notification) { sessionTabs.selectedSession?.windowDidChangeSize() }
     func windowDidChangeScreen(_ notification: Notification) { sessionTabs.selectedSession?.windowDidChangeSize() }
 
-    /// AppKit sends this after every event. The capture group's state follows the keyboard focus and the
-    /// remote display, which change without a notification of their own.
-    func windowDidUpdate(_ notification: Notification) { updateCaptureControls() }
+    /// AppKit sends this after every event. The search field takes the keyboard and the remote display
+    /// changes without a notification of their own.
+    func windowDidUpdate(_ notification: Notification) {
+        updateSearchWidth()
+        updateCaptureControls()
+    }
 
     /// Crossing `compactWidth` changes which controls the toolbar holds.
     func windowDidResize(_ notification: Notification) {
@@ -843,8 +858,9 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
         field.target = self
         field.action = #selector(searchChanged(_:))
         field.delegate = self
-        searchToolbarItem.preferredWidthForSearchField = Self.expandedSearchWidth
-        // Below the item's own constraints, so the field still expands while it has the keyboard.
+        // The item keeps an open field at least this wide for as long as the search lasts, so it is the short
+        // width. `searchWidth` widens the field past it.
+        searchToolbarItem.preferredWidthForSearchField = Self.compactFilterWidth
         searchWidth.priority = .init(500)
         searchWidth.isActive = true
 

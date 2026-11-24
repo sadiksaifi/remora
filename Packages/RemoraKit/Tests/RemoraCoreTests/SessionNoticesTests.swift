@@ -14,7 +14,7 @@ private func presenting() -> SessionNotices {
 @Test func aWindowedSessionShowsNoNotice() {
     var notices = SessionNotices()
     notices.update(control: .active, isRecording: true, at: start)
-    notices.inputBlocked(at: after(1))
+    notices.repeatAgentNotice(at: after(1))
     #expect(notices.visible == nil)
     #expect(notices.deadline == nil)
 }
@@ -103,18 +103,30 @@ private func presenting() -> SessionNotices {
     var notices = presenting()
     notices.update(control: .active, isRecording: false, at: start)
     notices.advance(to: after(4))
-    notices.inputBlocked(at: after(10))
+    notices.repeatAgentNotice(at: after(10))
     #expect(notices.visible == .agentInControl)
     #expect(notices.deadline == after(14))
-    notices.inputBlocked(at: after(12))
+    notices.repeatAgentNotice(at: after(12))
     #expect(notices.deadline == after(16))
+}
+
+@Test func aRepeatedAgentNoticeLetsTheRecordingNoticeWaitAgain() {
+    var notices = presenting()
+    notices.update(control: .active, isRecording: true, at: start)
+    notices.advance(to: after(4))
+    #expect(notices.visible == .recording)
+    notices.repeatAgentNotice(at: after(5))
+    #expect(notices.visible == .agentInControl)
+    notices.advance(to: after(9))
+    #expect(notices.visible == .recording)
+    #expect(notices.deadline == after(13))
 }
 
 @Test func inputThatIsNotBlockedByAnAgentShowsNothing() {
     var notices = presenting()
     notices.update(control: .paused, isRecording: false, at: start)
     notices.advance(to: after(4))
-    notices.inputBlocked(at: after(5))
+    notices.repeatAgentNotice(at: after(5))
     #expect(notices.visible == nil)
 }
 
