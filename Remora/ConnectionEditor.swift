@@ -166,7 +166,8 @@ struct ConnectionEditor: View {
         connecting = Task {
             let mode = await identifyVNCServer(server.host, server.port)
             guard !Task.isCancelled else { return }
-            detectedMac = mode == .apple ? server : nil
+            // The editor's own check of this address may have ended first. A Mac that either check found stands.
+            if mode == .apple { detectedMac = server }
             identifiedServer = server
             connecting = nil
             submit(to: open)
