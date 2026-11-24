@@ -7,7 +7,8 @@ import SwiftUI
 final class SessionOverlays: NSObject {
     private weak var desktop: RemoteDesktopView?
     private var reconnectingView: NSHostingView<SessionStatusView>?
-    private var permissionView: NSView?
+    private var permissionBanner: NSViewController?
+    private var permissionView: NSView? { permissionBanner?.view }
     private var displaySwitchView: NSView?
     private var displaySwitchTask: Task<Void, Never>?
     /// Full screen has no toolbar to carry the agent's and the recording's state, so a capsule reports each change.
@@ -116,6 +117,12 @@ final class SessionOverlays: NSObject {
             }
         }
         let notice = notices.visible
+        // The revealed toolbar shows the same state, so a notice that is fading under it leaves at once too.
+        if notices.isCovered, let fading = fadingNotice {
+            fading.removeFromSuperview()
+            fadingNotice = nil
+            permissionView?.isHidden = false
+        }
         guard notice != shownNotice || (notice != nil && agent != shownAgent) else { return }
         shownNotice = notice
         shownAgent = agent
@@ -170,12 +177,13 @@ final class SessionOverlays: NSObject {
         guard SystemShortcutCapture.isEnabled, !SystemShortcutCapture.isTrusted,
             !UserDefaults.standard.bool(forKey: Self.dismissedPermissionKey), let desktop
         else { return }
-        let banner = NSHostingView(
+        let controller = WrappingHostingController(
             rootView: ShortcutPermissionBanner(
                 onOpenSettings: { [weak self] in self?.openSettings() },
                 onDismiss: { [weak self] in self?.dismissPermission() }
             ))
-        banner.sizingOptions = .intrinsicContentSize
+        controller.sizingOptions = .intrinsicContentSize
+        let banner = controller.view
         banner.translatesAutoresizingMaskIntoConstraints = false
         desktop.addSubview(banner)
         NSLayoutConstraint.activate([
@@ -184,7 +192,7 @@ final class SessionOverlays: NSObject {
             banner.widthAnchor.constraint(lessThanOrEqualTo: desktop.widthAnchor, constant: -24),
         ])
         banner.isHidden = noticeView != nil
-        permissionView = banner
+        permissionBanner = controller
     }
 
     func reconnecting(attempt: Int) {
@@ -303,11 +311,26 @@ final class SessionOverlays: NSObject {
 
     private func removePermissionBanner() {
         permissionView?.removeFromSuperview()
-        permissionView = nil
+        permissionBanner = nil
     }
 
     @objc private func appBecameActive() {
         if SystemShortcutCapture.isTrusted { removePermissionBanner() }
+    }
+}
+
+/// Hosts content that wraps. The ideal size counts one line of text, so the height follows the width that
+/// the constraints give the view.
+private final class WrappingHostingController<Content: View>: NSHostingController<Content> {
+    private lazy var height = view.heightAnchor.constraint(equalToConstant: 0)
+
+    override func viewDidLayout() {
+        super.viewDidLayout()
+        guard view.bounds.width > 0 else { return }
+        let fitting = sizeThatFits(in: NSSize(width: view.bounds.width, height: .greatestFiniteMagnitude)).height
+        guard height.constant != fitting || !height.isActive else { return }
+        height.constant = fitting
+        height.isActive = true
     }
 }
 

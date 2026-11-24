@@ -194,6 +194,22 @@ struct ShortcutPermissionBanner: View {
     let onDismiss: () -> Void
 
     var body: some View {
+        // A window too narrow for one row puts the buttons under the text.
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 14) {
+                message(maxWidth: 440)
+                buttons
+            }
+            VStack(alignment: .trailing, spacing: 10) {
+                message(maxWidth: .infinity)
+                buttons
+            }
+        }
+        .padding(16)
+        .glassEffect(.regular, in: .rect(cornerRadius: 22))
+    }
+
+    private func message(maxWidth: CGFloat) -> some View {
         HStack(alignment: .center, spacing: 14) {
             Image(systemName: "command")
                 .font(.system(size: 22, weight: .medium))
@@ -205,20 +221,21 @@ struct ShortcutPermissionBanner: View {
                     .font(.headline)
                 Text("Shortcuts like Command-Tab and Command-Space stay on this Mac until you allow Remora to control this Mac in Privacy & Security settings.")
                     .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
             }
-            .frame(maxWidth: 440, alignment: .leading)
-            HStack(spacing: 8) {
-                Button("Not Now", action: onDismiss)
-                    .accessibilityIdentifier("shortcutPermissionNotNow")
-                Button("Open System Settings", action: onOpenSettings)
-                    .buttonStyle(.borderedProminent)
-                    .accessibilityIdentifier("shortcutPermissionOpenSettings")
-            }
-            .fixedSize()
+            .fixedSize(horizontal: false, vertical: true)
+            .frame(maxWidth: maxWidth, alignment: .leading)
         }
-        .padding(16)
-        .glassEffect(.regular, in: .rect(cornerRadius: 22))
+    }
+
+    private var buttons: some View {
+        HStack(spacing: 8) {
+            Button("Not Now", action: onDismiss)
+                .accessibilityIdentifier("shortcutPermissionNotNow")
+            Button("Open System Settings", action: onOpenSettings)
+                .buttonStyle(.borderedProminent)
+                .accessibilityIdentifier("shortcutPermissionOpenSettings")
+        }
+        .fixedSize()
     }
 }
 
