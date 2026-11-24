@@ -48,6 +48,7 @@ final class ConnectionCellView: NSTableCellView {
         spinner.controlSize = .small
         statusField.font = .preferredFont(forTextStyle: .callout)
         statusField.textColor = .secondaryLabelColor
+        statusField.lineBreakMode = .byTruncatingTail
         status.setViews([statusView, spinner, statusField], in: .leading)
         status.orientation = .horizontal
         status.alignment = .centerY
@@ -57,6 +58,8 @@ final class ConnectionCellView: NSTableCellView {
             view.setContentCompressionResistancePriority(.required, for: .horizontal)
             view.setContentHuggingPriority(.required, for: .horizontal)
         }
+        // An agent's name has no length limit. The status gives way once the connection's name is this narrow.
+        statusField.setContentCompressionResistancePriority(.defaultHigh, for: .horizontal)
 
         actionButton.controlSize = .small
         actionButton.setContentCompressionResistancePriority(.required, for: .horizontal)
@@ -78,6 +81,7 @@ final class ConnectionCellView: NSTableCellView {
         addSubview(row)
         NSLayoutConstraint.activate([
             iconView.widthAnchor.constraint(equalToConstant: 28),
+            labels.widthAnchor.constraint(greaterThanOrEqualToConstant: 96),
             row.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 4),
             row.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -6),
             row.centerYAnchor.constraint(equalTo: centerYAnchor),
