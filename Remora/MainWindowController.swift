@@ -167,6 +167,8 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
     private func showPage(_ selection: UUID?) {
         let page: NSViewController = selection.flatMap { sessionTabs.session(for: $0) } ?? connectionsViewController
         guard page !== currentPage else { return }
+        // An open More menu was built for the page that is leaving.
+        moreToolbarItem.menu.cancelTrackingWithoutAnimation()
         resetSearch()
         currentPage.view.removeFromSuperview()
         if page.parent == nil { pageViewController.addChild(page) }
