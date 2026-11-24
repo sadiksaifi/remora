@@ -155,7 +155,7 @@ struct TabWidths {
 }
 
 /// One tab: its status icon, its title centered in the space that remains, and a close button on the shown tab
-/// and on the tab under the pointer. A narrow resting tab drops the close button, then the title.
+/// and on the tab under the pointer. A tab that shows only its icon has no close button.
 private struct SessionTabView: View {
     let tab: SessionTabs.Tab
     /// Read directly, so a hidden tab shows its recording too.
@@ -172,20 +172,20 @@ private struct SessionTabView: View {
     @State private var closeHovered = false
 
     var body: some View {
-        HStack(spacing: 6) {
-            SessionIndicatorIcon(indicator: tab.indicator(recording: recording))
-            if showsTitle {
-                Text(tab.title)
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-                    .frame(maxWidth: .infinity)
-                if hasCloseButton { closeButton }
+        Group {
+            if isSelected || isHovered || !showsTitle {
+                content(hasCloseButton: showsTitle)
+            } else {
+                // A resting tab keeps the close button's place free while its whole title fits beside it, so
+                // the title stays put when the pointer arrives. A longer title takes that place.
+                ViewThatFits(in: .horizontal) {
+                    content(hasCloseButton: true)
+                    content(hasCloseButton: false)
+                }
             }
         }
         .font(.system(size: NSFont.systemFontSize))
         .foregroundStyle(isSelected || isHovered ? .primary : .secondary)
-        .padding(.leading, showsTitle ? (hasCloseButton ? 12 : 10) : 0)
-        .padding(.trailing, showsTitle ? (hasCloseButton ? 6 : 10) : 0)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background {
             // Plain fills: glass on the toolbar's glass capsule stacks two bright rims.
@@ -225,8 +225,21 @@ private struct SessionTabView: View {
     }
 
     private var showsTitle: Bool { isSelected || width >= SessionTabStrip.minimumTabWidth }
-    /// A resting tab narrower than this has no room for the button beside a readable title.
-    private var hasCloseButton: Bool { isSelected || width >= SessionTabStrip.selectedMinimumTabWidth }
+
+    private func content(hasCloseButton: Bool) -> some View {
+        HStack(spacing: 6) {
+            SessionIndicatorIcon(indicator: tab.indicator(recording: recording))
+            if showsTitle {
+                Text(tab.title)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                    .frame(maxWidth: .infinity)
+                if hasCloseButton { closeButton }
+            }
+        }
+        .padding(.leading, showsTitle ? (hasCloseButton ? 12 : 10) : 0)
+        .padding(.trailing, showsTitle ? (hasCloseButton ? 6 : 10) : 0)
+    }
 
     /// A bare cross. It takes a round fill only while the pointer is over it.
     private var closeButton: some View {
