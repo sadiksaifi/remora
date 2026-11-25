@@ -215,13 +215,17 @@ private final class DesktopSink: FrameSink, @unchecked Sendable {
 
     let before = Date()
     var saveFailure: (any Error)?
+    var dateOnceConnected: Date?
     connection.onState = { state in
         do { try store.sessionChanged(to: state, id: saved.id) } catch { saveFailure = error }
+        if state == .connected { dateOnceConnected = lastConnected() }
     }
     #expect(try await connection.run { connection.session.disconnect() } == .cancelledByUser)
     #expect(saveFailure == nil)
-    let connectedAt = try #require(lastConnected())
+    // The date is in place as soon as the session connects, and the session's end leaves it alone.
+    let connectedAt = try #require(dateOnceConnected)
     #expect(connectedAt >= before)
+    #expect(lastConnected() == connectedAt)
 
     #expect(try await refusedAttempt() == [.connecting, .disconnected(.connectionRefused)])
     #expect(lastConnected() == connectedAt)
