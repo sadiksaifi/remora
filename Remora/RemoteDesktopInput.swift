@@ -39,6 +39,7 @@ final class RemoteDesktopInput: NSObject {
     /// True while a menu of this app is open: one in the menu bar, a tab's, the toolbar's or the menu bar icon's.
     /// The menu takes every key until it closes. The desktop keeps the focus, so capture stays reported.
     private var menuIsOpen = false
+    private var capsLockAtMenuOpen = false
     private var keyboard = KeyboardState()
     private var keyboardRouting = KeyboardRouting()
     private var scroll = ScrollAccumulator()
@@ -94,15 +95,18 @@ final class RemoteDesktopInput: NSObject {
     /// The menu gets the keys from here on, so the remote computer would never see a held key released.
     @objc private func menuOpened(_ notification: Notification) {
         menuIsOpen = true
+        capsLockAtMenuOpen = NSEvent.modifierFlags.contains(.capsLock)
         guard hasFocus else { return }
         shortcutCapture.stop()
         keyboardRouting = KeyboardRouting()
         releaseKeys()
     }
 
+    /// Synchronizing sets all three locks of the remote computer, and this Mac knows only its Caps Lock.
+    /// The remote Num Lock and Scroll Lock stay as they are unless Caps Lock changed while the menu had the keys.
     @objc private func menuClosed(_ notification: Notification) {
         menuIsOpen = false
-        focusIn()
+        focusIn(synchronizingLocks: NSEvent.modifierFlags.contains(.capsLock) != capsLockAtMenuOpen)
     }
 
     func setConnected(_ connected: Bool) {
@@ -111,13 +115,13 @@ final class RemoteDesktopInput: NSObject {
         if connected { focusIn() }
     }
 
-    func focusIn() {
+    func focusIn(synchronizingLocks: Bool = true) {
         captureMayHaveChanged()
         guard canCapture else { return }
-        becameFirstResponder()
+        becameFirstResponder(synchronizingLocks: synchronizingLocks)
     }
 
-    func becameFirstResponder() {
+    func becameFirstResponder(synchronizingLocks: Bool = true) {
         captureMayHaveChanged()
         guard allowsHumanInput, connected, input != nil, view?.window?.isKeyWindow == true, NSApp.isActive else { return }
         shortcutCapture.start()
@@ -128,7 +132,7 @@ final class RemoteDesktopInput: NSObject {
             view?.onFocus?()
         }
         resetKeyboard()
-        input?.synchronize(locks: NSEvent.modifierFlags.contains(.capsLock) ? [.capsLock] : [])
+        if synchronizingLocks { input?.synchronize(locks: NSEvent.modifierFlags.contains(.capsLock) ? [.capsLock] : []) }
     }
 
     func focusOut() {
