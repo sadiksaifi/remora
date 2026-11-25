@@ -849,7 +849,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
 
         // A button and not an image item, so it can draw pressed while the connections list shows
         // and carry an accessibility identifier.
-        connectionsButton.image = NSImage(systemSymbolName: "plus", accessibilityDescription: "Show Connections")
+        connectionsButton.image = NSImage(systemSymbolName: "list.bullet", accessibilityDescription: "Show Connections")
         connectionsButton.bezelStyle = .toolbar
         connectionsButton.setButtonType(.pushOnPushOff)
         connectionsButton.target = self
@@ -900,7 +900,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
 
     func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
         [
-            Self.tabsItem, .space, Self.connectionsItem, .flexibleSpace,
+            Self.connectionsItem, Self.tabsItem, .flexibleSpace,
             Self.agentItem, Self.captureItem, Self.searchItem, Self.moreItem,
         ]
     }
