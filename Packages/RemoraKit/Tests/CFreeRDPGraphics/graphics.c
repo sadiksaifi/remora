@@ -29,7 +29,7 @@ struct RMGraphics {
     RdpgfxClientContext gfx;
     void *surfaces[MAX_SURFACES];
     void *cache[MAX_CACHE_SLOTS];
-    unsigned refreshes;
+    unsigned refreshes, pauses;
     UINT32 frame;
     RMGraphics *next;
 };
@@ -55,9 +55,9 @@ static BOOL refresh_rect(rdpContext *context, BYTE count, const RECTANGLE_16 *ar
 }
 
 static BOOL suppress_output(rdpContext *context, BYTE allow, const RECTANGLE_16 *area) {
-    (void)context;
-    (void)allow;
     (void)area;
+    if (!allow)
+        graphics_of(context)->pauses++;
     return TRUE;
 }
 
@@ -319,3 +319,5 @@ unsigned rm_graphics_refreshes(RMGraphics *g) {
     (void)rm_display_process(rm_rdp_display(g->session));
     return g->refreshes;
 }
+
+unsigned rm_graphics_pauses(RMGraphics *g) { return g->pauses; }
