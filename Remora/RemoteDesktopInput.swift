@@ -202,9 +202,17 @@ final class RemoteDesktopInput: NSObject {
     private func receiveKeyboardEvent(_ event: NSEvent) -> Bool {
         guard hasFocus, !menuIsOpen, let input else { return false }
         // AppKit can open a menu without posting that tracking began, as it does after an accessibility press on
-        // an item that has a submenu. The run loop is in its tracking mode while a menu is open, so a key pressed
-        // then stays local. A release still goes to the remote computer, which may hold that key down.
-        if event.type == .keyDown, RunLoop.main.currentMode == .eventTracking { return false }
+        // an item that has a submenu. The run loop is in its tracking mode while a menu is open, and while the
+        // mouse holds a control. A key pressed then stays local. A modifier change releases what the remote
+        // computer holds and starts the keyboard again, as a menu's opening and closing do, so the remote
+        // computer gets no modifier press. A key release takes the usual route.
+        if event.type != .keyUp, RunLoop.main.currentMode == .eventTracking {
+            guard event.type == .flagsChanged else { return false }
+            keyboardRouting = KeyboardRouting()
+            releaseKeys()
+            resetKeyboard()
+            return false
+        }
         switch keyboardRouting.route(
             keyCode: event.keyCode, rawFlags: event.modifierFlags.rawValue,
             event: event.type == .flagsChanged
