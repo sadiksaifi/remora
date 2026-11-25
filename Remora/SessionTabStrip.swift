@@ -4,7 +4,8 @@ import SwiftUI
 /// The session tabs at the leading end of the toolbar, drawn like Safari's compact tabs: a flat track with
 /// no glass, and the shown tab on a Liquid Glass pill. A lone shown tab is its pill alone, without the track.
 /// The window controller limits the strip's width to `idealWidth(forTabCount:restingAsIcons:)`.
-/// Tabs share the width. When titles no longer fit, resting tabs show only their icon, and past that the strip scrolls.
+/// Tabs share the width. When titles no longer fit, resting tabs show only their icon and the track is only as
+/// wide as its tabs. Past that the strip scrolls.
 /// In a compact toolbar the resting tabs beside the shown tab show only their icon from the start.
 struct SessionTabStrip: View {
     static let idealTabWidth: CGFloat = 220
@@ -100,18 +101,20 @@ struct SessionTabStrip: View {
                     scroller.scrollTo(ScrollTarget(tab: selection))
                 }
             }
-        }
-        // Tabs that scroll out fade at the edge they leave by, so a cut-off tab reads as more tabs.
-        .mask {
-            HStack(spacing: 0) {
-                LinearGradient(colors: [.clear, .black], startPoint: .leading, endPoint: .trailing)
-                    .frame(width: clipped.leading ? Self.fadeWidth : 0)
-                Color.black
-                LinearGradient(colors: [.black, .clear], startPoint: .leading, endPoint: .trailing)
-                    .frame(width: clipped.trailing ? Self.fadeWidth : 0)
+            // Icon-only tabs do not fill the strip, and the track ends where they end.
+            .frame(width: min(proxy.size.width, widths.total(count: tabs.tabs.count) + 2 * Self.trackInset))
+            // Tabs that scroll out fade at the edge they leave by, so a cut-off tab reads as more tabs.
+            .mask {
+                HStack(spacing: 0) {
+                    LinearGradient(colors: [.clear, .black], startPoint: .leading, endPoint: .trailing)
+                        .frame(width: clipped.leading ? Self.fadeWidth : 0)
+                    Color.black
+                    LinearGradient(colors: [.black, .clear], startPoint: .leading, endPoint: .trailing)
+                        .frame(width: clipped.trailing ? Self.fadeWidth : 0)
+                }
             }
+            .background { if showsTrack { Capsule().fill(.fill.tertiary) } }
         }
-        .background { if showsTrack { Capsule().fill(.fill.tertiary) } }
         .coordinateSpace(.named(Self.coordinateSpace))
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Tabs")
@@ -139,9 +142,9 @@ struct SessionTabStrip: View {
 
 /// How wide the shown tab and each resting tab are in a strip of a given width.
 /// Tabs are equal while each has `selectedMinimumTabWidth`. Below that the shown tab keeps that width and the
-/// resting tabs share the rest, while their titles fit. Without titles the resting tabs give the shown tab their
-/// width, up to `idealTabWidth`, and keep `iconTabWidth`. Then the shown tab gives way, down to `selectedTabWidthAmongIcons`.
-/// A compact strip starts at that last step: icon-wide resting tabs, and the rest for the shown tab.
+/// resting tabs share the rest, while their titles fit. Without titles a resting tab is `iconTabWidth` wide, and
+/// the shown tab takes the rest, from `idealTabWidth` down to `selectedTabWidthAmongIcons`.
+/// A compact strip starts at that last step.
 @MainActor
 struct TabWidths {
     let selected: CGFloat
@@ -150,26 +153,21 @@ struct TabWidths {
     init(available: CGFloat, count: Int, hasSelection: Bool, isCompact: Bool) {
         let count = CGFloat(max(1, count))
         let equal = available / count
+        let shared = (available - SessionTabStrip.selectedMinimumTabWidth) / max(1, count - 1)
         if !hasSelection {
             selected = 0
-            resting = max(SessionTabStrip.iconTabWidth, equal)
-        } else if isCompact, count > 1 {
-            resting = SessionTabStrip.iconTabWidth
-            selected = max(SessionTabStrip.selectedTabWidthAmongIcons, available - SessionTabStrip.iconTabWidth * (count - 1))
-        } else if count == 1 || equal >= SessionTabStrip.selectedMinimumTabWidth {
+            resting = equal >= SessionTabStrip.minimumTabWidth ? equal : SessionTabStrip.iconTabWidth
+        } else if count == 1 || (!isCompact && equal >= SessionTabStrip.selectedMinimumTabWidth) {
             selected = max(SessionTabStrip.selectedTabWidthAmongIcons, equal)
             resting = equal
+        } else if !isCompact, shared >= SessionTabStrip.minimumTabWidth {
+            selected = SessionTabStrip.selectedMinimumTabWidth
+            resting = shared
         } else {
-            let shared = (available - SessionTabStrip.selectedMinimumTabWidth) / (count - 1)
-            if shared >= SessionTabStrip.minimumTabWidth {
-                selected = SessionTabStrip.selectedMinimumTabWidth
-                resting = shared
-            } else {
-                selected = min(
-                    SessionTabStrip.idealTabWidth,
-                    max(SessionTabStrip.selectedTabWidthAmongIcons, available - SessionTabStrip.iconTabWidth * (count - 1)))
-                resting = max(SessionTabStrip.iconTabWidth, (available - selected) / (count - 1))
-            }
+            resting = SessionTabStrip.iconTabWidth
+            selected = min(
+                SessionTabStrip.idealTabWidth,
+                max(SessionTabStrip.selectedTabWidthAmongIcons, available - resting * (count - 1)))
         }
     }
 
@@ -218,14 +216,14 @@ private struct SessionTabView: View {
             if isSelected {
                 Color.clear.glassEffect(.regular, in: .capsule)
             } else if isHovered {
-                // A plain colour: under the strip's fade mask a system fill style draws black.
                 Capsule().fill(Color.primary.opacity(0.07))
             }
         }
         .overlay(alignment: .leading) {
             if showsDivider {
+                // Plain colours here and in the fills below: under the strip's fade mask a system style draws black.
                 Rectangle()
-                    .fill(.separator)
+                    .fill(Color(nsColor: .separatorColor))
                     .frame(width: 1, height: 16)
             }
         }
@@ -272,7 +270,7 @@ private struct SessionTabView: View {
             Image(systemName: "xmark")
                 .font(.system(size: 9, weight: .semibold))
                 .frame(width: 20, height: 20)
-                .background { if closeHovered { Circle().fill(.quaternary) } }
+                .background { if closeHovered { Circle().fill(Color.primary.opacity(0.1)) } }
                 .contentShape(Circle())
         }
         .buttonStyle(.plain)
