@@ -62,8 +62,13 @@ public struct SessionNotices: Sendable {
 
     /// Shows the agent's notice again while the agent holds the input. The person clicked or typed, and without
     /// the notice the screen would look frozen. Or another program took the input, and the notice names it.
-    public mutating func repeatAgentNotice(at now: ContinuousClock.Instant) {
-        if isPresenting, control == .active { show(.agentInControl, at: now) }
+    /// True when the notice had ended and this brought it back, also under the revealed toolbar.
+    @discardableResult
+    public mutating func repeatAgentNotice(at now: ContinuousClock.Instant) -> Bool {
+        guard isPresenting, control == .active else { return false }
+        let hadEnded = current.map { $0.notice != .agentInControl || now >= $0.until } ?? true
+        show(.agentInControl, at: now)
+        return hadEnded
     }
 
     /// Ends the notice whose time has passed and shows the recording notice that waited for it.

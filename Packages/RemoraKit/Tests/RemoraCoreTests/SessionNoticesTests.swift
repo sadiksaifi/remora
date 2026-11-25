@@ -14,7 +14,8 @@ private func presenting() -> SessionNotices {
 @Test func aWindowedSessionShowsNoNotice() {
     var notices = SessionNotices()
     notices.update(control: .active, isRecording: true, at: start)
-    notices.repeatAgentNotice(at: after(1))
+    let cameBack = notices.repeatAgentNotice(at: after(1))
+    #expect(!cameBack)
     #expect(notices.visible == nil)
     #expect(notices.deadline == nil)
 }
@@ -103,11 +104,27 @@ private func presenting() -> SessionNotices {
     var notices = presenting()
     notices.update(control: .active, isRecording: false, at: start)
     notices.advance(to: after(4))
-    notices.repeatAgentNotice(at: after(10))
+    let first = notices.repeatAgentNotice(at: after(10))
+    #expect(first)
     #expect(notices.visible == .agentInControl)
     #expect(notices.deadline == after(14))
-    notices.repeatAgentNotice(at: after(12))
+    let second = notices.repeatAgentNotice(at: after(12))
+    #expect(!second)
     #expect(notices.deadline == after(16))
+}
+
+@Test func blockedInputUnderTheRevealedToolbarBringsTheNoticeBackOnce() {
+    var notices = presenting()
+    notices.update(control: .active, isRecording: false, at: start)
+    notices.advance(to: after(4))
+    notices.isCovered = true
+    let first = notices.repeatAgentNotice(at: after(10))
+    #expect(first)
+    let second = notices.repeatAgentNotice(at: after(11))
+    #expect(!second)
+    #expect(notices.visible == nil)
+    notices.isCovered = false
+    #expect(notices.visible == .agentInControl)
 }
 
 @Test func aRepeatedAgentNoticeLetsTheRecordingNoticeWaitAgain() {
@@ -126,7 +143,8 @@ private func presenting() -> SessionNotices {
     var notices = presenting()
     notices.update(control: .paused, isRecording: false, at: start)
     notices.advance(to: after(4))
-    notices.repeatAgentNotice(at: after(5))
+    let cameBack = notices.repeatAgentNotice(at: after(5))
+    #expect(!cameBack)
     #expect(notices.visible == nil)
 }
 

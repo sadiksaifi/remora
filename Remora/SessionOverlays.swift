@@ -98,13 +98,11 @@ final class SessionOverlays: NSObject {
 
     /// The person clicked or typed while the agent holds the input.
     func inputBlocked() {
-        let wasVisible = notices.visible == .agentInControl
-        notices.repeatAgentNotice(at: .now)
-        showNotice()
-        // The notice came back, so VoiceOver hears why the input did nothing.
-        if !wasVisible, notices.visible == .agentInControl {
+        // The notice came back, so VoiceOver hears why the input did nothing, also while the toolbar covers the notice.
+        if notices.repeatAgentNotice(at: .now) {
             announce(SessionNotices.Notice.agentInControl.message(agent: agent))
         }
+        showNotice()
     }
 
     private func updateNotices() {
