@@ -348,10 +348,11 @@ private func movieMediaDuration(_ data: Data, range: Range<Int>? = nil) -> Doubl
     while let sample = output.copyNextSampleBuffer() {
         let time = CMSampleBufferGetPresentationTimeStamp(sample).seconds
         if first == nil && time > pillAt + 0.05 { first = CMSampleBufferGetImageBuffer(sample) }
-        // The movie's clock starts after `startedAt`, 29 ms after it once on the CI runner, so the frame that
-        // turning the overlays off wakes is timed no earlier than 0.1 s before `disabledAt`. The last frame
-        // before that time shows the end of the fade.
-        if time < disabledAt - 0.1 { faded = CMSampleBufferGetImageBuffer(sample) }
+        // The movie's clock starts after `startedAt`, 29 ms after it once on the CI runner, so its frames are
+        // timed that much earlier than the test's clock. The fade's last frame is timed 1.25 s before
+        // `disabledAt` and the frame that turning the overlays off wakes is timed at it. The cutoff sits
+        // halfway, so the last frame before it shows the end of the fade.
+        if time < disabledAt - 0.6 { faded = CMSampleBufferGetImageBuffer(sample) }
         disabled = CMSampleBufferGetImageBuffer(sample)  // Finish drains the frame rendered after `configure`.
         times.append(time)
     }
