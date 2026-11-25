@@ -257,10 +257,13 @@ h1 {
     margin: clamp(2.75rem, 6vw, 4.5rem) auto 0;
 }
 
+/* The recording is the Remora window with black outside its rounded corners. The window's corner radius
+   is 36 px of the video's 1800 by 1124. A slightly larger radius, as a share of each side, hides the black
+   at every width. */
 .window video {
     width: 100%;
     height: auto;
-    border-radius: clamp(0.5rem, 1.45vw, 1.15rem);
+    border-radius: 2.11% / 3.38%;
     background: var(--tile);
     box-shadow:
         0 0 0 0.5px light-dark(rgb(0 0 0 / 0.22), rgb(255 255 255 / 0.22)),
@@ -465,8 +468,8 @@ h2 {
     display: none;
 }
 
-/* The screenshot is 1224 px wide and has a transparent margin for the window shadow: 112 px on each
-   side, 76 px above and 147 px below. Negative margins of the same share pull that margin out of the
+/* The screenshot is 1304 px wide and has a transparent margin for the window shadow: 112 px on each
+   side, 76 px above and 148 px below. Negative margins of the same share pull that margin out of the
    layout, so the window itself, not the shadow, meets the tile padding on every side. */
 .tile-agents img {
     --shot: min(100%, 36rem);
@@ -474,7 +477,7 @@ h2 {
     width: var(--shot);
     max-width: none;
     height: auto;
-    margin: calc(-0.0621 * var(--shot)) calc(-0.0915 * var(--shot)) calc(-0.1201 * var(--shot));
+    margin: calc(-0.0583 * var(--shot)) calc(-0.0859 * var(--shot)) calc(-0.1135 * var(--shot));
 }
 
 /* Questions */
@@ -671,8 +674,8 @@ details[open] summary::after {
 
     /* On a phone the window is as wide as the text above it. */
     .tile-agents img {
-        --shot: 122.4%;
-        margin-top: calc(1rem - 0.0621 * var(--shot));
+        --shot: 120.74%;
+        margin-top: calc(1rem - 0.0583 * var(--shot));
     }
 }
 
