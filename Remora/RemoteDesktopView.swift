@@ -148,7 +148,13 @@ final class RemoteDesktopView: NSView {
         ] {
             NotificationCenter.default.addObserver(self, selector: #selector(windowChanged(_:)), name: name, object: window)
         }
-        requestRedraw()
+        // A view that has presented keeps its last picture, so its redraw waits a turn: by then the session knows
+        // the tab is visible and, if it was paused, awaits its redraw, which holds this present.
+        if hasPresented {
+            DispatchQueue.main.async { [weak self] in MainActor.assumeIsolated { self?.requestRedraw() } }
+        } else {
+            requestRedraw()
+        }
     }
 
     override func viewDidChangeBackingProperties() {
