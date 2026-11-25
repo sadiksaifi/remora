@@ -24,7 +24,7 @@ final class RemoteDesktopInput: NSObject {
     var onBlockedInput: (() -> Void)?
     private var connected = false
     private lazy var shortcutCapture = SystemShortcutCapture(
-        isFocused: { [weak self] in self.map { $0.canCapture && !$0.menuHasKeys } ?? false },
+        isFocused: { [weak self] in self.map { $0.canCapture && !$0.menuIsOpen } ?? false },
         receive: { [weak self] event in self?.receiveKeyboardEvent(event) ?? false },
         releaseKeys: { [weak self] in
             guard let self else { return }
@@ -39,9 +39,6 @@ final class RemoteDesktopInput: NSObject {
     /// True while a menu of this app is open: one in the menu bar, a tab's, the toolbar's or the menu bar icon's.
     /// The menu takes every key until it closes. The desktop keeps the focus, so capture stays reported.
     private var menuIsOpen = false
-    /// AppKit can open a menu without posting that tracking began, as it does after an accessibility press on
-    /// an item that has a submenu. The run loop is in its tracking mode while any menu is open.
-    private var menuHasKeys: Bool { menuIsOpen || RunLoop.main.currentMode == .eventTracking }
     /// Caps Lock as the remote computer has it while a menu has the keys: as the menu opened, or as last synchronized.
     private var capsLockSent = false
     /// The keyboard's own Caps Lock. The session's flags follow the last event, and an event that another
@@ -146,7 +143,7 @@ final class RemoteDesktopInput: NSObject {
         }
         resetKeyboard()
         capsLockSent = capsLockIsOn
-        input?.synchronize(locks: NSEvent.modifierFlags.contains(.capsLock) ? [.capsLock] : [])
+        input?.synchronize(locks: capsLockSent ? [.capsLock] : [])
     }
 
     func focusOut() {
@@ -187,7 +184,7 @@ final class RemoteDesktopInput: NSObject {
         // The session's key state misses every event the capture discards, so it can show a released key as down.
         let held = (0..<128 as Range<UInt16>).filter { CGEventSource.keyState(.hidSystemState, key: $0) }
         keyboard.reset(
-            capsLockOn: NSEvent.modifierFlags.contains(.capsLock),
+            capsLockOn: capsLockIsOn,
             rawFlags: UInt(CGEventSource.flagsState(.combinedSessionState).rawValue), heldKeys: Set(held))
     }
 
@@ -203,7 +200,11 @@ final class RemoteDesktopInput: NSObject {
     /// The tap consumes remote events, so AppKit only sees bypass events and local chords.
     /// Both routes use the same eligibility, shortcut policy, and pressed-key state.
     private func receiveKeyboardEvent(_ event: NSEvent) -> Bool {
-        guard hasFocus, !menuHasKeys, let input else { return false }
+        guard hasFocus, !menuIsOpen, let input else { return false }
+        // AppKit can open a menu without posting that tracking began, as it does after an accessibility press on
+        // an item that has a submenu. The run loop is in its tracking mode while a menu is open, so a key pressed
+        // then stays local. A release still goes to the remote computer, which may hold that key down.
+        if event.type == .keyDown, RunLoop.main.currentMode == .eventTracking { return false }
         switch keyboardRouting.route(
             keyCode: event.keyCode, rawFlags: event.modifierFlags.rawValue,
             event: event.type == .flagsChanged
