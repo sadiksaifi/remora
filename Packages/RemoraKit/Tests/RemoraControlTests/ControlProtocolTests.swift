@@ -51,3 +51,34 @@ import Testing
     #expect(throws: ControlFailure.self) { try PasswordInput.decode(Data([0])) }
     #expect(throws: ControlFailure.self) { try PasswordInput.decode(Data([255])) }
 }
+
+/// A regular file never reports its end to `FileHandle.readabilityHandler`, so stdin from `< file` or a here-string once hung.
+@Test func standardInputReadsAPipeAndARegularFileToTheirEnd() async throws {
+    let pipe = Pipe()
+    pipe.fileHandleForWriting.write(Data("[]".utf8))
+    try pipe.fileHandleForWriting.close()
+    #expect(try await StandardInput.read(pipe.fileHandleForReading) == Data("[]".utf8))
+
+    for contents in [Data("[]\n".utf8), Data(), Data(count: 1_048_575)] {
+        #expect(try await StandardInput.read(file(contents)) == contents)
+    }
+    await #expect(throws: ControlFailure(.invalidArgument, "Stdin exceeds the request size limit.")) {
+        try await StandardInput.read(file(Data(count: 1_048_576)))
+    }
+}
+
+@Test func cancellingEndsAStandardInputReadThatNeverFinishes() async throws {
+    let pipe = Pipe()
+    defer { try? pipe.fileHandleForWriting.close() }
+    let read = Task { try await StandardInput.read(pipe.fileHandleForReading) }
+    try await Task.sleep(for: .milliseconds(50))
+    read.cancel()
+    await #expect(throws: ControlFailure(.cancelled, "The command was interrupted.")) { try await read.value }
+}
+
+private func file(_ contents: Data) throws -> FileHandle {
+    let url = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+    try contents.write(to: url)
+    defer { try? FileManager.default.removeItem(at: url) }
+    return try FileHandle(forReadingFrom: url)
+}

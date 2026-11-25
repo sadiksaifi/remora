@@ -32,6 +32,33 @@ public enum PasswordInput {
     }
 }
 
+public enum StandardInput {
+    /// Reads a file to its end and fails at the 1 MiB request size limit.
+    /// A blocking read finds the end of a regular file, which `FileHandle.readabilityHandler` never reports.
+    /// Cancelling the task ends the wait at once, even on a pipe that never closes; the read thread then stays blocked until the process exits.
+    public static func read(_ handle: FileHandle = .standardInput) async throws -> Data {
+        let result = AsyncThrowingStream<Data, any Error> { continuation in
+            Thread.detachNewThread {
+                var data = Data()
+                do {
+                    while let chunk = try handle.read(upToCount: 65_536), !chunk.isEmpty {
+                        data.append(chunk)
+                        guard data.count < 1_048_576 else {
+                            return continuation.finish(throwing: ControlFailure(.invalidArgument, "Stdin exceeds the request size limit."))
+                        }
+                    }
+                } catch {
+                    return continuation.finish(throwing: ControlFailure(.ioFailed, "Could not read stdin."))
+                }
+                continuation.yield(data)
+                continuation.finish()
+            }
+        }
+        for try await data in result { return data }
+        throw ControlFailure(.cancelled, "The command was interrupted.")
+    }
+}
+
 extension ControlRequest {
     public func validateArguments(_ allowed: Set<String>, sessionAllowed: Bool = false) throws {
         guard sessionAllowed || session == nil, Set(arguments.keys).isSubset(of: allowed) else {
