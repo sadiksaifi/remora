@@ -274,3 +274,25 @@ func avc444MatchesFreeRDPByteForByte(chroma: H264Renderer.Layout) throws {
     #expect(desktop.size == DesktopSize(width: 64, height: 48))
     #expect(try draw())
 }
+
+/// A renderer can go away while the GPU still works on its last draw. Metal then releases that draw's Core Video
+/// textures on its completion queue, and they return themselves to the renderer's texture cache, so the cache
+/// must still exist. Without that, this test ends the process with signal 11 within a few hundred renderers.
+@Test func rendererReleasedDuringADrawLeavesItsTexturesAValidCache() throws {
+    var random = SplitMix64(state: 137)
+    let desktop = try MetalDesktop(device: #require(MTLCreateSystemDefaultDevice()))
+    let target = H264Renderer.Target(
+        surface: 1, surfaceWidth: 64, surfaceHeight: 48, originX: 0, originY: 0, visibleWidth: 64, visibleHeight: 48,
+        desktopWidth: 64, desktopHeight: 48)
+    let images = try (0..<4).map { _ in try picture(width: 64, height: 48, using: &random) }
+    for round in 0..<1800 {
+        let renderer = try H264Renderer(desktop: desktop)
+        for image in images {
+            _ = try renderer.draw(
+                target, passes: [.init(layout: .yuv420, image: image, rectangles: [.init(left: 0, top: 0, right: 64, bottom: 48)], convertHeight: 48)])
+        }
+        // The release moves across the moment the GPU completes the draw, in steps of 2 microseconds.
+        let release = DispatchTime.now().uptimeNanoseconds + UInt64(round % 600) * 2000
+        while DispatchTime.now().uptimeNanoseconds < release {}
+    }
+}

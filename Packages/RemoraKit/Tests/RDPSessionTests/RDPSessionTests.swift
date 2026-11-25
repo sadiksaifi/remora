@@ -45,13 +45,20 @@ private final class DesktopSink: FrameSink, @unchecked Sendable {
             try? FileManager.default.removeItem(at: directory)
             throw error
         }
-        session = RDPSession(
+        session = Self.session(port: rm_test_rdp_server_port(server), desktop: desktop, directory: directory)
+    }
+
+    static func session(port: UInt16, desktop: MetalDesktop, directory: URL) -> RDPSession {
+        RDPSession(
             configuration: .init(
-                host: "127.0.0.1", port: rm_test_rdp_server_port(server), username: "synthetic", password: "test-only",
+                host: "127.0.0.1", port: port, username: "synthetic", password: "test-only",
                 desktopSize: .init(width: 320, height: 240), allowsDynamicResize: false),
             frameSink: DesktopSink(desktop: desktop), configurationDirectory: directory.appendingPathComponent("freerdp"),
             failureDiagnosis: .init(inspect: { _, _, _ in .unconfirmed }))
     }
+
+    /// Receives every state the session reports during `run`, as an open tab does.
+    var onState: ((SessionState) -> Void)?
 
     var refreshes: UInt32 { rm_test_rdp_server_refreshes(server) }
 
@@ -63,6 +70,7 @@ private final class DesktopSink: FrameSink, @unchecked Sendable {
             var work: Task<Void, Error>?
             var reason: DisconnectReason?
             for await event in session.events {
+                if case .stateChanged(let state) = event { self.onState?(state) }
                 switch event {
                 case .trustChallenge(let challenge): challenge.responder.respond(.trust)
                 case .stateChanged(.connected):
@@ -168,4 +176,57 @@ private final class DesktopSink: FrameSink, @unchecked Sendable {
     try await Task.sleep(for: .milliseconds(300))
     #expect(connection.refreshes == before)
     #expect(connection.desktop.losses == 1)
+}
+
+/// The Connections list shows when a connection's session last connected, so a session sets that date only when
+/// it reaches the connected state. An attempt that the host refuses leaves the earlier date, or no date, in place.
+@Test @MainActor func onlyASessionThatConnectsSetsTheLastConnectedDate() async throws {
+    let connection = try Connection()
+    defer { connection.close() }
+    let store = try ConnectionStore(fileURL: connection.directory.appendingPathComponent("connections.json"))
+    let saved = RemoraCore.Connection(name: "Test", host: "127.0.0.1", username: "synthetic")
+    try store.add(saved)
+    func lastConnected() -> Date? { store.connections.first?.lastConnected }
+
+    // Nothing listens on this Mac's TCP port 1, so it refuses every connection.
+    let port: UInt16 = 1
+
+    /// One attempt at the refusing port. Every state it reports goes to the store.
+    func refusedAttempt() async throws -> [SessionState] {
+        let session = Connection.session(port: port, desktop: connection.desktop, directory: connection.directory)
+        // An attempt that hangs ends as cancelled, which fails the caller's expectation.
+        let deadline = Task {
+            try await Task.sleep(for: .seconds(20))
+            session.disconnect()
+        }
+        defer { deadline.cancel() }
+        session.connect()
+        var states: [SessionState] = []
+        for await event in session.events {
+            guard case .stateChanged(let state) = event else { continue }
+            states.append(state)
+            try store.sessionChanged(to: state, id: saved.id)
+        }
+        return states
+    }
+
+    #expect(try await refusedAttempt() == [.connecting, .disconnected(.connectionRefused)])
+    #expect(lastConnected() == nil)
+
+    let before = Date()
+    var saveFailure: (any Error)?
+    var dateOnceConnected: Date?
+    connection.onState = { state in
+        do { try store.sessionChanged(to: state, id: saved.id) } catch { saveFailure = error }
+        if state == .connected { dateOnceConnected = lastConnected() }
+    }
+    #expect(try await connection.run { connection.session.disconnect() } == .cancelledByUser)
+    #expect(saveFailure == nil)
+    // The date is in place as soon as the session connects, and the session's end leaves it alone.
+    let connectedAt = try #require(dateOnceConnected)
+    #expect(connectedAt >= before)
+    #expect(lastConnected() == connectedAt)
+
+    #expect(try await refusedAttempt() == [.connecting, .disconnected(.connectionRefused)])
+    #expect(lastConnected() == connectedAt)
 }

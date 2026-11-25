@@ -2,6 +2,7 @@ import AppKit
 import Observation
 import RemoraControl
 import RemoraCore
+import os
 
 /// The open session tabs of the main window, at most one per connection, and which page the window shows:
 /// the connections list (home) or one tab. Views observe it; the main window shows the selected page.
@@ -24,6 +25,8 @@ final class SessionTabs {
     }
 
     @ObservationIgnored var onControlEvent: ((String, SessionViewController, ControlValue?) -> Void)?
+    /// Called when a connected session's last-connected date could not be saved.
+    @ObservationIgnored var onStoreFailure: ((any Error) -> Void)?
     private(set) var tabs: [Tab] = []
     /// The shown tab, or nil while the connections list shows.
     private(set) var selection: UUID?
@@ -91,7 +94,15 @@ final class SessionTabs {
         }
         let session = SessionViewController(
             connection: connection, credentialStore: credentialStore,
-            onStateChange: { [weak self] state in self?.update(id) { $0.state = state } },
+            onStateChange: { [weak self] state in
+                guard let self else { return }
+                update(id) { $0.state = state }
+                do { try connectionStore.sessionChanged(to: state, id: id) } catch {
+                    Logger(subsystem: "com.peblon.remora", category: "Session").error(
+                        "Could not save the last-connected date: \(String(describing: error), privacy: .public)")
+                    onStoreFailure?(error)
+                }
+            },
             onAttentionChange: { [weak self] attention in self?.update(id) { $0.needsAttention = attention } },
             onKeyboardCaptureChange: { [weak self] captured in self?.update(id) { $0.isKeyboardCaptured = captured } },
             onClose: { [weak self] in self?.close(id) },
