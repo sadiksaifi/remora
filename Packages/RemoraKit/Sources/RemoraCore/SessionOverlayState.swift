@@ -66,6 +66,9 @@ public final class SessionOverlayState: @unchecked Sendable {
     public init(clock: @escaping @Sendable () -> TimeInterval = { ProcessInfo.processInfo.systemUptime }) {
         self.clock = clock
     }
+
+    /// The clock's time. A movie starts and stops on it, since it times the frames that these overlays wake.
+    public var now: TimeInterval { clock() }
     deinit { timer?.cancel() }
 
     public func reset() {

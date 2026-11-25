@@ -169,7 +169,7 @@ final class AppleCaptureMovie: CaptureMovie, @unchecked Sendable {
             let cache
         else { throw CaptureFailure.recording("No Metal pixel buffer texture cache.") }
         textureCache = cache
-        origin = ProcessInfo.processInfo.systemUptime
+        origin = overlays?.now ?? ProcessInfo.processInfo.systemUptime
         // Keep the filename reservation until the finished movie atomically replaces it.
         writer = try AVAssetWriter(outputURL: workingURL, fileType: .mov)
         let settings: [String: Any] = [
@@ -225,7 +225,7 @@ final class AppleCaptureMovie: CaptureMovie, @unchecked Sendable {
     }
 
     func finish() async -> Result<URL, CaptureFailure> {
-        let stoppedAt = ProcessInfo.processInfo.systemUptime - origin
+        let stoppedAt = (overlays?.now ?? ProcessInfo.processInfo.systemUptime) - origin
         return await withCheckedContinuation { continuation in
             let begin = lock.withLock {
                 if let outcome {
