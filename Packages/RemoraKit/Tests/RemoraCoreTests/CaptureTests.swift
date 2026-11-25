@@ -313,8 +313,9 @@ private final class OverlayClock: Sendable {
 private struct OverlayRecording {
     let clock: OverlayClock
     let movie: AppleCaptureMovie
-    /// The number of frames the test has waited for. Each wait yields one frame, in order.
-    private(set) var written = 0
+    /// The clock's time at each frame the test has waited for. Each wait yields one frame, in order.
+    private var times: [TimeInterval] = []
+    var written: Int { times.count }
 
     init(_ media: AppleCaptureMedia, at url: URL, source: MetalDesktop, clock: OverlayClock) throws {
         self.clock = clock
@@ -331,7 +332,7 @@ private struct OverlayRecording {
             try #require(ContinuousClock.now < deadline, "The movie wrote no frame for the overlays' time.")
             try await Task.sleep(for: .milliseconds(2))
         }
-        written += 1
+        times.append(clock.time)
         return written - 1
     }
 
@@ -342,7 +343,9 @@ private struct OverlayRecording {
         return try await frame()
     }
 
-    /// Finishes the movie and reads its frames back in order.
+    /// Finishes the movie and reads its frames back in order. Each frame is timed as far after the one before
+    /// it as the test moved the clock, so the movie plays an animation at its own speed. The movie times its
+    /// first frame at zero, whenever that frame arrived, so the check starts at the third frame.
     func finish() async throws -> [CVPixelBuffer] {
         let url = try await movie.finish().get()
         let asset = AVURLAsset(url: url)
@@ -352,9 +355,18 @@ private struct OverlayRecording {
         reader.add(output)
         #expect(reader.startReading())
         var shots: [CVPixelBuffer] = []
-        while let sample = output.copyNextSampleBuffer() { shots.append(try #require(CMSampleBufferGetImageBuffer(sample))) }
+        var shown: [Double] = []
+        while let sample = output.copyNextSampleBuffer() {
+            shots.append(try #require(CMSampleBufferGetImageBuffer(sample)))
+            shown.append(CMSampleBufferGetPresentationTimeStamp(sample).seconds)
+        }
         // The movie can repeat its last frame to last until it stops.
         try #require(shots.count >= written)
+        // The movie file rounds a frame's time to 1/600 s.
+        for frame in times.indices.dropFirst(2) {
+            let (movie, clock) = (shown[frame] - shown[frame - 1], times[frame] - times[frame - 1])
+            #expect(abs(movie - clock) < 0.005, "frame \(frame): the movie moves on \(movie) s, the clock \(clock) s")
+        }
         return shots
     }
 }
@@ -404,10 +416,12 @@ private func rgb(_ buffer: CVPixelBuffer, _ x: Int, _ y: Int) -> [Int] {
     let disabled = try await recording.frame()
     let shots = try await recording.finish()
     #expect(try media.png(frames.snapshot()) == rawPNG)
-    // The hotspot puts the cursor at (95,93), rather than centering it on the point.
-    #expect(rgb(shots[idle], 98, 96)[0] > 180)
-    #expect(rgb(shots[idle], 98, 96)[2] > 180)
-    #expect(rgb(shots[idle], 98, 96)[1] < 80)
+    // The hotspot puts the cursor at (95,93), rather than centering it on the point. The pill does not hide it.
+    for shot in [idle, shown] {
+        #expect(rgb(shots[shot], 98, 96)[0] > 180)
+        #expect(rgb(shots[shot], 98, 96)[2] > 180)
+        #expect(rgb(shots[shot], 98, 96)[1] < 80)
+    }
     // Inside the light glass, above the Tab keycap, the gray desktop is tinted toward white.
     let glass = { (shot: Int) in rgb(shots[shot], 320, 255) }
     #expect(glass(idle).allSatisfy { abs($0 - 80) < 8 })
@@ -444,7 +458,8 @@ private func rgb(_ buffer: CVPixelBuffer, _ x: Int, _ y: Int) -> [Int] {
     // only while the cursor is unsettled.
     func settle() async throws -> Int {
         var last = recording.written - 1
-        while state.snapshot().agentCursor?.isSettled == false { last = try await recording.frame(after: 0.25) }
+        for _ in 0..<20 where state.snapshot().agentCursor?.isSettled == false { last = try await recording.frame(after: 0.25) }
+        try #require(state.snapshot().agentCursor?.isSettled == true, "The cursor did not settle in 5 s.")
         return last
     }
     _ = try await settle()
@@ -462,6 +477,7 @@ private func rgb(_ buffer: CVPixelBuffer, _ x: Int, _ y: Int) -> [Int] {
     state.receive(.agent, .pointer(.init(x: 500, y: 140), .left))
     var pressed: [Int] = []
     for _ in 0..<3 { pressed.append(try await recording.frame(after: 0.05)) }
+    pressed.append(try await settle())
     state.releaseAgentCursor()
     try await recording.frame(after: 0.2)
     state.receive(.human, .pointer(.init(x: 200, y: 100), .left))
@@ -530,8 +546,8 @@ private func rgb(_ buffer: CVPixelBuffer, _ x: Int, _ y: Int) -> [Int] {
         return area
     }
     // Pressing shrinks the glyph about the same target tip. The frames come 0.05 s, 0.1 s and 0.15 s after the
-    // press, and the last shows it pressed.
-    #expect(Double(glyphArea(shots[pressed[2]])) < 0.85 * Double(glyphArea(rest)))
+    // press and once the press has settled. The last two show it pressed.
+    for press in pressed.suffix(2) { #expect(Double(glyphArea(shots[press])) < 0.85 * Double(glyphArea(rest))) }
     // Every pressed frame shows no agent click ring at radius 14. An erroneous ring fades over 0.5 s.
     for press in pressed {
         #expect(rgb(shots[press], 500 + Int(14 * unit), 140)[2] < 135)
