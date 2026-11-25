@@ -40,6 +40,13 @@ public enum StandardInput {
         var data = Data()
         var buffer = [UInt8](repeating: 0, count: 65_536)
         while true {
+            let remaining = ContinuousClock.now.duration(to: deadline)
+            guard remaining > .zero else {
+                throw ControlFailure(
+                    .timeout, "Stdin did not reach end of file before the deadline.",
+                    hint: "Close stdin after writing the input, or pass a longer --timeout. Nothing was sent.")
+            }
+            guard !Task.isCancelled else { throw ControlFailure(.cancelled, "The command was interrupted.") }
             var event = pollfd(fd: descriptor, events: Int16(POLLIN), revents: 0)
             if poll(&event, 1, 0) > 0 {
                 let (count, error) = buffer.withUnsafeMutableBytes { (Darwin.read(descriptor, $0.baseAddress, $0.count), errno) }
@@ -51,13 +58,8 @@ public enum StandardInput {
                 }
                 guard error == EAGAIN || error == EINTR else { throw ControlFailure(.ioFailed, "Could not read stdin.") }
             }
-            let remaining = ContinuousClock.now.duration(to: deadline)
-            guard remaining > .zero else {
-                throw ControlFailure(
-                    .timeout, "Stdin did not reach end of file before the deadline.",
-                    hint: "Close stdin after writing the input, or pass a longer --timeout. Nothing was sent.")
-            }
-            do { try await Task.sleep(for: min(remaining, .milliseconds(10))) } catch { throw ControlFailure(.cancelled, "The command was interrupted.") }
+            // A cancelled sleep returns at once, and the next pass reports the cancellation.
+            try? await Task.sleep(for: min(remaining, .milliseconds(10)))
         }
     }
 }

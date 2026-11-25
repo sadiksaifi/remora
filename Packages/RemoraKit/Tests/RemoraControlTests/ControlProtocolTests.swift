@@ -69,7 +69,16 @@ import Testing
 
 @Test func standardInputThatNeverEndsFailsAtTheDeadline() async throws {
     let pipe = Pipe()
-    defer { try? pipe.fileHandleForWriting.close() }
+    let writer = pipe.fileHandleForWriting
+    // Closing the writer ends a read that ignores the deadline, so this test fails instead of hanging.
+    let watchdog = Task {
+        try await Task.sleep(for: .seconds(10))
+        try writer.close()
+    }
+    defer {
+        watchdog.cancel()
+        try? writer.close()
+    }
     let start = ContinuousClock.now
     let failure = await #expect(throws: ControlFailure.self) {
         try await StandardInput.read(pipe.fileHandleForReading.fileDescriptor, until: start + .milliseconds(200))
@@ -78,6 +87,14 @@ import Testing
     // The upper bound only catches a read that ignores the deadline; CI runs these tests on few cores.
     let elapsed = start.duration(to: .now)
     #expect(elapsed >= .milliseconds(200) && elapsed < .seconds(10))
+}
+
+/// Ready data does not let a read outlive its deadline.
+@Test func standardInputPastItsDeadlineReadsNothing() async throws {
+    let handle = try file(Data("[]".utf8))
+    defer { try? handle.close() }
+    let failure = await #expect(throws: ControlFailure.self) { try await StandardInput.read(handle.fileDescriptor, until: .now) }
+    #expect(failure?.code == .timeout)
 }
 
 /// A program that starts the CLI can hand it a nonblocking pipe, whose read fails with EAGAIN until data arrives.
