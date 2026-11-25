@@ -143,6 +143,8 @@ final class AppleCaptureMovie: CaptureMovie, @unchecked Sendable {
     private var lastPixelBuffer: CVPixelBuffer?
     private var lastAppend: TimeInterval = 0
     private var lastArrival: TimeInterval = -.infinity
+    /// The arrival time of the last frame written. A caller that sets the overlays' clock paces itself by it.
+    var writtenArrival: TimeInterval { queue.sync { lastArrival } }
     private var finishTimer: DispatchSourceTimer?
     private var finishing = false
     private var finishingWriter = false
