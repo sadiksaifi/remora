@@ -14,15 +14,19 @@ struct SessionTabStrip: View {
     static let iconTabWidth: CGFloat = 36
     static let selectedTabWidthAmongIcons: CGFloat = 120
     static let height: CGFloat = 32
+    /// The gap between the track's ends and the first and last tab. The toolbar's track is 36 pt tall around
+    /// the 32 pt tabs, so the same 2 pt at the ends keeps a tab's round end concentric with the track's.
+    static let trackInset: CGFloat = 2
     private static let fadeWidth: CGFloat = 24
     fileprivate nonisolated static let coordinateSpace = "SessionTabStrip"
 
     static func idealWidth(forTabCount count: Int, restingAsIcons: Bool) -> CGFloat {
-        restingAsIcons ? idealTabWidth + CGFloat(max(0, count - 1)) * iconTabWidth : CGFloat(max(1, count)) * idealTabWidth
+        let tabs = restingAsIcons ? idealTabWidth + CGFloat(max(0, count - 1)) * iconTabWidth : CGFloat(max(1, count)) * idealTabWidth
+        return tabs + 2 * trackInset
     }
 
     /// The shown tab between icon-only tabs, with one of them visible beside it.
-    static let minimumWidth = selectedTabWidthAmongIcons + iconTabWidth
+    static let minimumWidth = selectedTabWidthAmongIcons + iconTabWidth + 2 * trackInset
 
     let tabs: SessionTabs
     let layout: SessionTabStripLayout
@@ -38,7 +42,7 @@ struct SessionTabStrip: View {
     var body: some View {
         GeometryReader { proxy in
             let widths = TabWidths(
-                available: proxy.size.width, count: tabs.tabs.count,
+                available: proxy.size.width - 2 * Self.trackInset, count: tabs.tabs.count,
                 hasSelection: tabs.tabs.contains { $0.id == tabs.selection }, isCompact: isCompact)
             ScrollViewReader { scroller in
                 ScrollView(.horizontal) {
@@ -71,9 +75,10 @@ struct SessionTabStrip: View {
                             .onDisappear { layout.frames[tab.id] = nil }
                         }
                     }
+                    .padding(.horizontal, Self.trackInset)
                 }
                 .scrollIndicators(.never)
-                .scrollDisabled(widths.total(count: tabs.tabs.count) <= proxy.size.width + 0.5)
+                .scrollDisabled(widths.total(count: tabs.tabs.count) + 2 * Self.trackInset <= proxy.size.width + 0.5)
                 .onScrollGeometryChange(for: ClippedEdges.self) { geometry in
                     ClippedEdges(
                         leading: geometry.contentOffset.x > 0.5,
