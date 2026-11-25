@@ -1,9 +1,9 @@
 import RemoraCore
 import SwiftUI
 
-/// The session tabs at the leading end of the toolbar. The toolbar draws the glass capsule around this view,
-/// which is the track. The shown tab sits on a raised pill. The window controller removes the track around
-/// a lone shown tab and limits the strip's width to `idealWidth(forTabCount:restingAsIcons:)`.
+/// The session tabs at the leading end of the toolbar, drawn like Safari's compact tabs: a flat track with
+/// no glass, and the shown tab on a Liquid Glass pill. A lone shown tab is its pill alone, without the track.
+/// The window controller limits the strip's width to `idealWidth(forTabCount:restingAsIcons:)`.
 /// Tabs share the width. When titles no longer fit, resting tabs show only their icon, and past that the strip scrolls.
 /// In a compact toolbar the resting tabs beside the shown tab show only their icon from the start.
 struct SessionTabStrip: View {
@@ -13,9 +13,9 @@ struct SessionTabStrip: View {
     /// A resting tab that shows only its icon, and the shown tab once every resting tab is that narrow.
     static let iconTabWidth: CGFloat = 36
     static let selectedTabWidthAmongIcons: CGFloat = 120
-    static let height: CGFloat = 32
-    /// The gap between the track's ends and the first and last tab. The toolbar's track is 36 pt tall around
-    /// the 32 pt tabs, so the same 2 pt at the ends keeps a tab's round end concentric with the track's.
+    /// The track's height, which is the height of the toolbar's own buttons.
+    static let height: CGFloat = 36
+    /// The gap between the track and the tabs on every side, so a tab's round end is concentric with the track's.
     static let trackInset: CGFloat = 2
     private static let fadeWidth: CGFloat = 24
     fileprivate nonisolated static let coordinateSpace = "SessionTabStrip"
@@ -32,6 +32,8 @@ struct SessionTabStrip: View {
     let layout: SessionTabStripLayout
     /// True in a narrow window, where the resting tabs leave the width to the shown tab.
     var isCompact = false
+    /// False for a lone shown tab.
+    var showsTrack = true
     var onSelect: (UUID) -> Void = { _ in }
     var onClose: (UUID) -> Void = { _ in }
     var onStopRecording: (UUID) -> Void = { _ in }
@@ -65,7 +67,7 @@ struct SessionTabStrip: View {
                                     if inside { hovered = tab.id } else if hovered == tab.id { hovered = nil }
                                 }
                             )
-                            .frame(width: width, height: proxy.size.height)
+                            .frame(width: width, height: proxy.size.height - 2 * Self.trackInset)
                             .id(tab.id)
                             .onGeometryChange(for: CGRect.self) {
                                 $0.frame(in: .named(Self.coordinateSpace))
@@ -75,7 +77,7 @@ struct SessionTabStrip: View {
                             .onDisappear { layout.frames[tab.id] = nil }
                         }
                     }
-                    .padding(.horizontal, Self.trackInset)
+                    .padding(Self.trackInset)
                 }
                 .scrollIndicators(.never)
                 .scrollDisabled(widths.total(count: tabs.tabs.count) + 2 * Self.trackInset <= proxy.size.width + 0.5)
@@ -106,6 +108,7 @@ struct SessionTabStrip: View {
                     .frame(width: clipped.trailing ? Self.fadeWidth : 0)
             }
         }
+        .background { if showsTrack { Capsule().fill(.fill.tertiary) } }
         .coordinateSpace(.named(Self.coordinateSpace))
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Tabs")
@@ -190,18 +193,11 @@ private struct SessionTabView: View {
             }
         }
         .font(.system(size: NSFont.systemFontSize))
-        .foregroundStyle(isSelected || isHovered ? .primary : .secondary)
+        // A resting tab reads like the shown one. Only the glass tells them apart.
+        .foregroundStyle(.primary)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background {
-            // Plain fills: glass on the toolbar's glass capsule stacks two bright rims.
-            if isSelected {
-                Capsule()
-                    .fill(Color(nsColor: .controlColor))
-                    .shadow(color: .black.opacity(0.15), radius: 1.5, y: 0.5)
-            } else if isHovered {
-                Capsule().fill(.quaternary)
-            }
-        }
+        .background { if isHovered && !isSelected { Capsule().fill(.fill.tertiary) } }
+        .glassEffect(isSelected ? .regular : .identity, in: .capsule)
         .overlay(alignment: .leading) {
             if showsDivider {
                 Rectangle()

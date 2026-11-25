@@ -240,7 +240,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
         tabsToolbarItem.isHidden = tabs.isEmpty || searchTakesToolbar
         connectionsToolbarItem.isHidden = tabs.isEmpty || searchTakesToolbar
         // A lone shown tab is its pill alone, without the track.
-        tabsToolbarItem.isBordered = tabs.count != 1 || session == nil
+        tabStrip.rootView.showsTrack = tabs.count != 1 || session == nil
         connectionsButton.state = session == nil ? .on : .off
         searchToolbarItem.isHidden = session != nil
         captureToolbarItem.isHidden = session == nil || isCompact
@@ -842,6 +842,8 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
             tabStripWidth,
         ])
         tabsToolbarItem.view = tabStrip
+        // The strip draws its own track. The toolbar's glass belongs to the shown tab alone.
+        tabsToolbarItem.isBordered = false
         tabsToolbarItem.label = "Tabs"
         tabsToolbarItem.visibilityPriority = .high
 
