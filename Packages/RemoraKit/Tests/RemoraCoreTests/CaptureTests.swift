@@ -343,9 +343,9 @@ private struct OverlayRecording {
         return try await frame()
     }
 
-    /// Finishes the movie and reads its frames back in order. Each frame is timed as far after the one before
-    /// it as the test moved the clock, so the movie plays an animation at its own speed. The movie times its
-    /// first frame at zero, whenever that frame arrived, so the check starts at the third frame.
+    /// Finishes the movie and reads its frames back in order. The movie starts on the overlays' clock, so each
+    /// frame is timed as far into the movie as the test had moved the clock, and the movie plays an animation
+    /// at its own speed. The movie holds no frame that the test did not wait for.
     func finish() async throws -> [CVPixelBuffer] {
         let url = try await movie.finish().get()
         let asset = AVURLAsset(url: url)
@@ -360,12 +360,11 @@ private struct OverlayRecording {
             shots.append(try #require(CMSampleBufferGetImageBuffer(sample)))
             shown.append(CMSampleBufferGetPresentationTimeStamp(sample).seconds)
         }
-        // The movie can repeat its last frame to last until it stops.
-        try #require(shots.count >= written)
-        // The movie file rounds a frame's time to 1/600 s.
-        for frame in times.indices.dropFirst(2) {
-            let (movie, clock) = (shown[frame] - shown[frame - 1], times[frame] - times[frame - 1])
-            #expect(abs(movie - clock) < 0.005, "frame \(frame): the movie moves on \(movie) s, the clock \(clock) s")
+        // The movie can repeat its last frame to last until it stops. Its file rounds a frame's time to 1/600 s.
+        try #require(shots.count == written || shots.count == written + 1)
+        for frame in times.indices {
+            let (movie, clock) = (shown[frame], times[frame] - times[0])
+            #expect(abs(movie - clock) < 0.005, "frame \(frame): the movie shows it at \(movie) s, the clock at \(clock) s")
         }
         return shots
     }
@@ -407,6 +406,7 @@ private func rgb(_ buffer: CVPixelBuffer, _ x: Int, _ y: Int) -> [Int] {
     // There are no frame observers or additional decoded frames, and the test only moves the clock from here
     // on. The pill shows at full strength for 1.25 s, fades until 1.5 s after the key press, and is then removed.
     let shown = try await recording.frame(after: 0.5)
+    #expect(try media.png(frames.snapshot()) == rawPNG)
     let held = try await recording.frame(after: 0.5)
     let fading = try await recording.frame(after: 0.375)
     let faded = try await recording.frame(after: 0.2)
@@ -433,6 +433,7 @@ private func rgb(_ buffer: CVPixelBuffer, _ x: Int, _ y: Int) -> [Int] {
     #expect(glass(faded).allSatisfy { abs($0 - 80) < 8 })
     #expect(rgb(shots[faded], 98, 96)[0] > 180)
     #expect(rgb(shots[disabled], 98, 96).allSatisfy { abs($0 - 80) < 8 })
+    #expect(rgb(try #require(shots.last), 98, 96).allSatisfy { abs($0 - 80) < 8 })
 }
 
 @Test(arguments: [1.0, 2.0]) func recordingAgentCursorMovesAndPressesWithoutAScreenObserver(unit: Double) async throws {
@@ -480,6 +481,7 @@ private func rgb(_ buffer: CVPixelBuffer, _ x: Int, _ y: Int) -> [Int] {
     pressed.append(try await settle())
     state.releaseAgentCursor()
     try await recording.frame(after: 0.2)
+    let released = try await settle()
     state.receive(.human, .pointer(.init(x: 200, y: 100), .left))
     let human = try await recording.frame(after: 0.05)
     let shots = try await recording.finish()
@@ -502,7 +504,8 @@ private func rgb(_ buffer: CVPixelBuffer, _ x: Int, _ y: Int) -> [Int] {
         }
         return pixels > 0 ? sum / pixels : nil
     }
-    let centers = legs.map { leg in leg.frames.compactMap { center(shots[$0]) } }
+    // Every frame of a leg shows the cursor.
+    let centers = try legs.map { leg in try leg.frames.map { try #require(center(shots[$0])) } }
     // The cursor travels between resting centers near x 84-96 and 504-514, and a spring settles it at each.
     // Progress is the center along the leg's direction, from the first frame that leaves the start to the end
     // of the leg. It is capped at the destination band's edge, so the spring's recoil there counts as
@@ -548,6 +551,8 @@ private func rgb(_ buffer: CVPixelBuffer, _ x: Int, _ y: Int) -> [Int] {
     // Pressing shrinks the glyph about the same target tip. The frames come 0.05 s, 0.1 s and 0.15 s after the
     // press and once the press has settled. The last two show it pressed.
     for press in pressed.suffix(2) { #expect(Double(glyphArea(shots[press])) < 0.85 * Double(glyphArea(rest))) }
+    // Releasing brings the glyph back to its resting size.
+    #expect(abs(Double(glyphArea(shots[released])) - Double(glyphArea(rest))) < 0.03 * Double(glyphArea(rest)))
     // Every pressed frame shows no agent click ring at radius 14. An erroneous ring fades over 0.5 s.
     for press in pressed {
         #expect(rgb(shots[press], 500 + Int(14 * unit), 140)[2] < 135)
