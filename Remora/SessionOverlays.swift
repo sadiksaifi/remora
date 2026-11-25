@@ -67,12 +67,15 @@ final class SessionOverlays: NSObject {
             case .stopped, .idle: nil
             }
         announced = announcement == nil ? nil : control.state
-        if let announcement, let desktop {
-            NSAccessibility.post(
-                element: desktop, notification: .announcementRequested,
-                userInfo: [.announcement: announcement, .priority: NSAccessibilityPriorityLevel.high.rawValue])
-        }
+        if let announcement { announce(announcement) }
         updateNotices()
+    }
+
+    private func announce(_ message: String) {
+        guard let desktop else { return }
+        NSAccessibility.post(
+            element: desktop, notification: .announcementRequested,
+            userInfo: [.announcement: message, .priority: NSAccessibilityPriorityLevel.high.rawValue])
     }
 
     func recordingChanged(_ isRecording: Bool) {
@@ -95,8 +98,13 @@ final class SessionOverlays: NSObject {
 
     /// The person clicked or typed while the agent holds the input.
     func inputBlocked() {
+        let wasVisible = notices.visible == .agentInControl
         notices.repeatAgentNotice(at: .now)
         showNotice()
+        // The notice came back, so VoiceOver hears why the input did nothing.
+        if !wasVisible, notices.visible == .agentInControl {
+            announce(SessionNotices.Notice.agentInControl.message(agent: agent))
+        }
     }
 
     private func updateNotices() {
