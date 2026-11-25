@@ -19,6 +19,13 @@ DWORD rm_display_process(RMDisplay *display);
 void rm_display_connected(RMDisplay *display);
 /* Call after each frame reaches the frame callback. */
 void rm_display_frame(RMDisplay *display);
+/* Any thread. True from a redraw request until the next frame reaches the frame callback. */
+bool rm_display_redrawing(RMDisplay *display);
+/* Graphics thread. Windows answers a resume with a placeholder before the redraw: a picture of the whole desktop in
+ * one dark gray, with only a pointer in its corner. Call with a new picture that looks like one, before drawing it.
+ * Returns true for the first such picture of a redraw, which is then not drawn. A later one is drawn, so a desktop
+ * that really is blank still appears. */
+bool rm_display_skip_placeholder(RMDisplay *display);
 /* Any thread. Asks a server that honors Refresh Rect to send the whole desktop again, from the
  * session thread. A paused server gets the request when it resumes, which redraws anyway. */
 void rm_display_request_refresh(RMDisplay *display);

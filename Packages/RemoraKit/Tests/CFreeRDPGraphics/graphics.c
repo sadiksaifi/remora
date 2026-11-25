@@ -23,6 +23,16 @@ static const BYTE idr[] = {
     0x75, 0xd7, 0x5d, 0x75, 0xd7, 0x80,
 };
 
+/* The same with its right half light gray. */
+static const BYTE split_idr[] = {
+    0x00, 0x00, 0x00, 0x01, 0x67, 0x42, 0xc0, 0x0a, 0xdc, 0x42, 0x6c, 0x04, 0x40, 0x00, 0x00, 0x03,
+    0x00, 0x40, 0x00, 0x00, 0x0c, 0x83, 0xc4, 0x89, 0xe0, 0x00, 0x00, 0x00, 0x01, 0x68, 0xce, 0x0f,
+    0x13, 0x20, 0x00, 0x00, 0x01, 0x65, 0x88, 0x84, 0x05, 0x73, 0x9c, 0x46, 0x28, 0x00, 0x09, 0x2a,
+    0xc7, 0x00, 0x01, 0x3d, 0x28, 0xe0, 0x00, 0x27, 0xa7, 0x27, 0xe1, 0xff, 0xf8, 0x22, 0x8a, 0x00,
+    0x02, 0x83, 0x1e, 0x38, 0x00, 0x09, 0xe9, 0xc7, 0x00, 0x01, 0x3d, 0x29, 0x3a, 0xeb, 0xa7, 0xae,
+    0xba, 0xe9, 0xeb, 0xae, 0xba, 0x7a, 0xf0,
+};
+
 struct RMGraphics {
     RMRDPSession *session;
     rdpContext *context;
@@ -216,8 +226,8 @@ uint32_t rm_graphics_restore(RMGraphics *g, uint16_t slot, uint16_t surface, uin
     return g->gfx.CacheToSurface(&g->gfx, &pdu);
 }
 
-uint32_t rm_graphics_h264(RMGraphics *g, uint16_t surface, RMGraphicsCodec codec, const RMRDPVideoRectangle *rectangles,
-                          size_t count) {
+uint32_t rm_graphics_h264(RMGraphics *g, uint16_t surface, RMGraphicsCodec codec, RMGraphicsPicture picture,
+                          bool refinement, const RMRDPVideoRectangle *rectangles, size_t count) {
     RECTANGLE_16 *rects = calloc(count ? count : 1, sizeof(*rects));
     RDPGFX_H264_QUANT_QUALITY *quality = calloc(count ? count : 1, sizeof(*quality));
     if (!rects || !quality) {
@@ -229,6 +239,7 @@ uint32_t rm_graphics_h264(RMGraphics *g, uint16_t surface, RMGraphicsCodec codec
                                    .left = UINT16_MAX, .top = UINT16_MAX };
     for (size_t i = 0; i < count; i++) {
         rects[i] = rectangle(rectangles[i]);
+        quality[i].p = refinement;
         cmd.left = MIN(cmd.left, rects[i].left);
         cmd.top = MIN(cmd.top, rects[i].top);
         cmd.right = MAX(cmd.right, rects[i].right);
@@ -238,8 +249,10 @@ uint32_t rm_graphics_h264(RMGraphics *g, uint16_t surface, RMGraphicsCodec codec
         cmd.left = cmd.top = 0;
     cmd.width = cmd.right - cmd.left;
     cmd.height = cmd.bottom - cmd.top;
-    const RDPGFX_AVC420_BITMAP_STREAM stream = { { (UINT32)count, rects, quality }, sizeof(idr), (BYTE *)idr };
-    RDPGFX_AVC444_BITMAP_STREAM both = { sizeof(idr), 0, { stream, stream } };
+    const bool split = picture == RMGRAPHICS_SPLIT;
+    const UINT32 length = split ? sizeof(split_idr) : sizeof(idr);
+    const RDPGFX_AVC420_BITMAP_STREAM stream = { { (UINT32)count, rects, quality }, length, (BYTE *)(split ? split_idr : idr) };
+    RDPGFX_AVC444_BITMAP_STREAM both = { length, 0, { stream, stream } };
     switch (codec) {
     case RMGRAPHICS_AVC420:
         cmd.codecId = RDPGFX_CODECID_AVC420;

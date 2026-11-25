@@ -40,6 +40,8 @@ struct RMDisplay {
     uint64_t unwanted_at, paused_at;
     /* A resume of a paused server owes a redraw. redraw_sent: its request is on the wire. */
     bool redraw_owed, redraw_sent;
+    /* The placeholder that Windows sends before a redraw was skipped, so no other picture is. */
+    bool placeholder_skipped;
     /* A whole-desktop Refresh Rect is wanted, for example after pixels drawn on the GPU were lost. */
     bool refresh_wanted;
 };
@@ -197,8 +199,25 @@ void rm_display_connected(RMDisplay *d) {
     d->updates_sent = true;
     /* A new connection draws the whole desktop. */
     d->redraw_sent = d->redraw_owed;
+    d->placeholder_skipped = false;
     SetEvent(d->wake);
     pthread_mutex_unlock(&d->lock);
+}
+
+bool rm_display_redrawing(RMDisplay *d) {
+    pthread_mutex_lock(&d->lock);
+    const bool redrawing = d->redraw_sent;
+    pthread_mutex_unlock(&d->lock);
+    return redrawing;
+}
+
+bool rm_display_skip_placeholder(RMDisplay *d) {
+    pthread_mutex_lock(&d->lock);
+    const bool skip = d->redraw_sent && !d->placeholder_skipped;
+    if (skip)
+        d->placeholder_skipped = true;
+    pthread_mutex_unlock(&d->lock);
+    return skip;
 }
 
 void rm_display_frame(RMDisplay *d) {
@@ -304,6 +323,7 @@ DWORD rm_display_process(RMDisplay *d) {
             /* Set only after the write: a frame another thread finishes before it is not the redraw. */
             pthread_mutex_lock(&d->lock);
             d->redraw_sent = d->redraw_owed;
+            d->placeholder_skipped = false;
             pthread_mutex_unlock(&d->lock);
         }
     }

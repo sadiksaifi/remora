@@ -7,6 +7,9 @@
  * Each function returns FreeRDP's channel status, 0 on success. */
 typedef struct RMGraphics RMGraphics;
 typedef enum { RMGRAPHICS_AVC420, RMGRAPHICS_AVC444, RMGRAPHICS_AVC444V2 } RMGraphicsCodec;
+/* Plain is filled with 0x3080C0, as blank as Windows' placeholder. Split has 0x3080C0 on its left half and light gray
+ * on its right. */
+typedef enum { RMGRAPHICS_PLAIN, RMGRAPHICS_SPLIT } RMGraphicsPicture;
 
 /* refresh_rect says whether the server honors Refresh Rect, as Windows does and GNOME does not. */
 RMGraphics *rm_graphics_new(uint32_t width, uint32_t height, bool refresh_rect, const RMRDPCallbacks *callbacks,
@@ -24,9 +27,10 @@ uint32_t rm_graphics_copy(RMGraphics *graphics, uint16_t from, RMRDPVideoRectang
 /* Cache slots run from 1 to 16. */
 uint32_t rm_graphics_cache(RMGraphics *graphics, uint16_t surface, RMRDPVideoRectangle area, uint16_t slot);
 uint32_t rm_graphics_restore(RMGraphics *graphics, uint16_t slot, uint16_t surface, uint16_t x, uint16_t y);
-/* Every picture in the command is the same 64x64 IDR frame, filled with 0x3080C0. AVC444 sends both views. */
-uint32_t rm_graphics_h264(RMGraphics *graphics, uint16_t surface, RMGraphicsCodec codec,
-                          const RMRDPVideoRectangle *rectangles, size_t count);
+/* Every picture in the command is the same 64x64 IDR frame. AVC444 sends both views. A refinement marks every
+ * region as progressively encoded, a better version of the surface's previous picture. */
+uint32_t rm_graphics_h264(RMGraphics *graphics, uint16_t surface, RMGraphicsCodec codec, RMGraphicsPicture picture,
+                          bool refinement, const RMRDPVideoRectangle *rectangles, size_t count);
 /* A planar bitmap of one color, 0xRRGGBB. */
 uint32_t rm_graphics_planar(RMGraphics *graphics, uint16_t surface, RMRDPVideoRectangle area, uint32_t bgr);
 /* Outside a frame, FreeRDP sends each command's CPU drawing to the desktop at once. Inside one, it sends the

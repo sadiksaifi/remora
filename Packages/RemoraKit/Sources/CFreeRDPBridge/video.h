@@ -8,7 +8,8 @@
 #pragma clang diagnostic pop
 
 /* Sends H.264 surface commands to the video callbacks, which convert them on the GPU into the
- * desktop texture, and leaves every other graphics command to FreeRDP's GDI. A GPU-drawn area of
+ * desktop texture, and leaves every other graphics command to FreeRDP's GDI. On the GPU path it skips
+ * the blank placeholder that Windows sends before a redraw (rm_display_skip_placeholder). A GPU-drawn area of
  * a surface is stale in the surface's CPU pixels. Before any other command reads or writes that
  * surface, its stale areas are read back from the desktop texture, and before any mapping, every
  * surface's are. Graphics channel thread only. */
