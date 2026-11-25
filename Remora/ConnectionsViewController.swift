@@ -84,6 +84,11 @@ final class ConnectionsViewController: NSViewController, NSTableViewDataSource, 
         super.viewDidLoad()
         observeConnections()
         observeSessions()
+        // A session can connect while the command line runs Remora without a window. The failure is logged then.
+        sessionTabs.onStoreFailure = { [weak self] error in
+            guard let self, let window = hostWindow, window.isVisible else { return }
+            showAlert("Couldn’t Save Connection", error: error, on: window)
+        }
     }
 
     var initialFirstResponder: NSView {
@@ -368,19 +373,9 @@ final class ConnectionsViewController: NSViewController, NSTableViewDataSource, 
         view.window?.makeFirstResponder(tableView)
     }
 
-    /// Opens or shows each connection's tab and records when a new session started.
+    /// Opens or shows each connection's tab.
     func open(_ connections: [Connection]) {
-        var failure: (any Error)?
-        for connection in connections where sessionTabs.open(connection) {
-            do {
-                try connectionStore.markConnected(id: connection.id)
-            } catch {
-                failure = error
-            }
-        }
-        if let failure {
-            showAlert("Couldn’t Save Connection", error: failure, on: hostWindow)
-        }
+        for connection in connections { sessionTabs.open(connection) }
     }
 
     private func storedPassword(for connection: Connection) -> String? {

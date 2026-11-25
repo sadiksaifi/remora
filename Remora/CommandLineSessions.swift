@@ -263,7 +263,7 @@ extension CommandLineController {
             let existing = sessions.session(for: connection.id)
             // Starting an ended session again is input in all but name, so the user's Take Over or Stop binds it too.
             if let existing, !existing.state.isLive { try existing.checkUserHold() }
-            let started = sessions.open(connection, select: !background, agent: request.agent ?? "remora CLI", resolution: resolution)
+            sessions.open(connection, select: !background, agent: request.agent ?? "remora CLI", resolution: resolution)
             let session = sessions.session(for: connection.id)!
             func result() -> ControlValue {
                 guard case .object(var fields) = sessionInfo(session) else { return .null }
@@ -271,11 +271,6 @@ extension CommandLineController {
                 return .object(fields)
             }
             do {
-                if started {
-                    do { try connectionStore.markConnected(id: connection.id) } catch {
-                        throw ControlFailure(.storeFailed, "Session started, but its last-connected date could not be saved.")
-                    }
-                }
                 if !background { show(nil) }
                 try promptRequired(session)
                 if noWait { return result() }
