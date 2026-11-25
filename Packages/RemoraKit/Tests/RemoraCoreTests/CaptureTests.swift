@@ -4,6 +4,7 @@ import Foundation
 import ImageIO
 import Metal
 import Testing
+import os
 
 @testable import RemoraCore
 
@@ -324,13 +325,14 @@ private func movieMediaDuration(_ data: Data, range: Range<Int>? = nil) -> Doubl
     let movie = try media.movie(at: url, source: frames)
     // The pill appears after the encoder's warm-up, which held the second frame back 0.5 s on the CI runner.
     try await Task.sleep(for: .seconds(1))
+    let ticks = OSAllocatedUnfairLock(initialState: [TimeInterval]())
+    _ = overlays.addObserver { time in ticks.withLock { $0.append(time) } }
     let pillAt = ProcessInfo.processInfo.systemUptime - startedAt
     overlays.receive(.human, .key(scancode: 0x0F, down: true))
     // There are no frame observers or additional decoded frames. Only overlay invalidations wake the movie.
     // The fade's last tick comes 1.5 s after the key press and the test changes nothing for 1.25 s after it,
     // so an encoder that stalls for a second still writes that tick's frame before the overlays turn off.
     try await Task.sleep(for: .milliseconds(2750))
-    let disabledAt = ProcessInfo.processInfo.systemUptime - startedAt
     overlays.configure(showPointerInRecordings: false, showKeyPresses: false, showAgentPointer: true, scale: 1)
     try await Task.sleep(for: .milliseconds(120))
     _ = try await movie.finish().get()
@@ -345,17 +347,6 @@ private func movieMediaDuration(_ data: Data, range: Range<Int>? = nil) -> Doubl
     var faded: CVPixelBuffer?
     var disabled: CVPixelBuffer?
     var times: [Double] = []
-    while let sample = output.copyNextSampleBuffer() {
-        let time = CMSampleBufferGetPresentationTimeStamp(sample).seconds
-        if first == nil && time > pillAt + 0.05 { first = CMSampleBufferGetImageBuffer(sample) }
-        // The movie's clock starts after `startedAt`, 29 ms after it once on the CI runner, so its frames are
-        // timed that much earlier than the test's clock. The fade's last frame is timed 1.25 s before
-        // `disabledAt` and the frame that turning the overlays off wakes is timed at it. The cutoff sits
-        // halfway, so the last frame before it shows the end of the fade.
-        if time < disabledAt - 0.6 { faded = CMSampleBufferGetImageBuffer(sample) }
-        disabled = CMSampleBufferGetImageBuffer(sample)  // Finish drains the frame rendered after `configure`.
-        times.append(time)
-    }
     func rgb(_ buffer: CVPixelBuffer, x: Int, y: Int) -> [Int] {
         CVPixelBufferLockBaseAddress(buffer, .readOnly)
         defer { CVPixelBufferUnlockBaseAddress(buffer, .readOnly) }
@@ -364,6 +355,16 @@ private func movieMediaDuration(_ data: Data, range: Range<Int>? = nil) -> Doubl
             + y * CVPixelBufferGetBytesPerRow(buffer) + x * 4
         return [Int(p[2]), Int(p[1]), Int(p[0])]
     }
+    while let sample = output.copyNextSampleBuffer() {
+        let time = CMSampleBufferGetPresentationTimeStamp(sample).seconds
+        let image = CMSampleBufferGetImageBuffer(sample)
+        if first == nil && time > pillAt + 0.05 { first = image }
+        // The last frame that shows the cursor is the last one from before the overlays turn off. The frame is
+        // chosen by its picture because the movie's clock starts after `startedAt`, later on a slow runner.
+        if let image, rgb(image, x: 98, y: 96)[0] > 180 { faded = image }
+        disabled = image  // Finish drains the frame rendered after `configure`.
+        times.append(time)
+    }
     let initial = try #require(first)
     // The hotspot puts the cursor at (95,93), rather than centering it on the point.
     #expect(rgb(initial, x: 98, y: 96)[0] > 180)
@@ -371,12 +372,15 @@ private func movieMediaDuration(_ data: Data, range: Range<Int>? = nil) -> Doubl
     #expect(rgb(initial, x: 98, y: 96)[1] < 80)
     // Inside the light glass, above the Tab keycap, the gray desktop is tinted toward white.
     #expect(rgb(initial, x: 320, y: 255).allSatisfy { $0 > 120 })
-    // The pill is gone and the cursor still shows, so this frame comes from before the overlays turn off.
+    // The pill is gone in the last frame that shows the cursor.
     #expect(try rgb(#require(faded), x: 320, y: 255).allSatisfy { abs($0 - 80) < 8 })
-    #expect(try rgb(#require(faded), x: 98, y: 96)[0] > 180)
     #expect(try rgb(#require(disabled), x: 98, y: 96).allSatisfy { abs($0 - 80) < 8 })
     // The test changes nothing between the key press and the end of the pill's fade.
     #expect(animates(times, during: [(pillAt + quietAfterChange)...(pillAt + 1.5)]))
+    // The overlays keep invalidating while the pill fades, from 1.25 s to 1.5 s after the key press. This reads
+    // the overlays' own clock, so the encoder's speed does not change it.
+    let fade = (startedAt + pillAt + 1.25)..<(startedAt + pillAt + 1.5)
+    #expect(ticks.withLock { $0.contains { fade.contains($0) } })
 }
 
 /// A frame carries the time of the overlay change that woke the movie, or 1/60 s after the frame before it.
