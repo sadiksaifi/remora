@@ -403,7 +403,13 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
     @objc func releaseKeyboardCapture(_ sender: Any?) { sessionTabs.selectedSession?.releaseKeyboardCapture() }
     @objc func takeScreenshot(_ sender: Any?) { targetSession(sender)?.captureScreenshot(copyToClipboard: false) }
     @objc func copyScreenshot(_ sender: Any?) { targetSession(sender)?.captureScreenshot(copyToClipboard: true) }
-    @objc func toggleRecording(_ sender: Any?) { targetSession(sender)?.toggleRecording() }
+    /// A menu item does what its title said when its menu opened, or nothing: the command-line tool may have
+    /// started or stopped the recording since.
+    @objc func toggleRecording(_ sender: Any?) {
+        guard let session = targetSession(sender) else { return }
+        if let item = sender as? NSMenuItem, item.tag != recordingCommand(for: session).rawValue { return }
+        session.toggleRecording()
+    }
     /// A tab's menu stops a recording and never starts one. A recording that has ended ignores the request.
     @objc private func stopRecording(_ sender: Any?) {
         guard let session = targetSession(sender) else { return }
@@ -505,7 +511,11 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
 
     // MARK: Validation
 
-    private enum RecordingCommand { case start, stop, finishing }
+    /// Its raw value is the tag of a validated recording menu item. An item that was never validated has tag 0.
+    private enum RecordingCommand: Int {
+        case start = 1
+        case stop, finishing
+    }
 
     private func recordingCommand(for session: SessionViewController?) -> RecordingCommand {
         switch session?.capture.recordingState {
@@ -563,7 +573,9 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
         case #selector(stopRecording(_:)):
             return recordingCommand(for: session) == .stop
         case #selector(toggleRecording(_:)):
-            switch recordingCommand(for: session) {
+            let command = recordingCommand(for: session)
+            menuItem.tag = command.rawValue
+            switch command {
             case .stop:
                 menuItem.title = "Stop Recording"
                 return true
