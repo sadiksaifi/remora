@@ -292,8 +292,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
         let session = sessionTabs.selectedSession
         let control = session?.control
         let state = control?.state ?? .idle
-        agentToolbarItem.isHidden = state == .idle
-        agentButton.rootView = AgentControlButton(
+        let button = AgentControlButton(
             state: state,
             isTransferring: control?.isTransferring == true,
             agent: session?.agentName ?? "",
@@ -301,6 +300,10 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
             showsTitle: !isCompact,
             action: { [weak session] in session?.toggleAgentControl() }
         )
+        agentToolbarItem.style = button.isProminent ? .prominent : .plain
+        agentToolbarItem.backgroundTintColor = button.isProminent ? .systemBlue : nil
+        agentButton.rootView = button
+        agentToolbarItem.isHidden = state == .idle
         let previous = shownControl
         shownControl = session.map { ($0.connection.id, state, $0.agentName) }
         guard let session, let previous, previous.tab == session.connection.id else { return closeCallout() }

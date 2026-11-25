@@ -3,6 +3,7 @@ import SwiftUI
 
 /// The agent control in the toolbar, shown from the moment a command-line program takes a session's input.
 /// Take Over is blue while the program has the input. Resume is neutral once the person took over or stopped it.
+/// The blue is the toolbar item's own glass, which the window controller tints while `isProminent`.
 struct AgentControlButton: View {
     var state = SessionControl.State.idle
     /// A hand-over waits for the program's input to end. The button shows a spinner and takes no click.
@@ -24,9 +25,7 @@ struct AgentControlButton: View {
                 if showsTitle { Text(takesOver ? "Take Over" : "Resume") }
             }
         }
-        .buttonStyle(PillStyle(isProminent: takesOver && !isTransferring, showsTitle: showsTitle))
-        // The toolbar's capsule shows around the pill on every side.
-        .padding(.horizontal, 2)
+        .buttonStyle(LabelStyle(isProminent: isProminent, showsTitle: showsTitle))
         .disabled(!isEnabled || isTransferring)
         .help(accessibilityLabel)
         .accessibilityLabel(accessibilityLabel)
@@ -35,14 +34,17 @@ struct AgentControlButton: View {
 
     private var takesOver: Bool { state == .active }
 
+    /// True while the button is Take Over and takes a click.
+    var isProminent: Bool { takesOver && !isTransferring }
+
     private var accessibilityLabel: String {
         if isTransferring { return "Taking over from \(agent)" }
         return takesOver ? "Take Over from \(agent)" : "Resume \(agent)"
     }
 
-    /// A 32 pt pill inside the toolbar's glass capsule: blue for Take Over, bare for Resume.
-    /// The toolbar restyles stock button styles as plain toolbar buttons, so the pill is drawn here.
-    private struct PillStyle: ButtonStyle {
+    /// The label on the toolbar item's glass capsule: white on the blue tint for Take Over.
+    /// The toolbar restyles stock button styles as plain toolbar buttons, so the label is drawn here.
+    private struct LabelStyle: ButtonStyle {
         let isProminent: Bool
         let showsTitle: Bool
         @Environment(\.isEnabled) private var isEnabled
@@ -51,10 +53,9 @@ struct AgentControlButton: View {
             configuration.label
                 .font(.system(size: NSFont.systemFontSize, weight: .medium))
                 .foregroundStyle(isProminent ? AnyShapeStyle(.white) : AnyShapeStyle(.primary))
-                .padding(.leading, showsTitle ? 11 : 12)
-                .padding(.trailing, showsTitle ? 14 : 12)
-                .frame(height: 32)
-                .background { if isProminent { Capsule().fill(Color(nsColor: .systemBlue)) } }
+                .padding(.leading, showsTitle ? 13 : 14)
+                .padding(.trailing, showsTitle ? 16 : 14)
+                .frame(height: 36)
                 .contentShape(Capsule())
                 .opacity(!isEnabled ? 0.4 : configuration.isPressed ? 0.7 : 1)
         }
