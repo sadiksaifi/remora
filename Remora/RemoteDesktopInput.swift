@@ -24,7 +24,7 @@ final class RemoteDesktopInput: NSObject {
     var onBlockedInput: (() -> Void)?
     private var connected = false
     private lazy var shortcutCapture = SystemShortcutCapture(
-        isFocused: { [weak self] in self.map { $0.canCapture && !$0.menuIsOpen } ?? false },
+        isFocused: { [weak self] in self.map { $0.canCapture && !$0.menuHasKeys } ?? false },
         receive: { [weak self] event in self?.receiveKeyboardEvent(event) ?? false },
         releaseKeys: { [weak self] in
             guard let self else { return }
@@ -39,7 +39,14 @@ final class RemoteDesktopInput: NSObject {
     /// True while a menu of this app is open: one in the menu bar, a tab's, the toolbar's or the menu bar icon's.
     /// The menu takes every key until it closes. The desktop keeps the focus, so capture stays reported.
     private var menuIsOpen = false
-    private var capsLockAtMenuOpen = false
+    /// AppKit can open a menu without posting that tracking began, as it does after an accessibility press on
+    /// an item that has a submenu. The run loop is in its tracking mode while any menu is open.
+    private var menuHasKeys: Bool { menuIsOpen || RunLoop.main.currentMode == .eventTracking }
+    /// Caps Lock as the remote computer has it while a menu has the keys: as the menu opened, or as last synchronized.
+    private var capsLockSent = false
+    /// The keyboard's own Caps Lock. The session's flags follow the last event, and an event that another
+    /// program posts can lack the Caps Lock flag.
+    private var capsLockIsOn: Bool { CGEventSource.flagsState(.hidSystemState).contains(.maskAlphaShift) }
     private var keyboard = KeyboardState()
     private var keyboardRouting = KeyboardRouting()
     private var scroll = ScrollAccumulator()
@@ -95,18 +102,24 @@ final class RemoteDesktopInput: NSObject {
     /// The menu gets the keys from here on, so the remote computer would never see a held key released.
     @objc private func menuOpened(_ notification: Notification) {
         menuIsOpen = true
-        capsLockAtMenuOpen = NSEvent.modifierFlags.contains(.capsLock)
+        capsLockSent = capsLockIsOn
         guard hasFocus else { return }
         shortcutCapture.stop()
         keyboardRouting = KeyboardRouting()
         releaseKeys()
     }
 
-    /// Synchronizing sets all three locks of the remote computer, and this Mac knows only its Caps Lock.
-    /// The remote Num Lock and Scroll Lock stay as they are unless Caps Lock changed while the menu had the keys.
+    /// The desktop kept the focus, so this is no focus gain: the clipboard is not sent and the remote locks are
+    /// not synchronized, which would turn the remote Num Lock and Scroll Lock off. A Caps Lock press that the
+    /// menu took is sent now, as the key press it was.
     @objc private func menuClosed(_ notification: Notification) {
         menuIsOpen = false
-        focusIn(synchronizingLocks: NSEvent.modifierFlags.contains(.capsLock) != capsLockAtMenuOpen)
+        captureMayHaveChanged()
+        guard canCapture else { return }
+        shortcutCapture.start()
+        resetKeyboard()
+        guard capsLockIsOn != capsLockSent else { return }
+        for isDown in [true, false] { input?.sendKey(KeyInput(keyCode: 0x39, isDown: isDown)) }
     }
 
     func setConnected(_ connected: Bool) {
@@ -115,13 +128,13 @@ final class RemoteDesktopInput: NSObject {
         if connected { focusIn() }
     }
 
-    func focusIn(synchronizingLocks: Bool = true) {
+    func focusIn() {
         captureMayHaveChanged()
         guard canCapture else { return }
-        becameFirstResponder(synchronizingLocks: synchronizingLocks)
+        becameFirstResponder()
     }
 
-    func becameFirstResponder(synchronizingLocks: Bool = true) {
+    func becameFirstResponder() {
         captureMayHaveChanged()
         guard allowsHumanInput, connected, input != nil, view?.window?.isKeyWindow == true, NSApp.isActive else { return }
         shortcutCapture.start()
@@ -132,7 +145,8 @@ final class RemoteDesktopInput: NSObject {
             view?.onFocus?()
         }
         resetKeyboard()
-        if synchronizingLocks { input?.synchronize(locks: NSEvent.modifierFlags.contains(.capsLock) ? [.capsLock] : []) }
+        capsLockSent = capsLockIsOn
+        input?.synchronize(locks: NSEvent.modifierFlags.contains(.capsLock) ? [.capsLock] : [])
     }
 
     func focusOut() {
@@ -189,7 +203,7 @@ final class RemoteDesktopInput: NSObject {
     /// The tap consumes remote events, so AppKit only sees bypass events and local chords.
     /// Both routes use the same eligibility, shortcut policy, and pressed-key state.
     private func receiveKeyboardEvent(_ event: NSEvent) -> Bool {
-        guard hasFocus, !menuIsOpen, let input else { return false }
+        guard hasFocus, !menuHasKeys, let input else { return false }
         switch keyboardRouting.route(
             keyCode: event.keyCode, rawFlags: event.modifierFlags.rawValue,
             event: event.type == .flagsChanged
