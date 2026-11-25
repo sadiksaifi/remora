@@ -78,9 +78,16 @@ public final class H264Renderer: @unchecked Sendable {
     private var losses: Int
 
     /// Core Video buffers held until a command buffer completes. Only released, never read, on the handler's thread.
+    /// A released Core Video texture returns itself to the cache that made it, and holds no reference to that cache.
+    /// The renderer can go away before the command buffer completes, so the buffers keep the cache until they are gone.
     private final class Retained: @unchecked Sendable {
-        let buffers: [CVBuffer]
-        init(_ buffers: [CVBuffer]) { self.buffers = buffers }
+        private var buffers: [CVBuffer]
+        private let cache: CVMetalTextureCache
+        init(_ buffers: [CVBuffer], cache: CVMetalTextureCache) {
+            self.buffers = buffers
+            self.cache = cache
+        }
+        deinit { buffers.removeAll() }
     }
 
     private final class Planes {
@@ -142,7 +149,7 @@ public final class H264Renderer: @unchecked Sendable {
         }
         let needsPlanes = passes.contains { $0.layout != .yuv420 }
         let surfacePlanes = needsPlanes ? try planes(for: target) : nil
-        let retained = Retained(keep + passes.map(\.image))
+        let retained = Retained(keep + passes.map(\.image), cache: cache)
         try desktop.draw(width: target.desktopWidth, height: target.desktopHeight) { texture, command, created in
             guard let encoder = command.makeComputeCommandEncoder() else { throw CaptureFailure.image("No Metal compute encoder.") }
             defer { encoder.endEncoding() }
