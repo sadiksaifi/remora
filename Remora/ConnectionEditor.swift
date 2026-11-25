@@ -27,7 +27,7 @@ struct ConnectionEditor: View {
     @State private var vncModeChosen = false
     /// The address whose greeting came from a Mac. It applies only while the fields still show that address.
     @State private var detectedMac: ServerAddress?
-    /// The address whose check finished, whatever it found.
+    /// The address whose server answered the check. A check without an answer runs again.
     @State private var identifiedServer: ServerAddress?
     /// Connect waiting for the check of the address it is about to open.
     @State private var connecting: Task<Void, Never>?
@@ -156,7 +156,7 @@ struct ConnectionEditor: View {
         let mode = await checkedMode(of: server)
         guard !Task.isCancelled else { return }
         detectedMac = mode == .apple ? server : nil
-        identifiedServer = server
+        if mode != nil { identifiedServer = server }
     }
 
     /// Reads the server's greeting once per address. A second caller waits for the check in flight, so its
@@ -167,6 +167,7 @@ struct ConnectionEditor: View {
         if let check, check.server == server {
             mode = check.mode
         } else {
+            check?.mode.cancel()
             mode = Task { await identifyVNCServer(server.host, server.port) }
             check = (server, mode)
         }
@@ -185,7 +186,7 @@ struct ConnectionEditor: View {
             let mode = await checkedMode(of: server)
             guard !Task.isCancelled else { return }
             detectedMac = mode == .apple ? server : nil
-            identifiedServer = server
+            if mode != nil { identifiedServer = server }
             connecting = nil
             submit(to: open)
         }
@@ -383,6 +384,14 @@ struct ConnectionEditor: View {
         // The optional name comes first, but typing starts in Host.
         .onAppear { focusedField = .host }
         .task(id: serverToIdentify) { await identify(serverToIdentify) }
+        // A check of an address the fields no longer show, or for a sheet that closed, has no use.
+        .onChange(of: serverToIdentify) { _, server in
+            if let check, check.server != server { check.mode.cancel() }
+        }
+        .onDisappear {
+            check?.mode.cancel()
+            connecting?.cancel()
+        }
     }
 
     private var trimmedHost: String {
