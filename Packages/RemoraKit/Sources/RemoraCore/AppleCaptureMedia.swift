@@ -142,9 +142,10 @@ final class AppleCaptureMovie: CaptureMovie, @unchecked Sendable {
     private var lastPTS: TimeInterval = -1
     private var lastPixelBuffer: CVPixelBuffer?
     private var lastAppend: TimeInterval = 0
+    /// The arrival time of the last frame written. The queue writes it under `lock`.
     private var lastArrival: TimeInterval = -.infinity
-    /// The arrival time of the last frame written. A caller that sets the overlays' clock paces itself by it.
-    var writtenArrival: TimeInterval { queue.sync { lastArrival } }
+    /// A caller that sets the overlays' clock paces itself by this. The read never waits for a frame in progress.
+    var writtenArrival: TimeInterval { lock.withLock { lastArrival } }
     private var finishTimer: DispatchSourceTimer?
     private var finishing = false
     private var finishingWriter = false
@@ -276,7 +277,7 @@ final class AppleCaptureMovie: CaptureMovie, @unchecked Sendable {
             if let selected, selected > lastArrival {
                 do {
                     if let arrival = try append(at: selected) {
-                        lastArrival = arrival
+                        lock.withLock { lastArrival = arrival }
                         // Preserve the pacing clock across small scheduling delays, without replaying idle time.
                         lastAppend = now - lastAppend >= 2.0 / 60 ? now : lastAppend + 1.0 / 60
                     } else {
