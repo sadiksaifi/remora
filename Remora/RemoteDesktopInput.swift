@@ -39,7 +39,10 @@ final class RemoteDesktopInput: NSObject {
     /// True while a menu of this app is open: one in the menu bar, a tab's, the toolbar's or the menu bar icon's.
     /// The menu takes every key until it closes. The desktop keeps the focus, so capture stays reported.
     private var menuIsOpen = false
-    /// Caps Lock as the remote computer has it while a menu has the keys: as the menu opened, or as last synchronized.
+    /// True while a tracking loop that no menu announced has the keys: from the first key pressed in it until it ends.
+    private var trackingHasKeys = false
+    /// Caps Lock as the remote computer has it while a menu or a tracking loop has the keys: as that began, or
+    /// as last synchronized.
     private var capsLockSent = false
     /// The keyboard's own Caps Lock. The session's flags follow the last event, and an event that another
     /// program posts can lack the Caps Lock flag.
@@ -99,23 +102,28 @@ final class RemoteDesktopInput: NSObject {
     /// The menu gets the keys from here on, so the remote computer would never see a held key released.
     @objc private func menuOpened(_ notification: Notification) {
         menuIsOpen = true
-        capsLockSent = capsLockIsOn
+        if !trackingHasKeys { capsLockSent = capsLockIsOn }
         guard hasFocus else { return }
         shortcutCapture.stop()
         keyboardRouting = KeyboardRouting()
         releaseKeys()
     }
 
-    /// The desktop kept the focus, so this is no focus gain: the clipboard is not sent and the remote locks are
-    /// not synchronized, which would turn the remote Num Lock and Scroll Lock off. A Caps Lock press that the
-    /// menu took is sent now, as the key press it was.
     @objc private func menuClosed(_ notification: Notification) {
         menuIsOpen = false
+        keysReturned()
+    }
+
+    /// A menu or a tracking loop gives the keys back. The desktop kept the focus, so this is no focus gain: the
+    /// clipboard is not sent and the remote locks are not synchronized, which would turn the remote Num Lock
+    /// and Scroll Lock off. A Caps Lock press that went elsewhere is sent now, as the key press it was.
+    private func keysReturned() {
         captureMayHaveChanged()
         guard canCapture else { return }
         shortcutCapture.start()
         resetKeyboard()
         guard capsLockIsOn != capsLockSent else { return }
+        capsLockSent = capsLockIsOn
         for isDown in [true, false] { input?.sendKey(KeyInput(keyCode: 0x39, isDown: isDown)) }
     }
 
@@ -203,15 +211,23 @@ final class RemoteDesktopInput: NSObject {
         guard hasFocus, !menuIsOpen, let input else { return false }
         // AppKit can open a menu without posting that tracking began, as it does after an accessibility press on
         // an item that has a submenu. The run loop is in its tracking mode while a menu is open, and while the
-        // mouse holds a control. A key pressed then stays local. A modifier change releases what the remote
-        // computer holds and starts the keyboard again, as a menu's opening and closing do, so the remote
-        // computer gets no modifier press. A key release takes the usual route.
-        if event.type != .keyUp, RunLoop.main.currentMode == .eventTracking {
-            guard event.type == .flagsChanged else { return false }
-            keyboardRouting = KeyboardRouting()
-            releaseKeys()
-            resetKeyboard()
-            return false
+        // mouse holds a control. The first key or modifier pressed then gives that loop the keys, as a menu's
+        // opening does. The run loop returns to its default mode when the loop ends, which gives the keys back,
+        // as a menu's closing does. Until a key is pressed, a release takes the usual route.
+        if RunLoop.main.currentMode == .eventTracking {
+            if !trackingHasKeys, event.type != .keyUp {
+                trackingHasKeys = true
+                capsLockSent = keyboard.capsLockOn
+                keyboardRouting = KeyboardRouting()
+                releaseKeys()
+                RunLoop.main.perform(inModes: [.default]) { [weak self] in
+                    MainActor.assumeIsolated {
+                        self?.trackingHasKeys = false
+                        self?.keysReturned()
+                    }
+                }
+            }
+            if trackingHasKeys { return false }
         }
         switch keyboardRouting.route(
             keyCode: event.keyCode, rawFlags: event.modifierFlags.rawValue,

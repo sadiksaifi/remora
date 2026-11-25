@@ -92,7 +92,8 @@ public struct ScrollAccumulator: Sendable {
 /// Tracks physical keys without depending on AppKit. Raw flags retain NX_DEVICE* bits.
 public struct KeyboardState: Sendable {
     private var pressed: Set<UInt16> = []
-    private var capsLockOn = false
+    /// Caps Lock as the remote computer has it: as last reset, then as each Caps Lock press sent changed it.
+    public private(set) var capsLockOn = false
     private var staleModifiers: UInt = 0
     /// Keys held at the last reset. Their press went elsewhere, so their repeats and release stay local.
     private var staleKeys: Set<UInt16> = []
