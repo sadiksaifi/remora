@@ -59,7 +59,20 @@ public final class SessionOverlayState: @unchecked Sendable {
     private var observers: [UUID: @Sendable (TimeInterval) -> Void] = [:]
     private var timer: DispatchSourceTimer?
 
-    public init() {}
+    private let clock: @Sendable () -> TimeInterval
+
+    public convenience init() {
+        self.init(clock: { ProcessInfo.processInfo.systemUptime })
+    }
+
+    /// `clock` times input feedback and animations. It must be system uptime wherever the desktop changes,
+    /// since a movie orders the desktop's frames, which arrive on system uptime, with the frames this clock times.
+    init(clock: @escaping @Sendable () -> TimeInterval) {
+        self.clock = clock
+    }
+
+    /// The clock's time. A movie starts and stops on it, since it times the frames that these overlays wake.
+    var now: TimeInterval { clock() }
     deinit { timer?.cancel() }
 
     public func reset() {
@@ -128,7 +141,7 @@ public final class SessionOverlayState: @unchecked Sendable {
     public func setAgentCursorBusy(_ busy: Bool) {
         change {
             agentBusy = busy
-            idleSince = busy ? nil : ProcessInfo.processInfo.systemUptime
+            idleSince = busy ? nil : clock()
             if !busy { agentCursor?.release() }
             updateThinkingWindow()
         }
@@ -179,7 +192,7 @@ public final class SessionOverlayState: @unchecked Sendable {
             agentCursor?.bounds = bounds
             agentCursor?.place(at: target)
         } else {
-            agentCursor = CursorMotion(hotspot: target, bounds: bounds, time: ProcessInfo.processInfo.systemUptime)
+            agentCursor = CursorMotion(hotspot: target, bounds: bounds, time: clock())
         }
         agentCursor?.reduceMotion = reduceMotion
         agentCursor?.isVisible = agentVisible
@@ -198,7 +211,7 @@ public final class SessionOverlayState: @unchecked Sendable {
 
     public func receive(_ source: InputSource, _ event: SessionInputFeedback) {
         change {
-            let now = ProcessInfo.processInfo.systemUptime
+            let now = clock()
             switch event {
             case .pointer(let position, let buttons):
                 point = CGPoint(x: Int(position.x), y: Int(position.y))
@@ -228,8 +241,9 @@ public final class SessionOverlayState: @unchecked Sendable {
         }
     }
 
-    public func snapshot(at time: TimeInterval = ProcessInfo.processInfo.systemUptime) -> Snapshot {
+    public func snapshot(at time: TimeInterval? = nil) -> Snapshot {
         lock.withLock {
+            let time = time ?? clock()
             agentCursor?.advance(to: time)
             let age = time - keyTime
             let text = showKeys && age < 1.5 ? press.map { $0.text + (repeats > 1 ? " ×\(repeats)" : "") } : nil
@@ -247,7 +261,7 @@ public final class SessionOverlayState: @unchecked Sendable {
         lock.withLock {
             let id = UUID()
             observers[id] = observer
-            observer(ProcessInfo.processInfo.systemUptime)
+            observer(clock())
             return id
         }
     }
@@ -275,7 +289,7 @@ public final class SessionOverlayState: @unchecked Sendable {
 
     private func change(_ body: () -> Void) {
         lock.withLock {
-            agentCursor?.advance(to: ProcessInfo.processInfo.systemUptime)
+            agentCursor?.advance(to: clock())
             body()
             tick()
             if timer == nil, needsTicks {
@@ -293,11 +307,11 @@ public final class SessionOverlayState: @unchecked Sendable {
 
     private var needsTicks: Bool {
         !clicks.isEmpty || (showKeys && press != nil) || agentCursor?.isSettled == false
-            || (agentVisible && !agentBusy && !reduceMotion && idleSince.map { ProcessInfo.processInfo.systemUptime < $0 + 30 } == true)
+            || (agentVisible && !agentBusy && !reduceMotion && idleSince.map { clock() < $0 + 30 } == true)
     }
 
     private func tick() {
-        let now = ProcessInfo.processInfo.systemUptime
+        let now = clock()
         agentCursor?.advance(to: now)
         clicks.removeAll { now - $0.time >= 0.5 }
         if now - keyTime >= 1.5 { press = nil }
