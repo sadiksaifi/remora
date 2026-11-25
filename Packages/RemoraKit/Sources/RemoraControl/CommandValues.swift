@@ -33,29 +33,32 @@ public enum PasswordInput {
 }
 
 public enum StandardInput {
-    /// Reads a file to its end and fails at the 1 MiB request size limit.
-    /// A blocking read finds the end of a regular file, which `FileHandle.readabilityHandler` never reports.
-    /// Cancelling the task ends the wait at once, even on a pipe that never closes; the read thread then stays blocked until the process exits.
-    public static func read(_ handle: FileHandle = .standardInput) async throws -> Data {
-        let result = AsyncThrowingStream<Data, any Error> { continuation in
-            Thread.detachNewThread {
-                var data = Data()
-                do {
-                    while let chunk = try handle.read(upToCount: 65_536), !chunk.isEmpty {
-                        data.append(chunk)
-                        guard data.count < 1_048_576 else {
-                            return continuation.finish(throwing: ControlFailure(.invalidArgument, "Stdin exceeds the request size limit."))
-                        }
-                    }
-                } catch {
-                    return continuation.finish(throwing: ControlFailure(.ioFailed, "Could not read stdin."))
+    /// Reads a descriptor to end of file, fails at the 1 MiB request size limit, and ends at the deadline or when the task is cancelled.
+    /// It reads only after poll reports an event, so it never blocks or leaves a read running. `FileHandle.readabilityHandler` never reports a regular file's end.
+    /// poll reports devices such as /dev/null as invalid, so read decides. A nonblocking descriptor without data waits, and its flags stay unchanged.
+    public static func read(_ descriptor: Int32 = STDIN_FILENO, until deadline: ContinuousClock.Instant) async throws -> Data {
+        var data = Data()
+        var buffer = [UInt8](repeating: 0, count: 65_536)
+        while true {
+            var event = pollfd(fd: descriptor, events: Int16(POLLIN), revents: 0)
+            if poll(&event, 1, 0) > 0 {
+                let (count, error) = buffer.withUnsafeMutableBytes { (Darwin.read(descriptor, $0.baseAddress, $0.count), errno) }
+                if count == 0 { return data }
+                if count > 0 {
+                    data.append(contentsOf: buffer[..<count])
+                    guard data.count < 1_048_576 else { throw ControlFailure(.invalidArgument, "Stdin exceeds the request size limit.") }
+                    continue
                 }
-                continuation.yield(data)
-                continuation.finish()
+                guard error == EAGAIN || error == EINTR else { throw ControlFailure(.ioFailed, "Could not read stdin.") }
             }
+            let remaining = ContinuousClock.now.duration(to: deadline)
+            guard remaining > .zero else {
+                throw ControlFailure(
+                    .timeout, "Stdin did not reach end of file before the deadline.",
+                    hint: "Close stdin after writing the input, or pass a longer --timeout. Nothing was sent.")
+            }
+            do { try await Task.sleep(for: min(remaining, .milliseconds(10))) } catch { throw ControlFailure(.cancelled, "The command was interrupted.") }
         }
-        for try await data in result { return data }
-        throw ControlFailure(.cancelled, "The command was interrupted.")
     }
 }
 

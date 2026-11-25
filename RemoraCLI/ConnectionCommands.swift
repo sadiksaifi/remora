@@ -17,7 +17,7 @@ struct ConnectionFields: ParsableArguments {
     ) var vncMode: String?
     @Flag(help: "Read the password from UTF-8 stdin, removing one trailing line ending.") var passwordStdin = false
 
-    func arguments() async throws -> [String: ControlValue] {
+    func arguments(until deadline: ContinuousClock.Instant) async throws -> [String: ControlValue] {
         if let resolution { _ = try ControlResolution(resolution) }
         if let port, !(1...65535).contains(port) { throw ValidationError("Port must be 1 to 65535.") }
         if let kind, !["rdp", "vnc"].contains(kind) { throw ValidationError("Protocol must be rdp or vnc.") }
@@ -29,19 +29,19 @@ struct ConnectionFields: ParsableArguments {
             if let value { result[key] = .string(value) }
         }
         if let port { result["port"] = .number(Double(port)) }
-        if passwordStdin { result["password"] = .string(try await readPassword()) }
+        if passwordStdin { result["password"] = .string(try await readPassword(until: deadline)) }
         return result
     }
 }
 
-func readPassword() async throws -> String {
-    try PasswordInput.decode(try await StandardInput.read())
+func readPassword(until deadline: ContinuousClock.Instant) async throws -> String {
+    try PasswordInput.decode(try await StandardInput.read(until: deadline))
 }
 
 /// Reads piped text or JSON. A terminal fails at once, because a command that waits for typed input looks hung to an agent.
-func readPipedInput() async throws -> Data {
+func readPipedInput(until deadline: ContinuousClock.Instant) async throws -> Data {
     guard isatty(STDIN_FILENO) == 0 else { throw ControlFailure(.invalidArgument, "Pipe the input on stdin.") }
-    return try await StandardInput.read()
+    return try await StandardInput.read(until: deadline)
 }
 
 struct ConnectionCommand: AsyncParsableCommand {
@@ -69,7 +69,10 @@ struct ConnectionCommand: AsyncParsableCommand {
         @OptionGroup var options: CommonOptions
         @OptionGroup var fields: ConnectionFields
         mutating func validate() throws { guard fields.host != nil else { throw ValidationError("--host is required.") } }
-        @MainActor func run() async throws { try await options.execute(.init(command: "connection.create", arguments: try await fields.arguments())) }
+        @MainActor func run() async throws {
+            let deadline = try options.deadline(for: "connection.create")
+            try await options.execute(.init(command: "connection.create", arguments: try await fields.arguments(until: deadline)), deadline: deadline)
+        }
     }
     struct Update: AsyncParsableCommand {
         static let configuration = CommandConfiguration(abstract: "Change a saved connection or its saved password. Fields you leave out keep their values.")
@@ -81,10 +84,11 @@ struct ConnectionCommand: AsyncParsableCommand {
             if clearPassword && fields.passwordStdin { throw ValidationError("Choose --password-stdin or --clear-password.") }
         }
         @MainActor func run() async throws {
-            var args = try await fields.arguments()
+            let deadline = try options.deadline(for: "connection.update")
+            var args = try await fields.arguments(until: deadline)
             args["connection"] = .string(connection)
             args["clearPassword"] = .bool(clearPassword)
-            try await options.execute(.init(command: "connection.update", arguments: args))
+            try await options.execute(.init(command: "connection.update", arguments: args), deadline: deadline)
         }
     }
     struct Duplicate: AsyncParsableCommand {

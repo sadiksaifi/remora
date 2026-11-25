@@ -57,23 +57,67 @@ import Testing
     let pipe = Pipe()
     pipe.fileHandleForWriting.write(Data("[]".utf8))
     try pipe.fileHandleForWriting.close()
-    #expect(try await StandardInput.read(pipe.fileHandleForReading) == Data("[]".utf8))
+    #expect(try await StandardInput.read(pipe.fileHandleForReading.fileDescriptor, until: .now + .seconds(60)) == Data("[]".utf8))
 
     for contents in [Data("[]\n".utf8), Data(), Data(count: 1_048_575)] {
-        #expect(try await StandardInput.read(file(contents)) == contents)
+        #expect(try await readToEnd(file(contents)) == contents)
     }
     await #expect(throws: ControlFailure(.invalidArgument, "Stdin exceeds the request size limit.")) {
-        try await StandardInput.read(file(Data(count: 1_048_576)))
+        try await readToEnd(file(Data(count: 1_048_576)))
     }
 }
 
-@Test func cancellingEndsAStandardInputReadThatNeverFinishes() async throws {
+@Test func standardInputThatNeverEndsFailsAtTheDeadline() async throws {
     let pipe = Pipe()
     defer { try? pipe.fileHandleForWriting.close() }
-    let read = Task { try await StandardInput.read(pipe.fileHandleForReading) }
-    try await Task.sleep(for: .milliseconds(50))
+    let start = ContinuousClock.now
+    let failure = await #expect(throws: ControlFailure.self) {
+        try await StandardInput.read(pipe.fileHandleForReading.fileDescriptor, until: start + .milliseconds(200))
+    }
+    #expect(failure?.code == .timeout)
+    // The upper bound only catches a read that ignores the deadline; CI runs these tests on few cores.
+    let elapsed = start.duration(to: .now)
+    #expect(elapsed >= .milliseconds(200) && elapsed < .seconds(10))
+}
+
+/// A program that starts the CLI can hand it a nonblocking pipe, whose read fails with EAGAIN until data arrives.
+@Test func nonblockingStandardInputWaitsForData() async throws {
+    let pipe = Pipe()
+    let input = pipe.fileHandleForReading.fileDescriptor
+    #expect(fcntl(input, F_SETFL, fcntl(input, F_GETFL) | O_NONBLOCK) == 0)
+    pipe.fileHandleForWriting.write(Data("a".utf8))
+    let read = Task { try await StandardInput.read(input, until: .now + .seconds(60)) }
+    try await waitUntilDrained(input)
+    pipe.fileHandleForWriting.write(Data("b".utf8))
+    try pipe.fileHandleForWriting.close()
+    #expect(try await read.value == Data("ab".utf8))
+}
+
+/// A cancelled read stops reading, so data written after it reaches the next read.
+@Test func cancelledStandardInputReadLeavesLaterDataForTheNextRead() async throws {
+    let pipe = Pipe()
+    let input = pipe.fileHandleForReading.fileDescriptor
+    pipe.fileHandleForWriting.write(Data("a".utf8))
+    let read = Task { try await StandardInput.read(input, until: .now + .seconds(60)) }
+    try await waitUntilDrained(input)
     read.cancel()
-    await #expect(throws: ControlFailure(.cancelled, "The command was interrupted.")) { try await read.value }
+    let failure = await #expect(throws: ControlFailure.self) { try await read.value }
+    #expect(failure?.code == .cancelled)
+    pipe.fileHandleForWriting.write(Data("next".utf8))
+    try pipe.fileHandleForWriting.close()
+    #expect(try await StandardInput.read(input, until: .now + .seconds(60)) == Data("next".utf8))
+}
+
+/// Waits until a reader has taken every byte in the pipe, which shows that the read has started.
+private func waitUntilDrained(_ descriptor: Int32) async throws {
+    let limit = ContinuousClock.now + .seconds(10)
+    var event = pollfd(fd: descriptor, events: Int16(POLLIN), revents: 0)
+    while poll(&event, 1, 0) > 0, ContinuousClock.now < limit { try await Task.sleep(for: .milliseconds(1)) }
+}
+
+private func readToEnd(_ handle: FileHandle) async throws -> Data {
+    defer { try? handle.close() }
+    return try await StandardInput.read(handle.fileDescriptor, until: .now + .seconds(60))
 }
 
 private func file(_ contents: Data) throws -> FileHandle {

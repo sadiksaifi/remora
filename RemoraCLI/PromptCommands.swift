@@ -32,6 +32,7 @@ struct PromptCommand: AsyncParsableCommand {
             if action == .cancel && (!set.isEmpty || passwordStdin || clearPassword) { throw ValidationError("Cancel accepts no credential fields.") }
         }
         @MainActor func run() async throws {
+            let deadline = try options.deadline(for: "prompt.respond")
             var args: [String: ControlValue] = ["prompt": .string(prompt), "action": .string(action.rawValue)]
             for field in set {
                 let pair = field.split(separator: "=", maxSplits: 1, omittingEmptySubsequences: false)
@@ -40,9 +41,9 @@ struct PromptCommand: AsyncParsableCommand {
                 }
                 args[String(pair[0])] = .string(String(pair[1]))
             }
-            if passwordStdin { args["password"] = .string(try await readPassword()) }
+            if passwordStdin { args["password"] = .string(try await readPassword(until: deadline)) }
             if clearPassword { args["clearPassword"] = .bool(true) }
-            try await options.execute(.init(command: "prompt.respond", arguments: args))
+            try await options.execute(.init(command: "prompt.respond", arguments: args), deadline: deadline)
         }
     }
 }

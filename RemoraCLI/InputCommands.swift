@@ -95,16 +95,17 @@ struct TypeCommand: AsyncParsableCommand {
     @OptionGroup var target: SessionOptions
     @Option(help: "Text to send. Without it, the command reads untrimmed UTF-8 text from stdin to EOF.") var text: String?
     @MainActor func run() async throws {
+        let deadline = try options.deadline(for: "type")
         let value: String
         if let text {
             value = text
         } else {
-            guard let decoded = String(data: try await readPipedInput(), encoding: .utf8) else {
+            guard let decoded = String(data: try await readPipedInput(until: deadline), encoding: .utf8) else {
                 throw ControlFailure(.invalidArgument, "Text stdin must be UTF-8.")
             }
             value = decoded
         }
-        try await options.execute(.init(command: "type", session: target.target, arguments: ["text": .string(value)]))
+        try await options.execute(.init(command: "type", session: target.target, arguments: ["text": .string(value)]), deadline: deadline)
     }
 }
 
@@ -147,11 +148,12 @@ struct InputCommand: AsyncParsableCommand {
     @OptionGroup var target: SessionOptions
     @OptionGroup var basis: ImageOptions
     @MainActor func run() async throws {
+        let deadline = try options.deadline(for: "input")
         let actions: ControlValue
-        do { actions = try JSONDecoder().decode(ControlValue.self, from: try await readPipedInput()) } catch let failure as ControlFailure {
+        do { actions = try JSONDecoder().decode(ControlValue.self, from: try await readPipedInput(until: deadline)) } catch let failure as ControlFailure {
             throw failure
         } catch { throw ControlFailure(.invalidArgument, "Stdin must contain a JSON action array.") }
-        try await options.execute(.init(command: "input", session: target.target, arguments: basis.adding(to: ["actions": actions])))
+        try await options.execute(.init(command: "input", session: target.target, arguments: basis.adding(to: ["actions": actions])), deadline: deadline)
     }
 }
 
