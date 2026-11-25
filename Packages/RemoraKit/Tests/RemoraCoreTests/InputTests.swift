@@ -121,6 +121,19 @@ import Testing
     #expect(state.key(keyCode: 0, isDown: false).isEmpty)
 }
 
+/// Escape closes a menu and is still down when the keyboard returns to the desktop. Its repeats and its release
+/// belong to that press, which the remote computer never saw.
+@Test func aKeyHeldAtFocusResetStaysLocalUntilItIsReleased() {
+    var state = KeyboardState()
+    state.reset(capsLockOn: false, heldKeys: [0x35])
+    #expect(state.key(keyCode: 0x35, isDown: true).isEmpty)
+    #expect(state.key(keyCode: 0x00, isDown: true) == [KeyInput(keyCode: 0x00, isDown: true)])
+    #expect(state.key(keyCode: 0x35, isDown: false).isEmpty)
+    #expect(state.key(keyCode: 0x35, isDown: true) == [KeyInput(keyCode: 0x35, isDown: true)])
+    #expect(state.key(keyCode: 0x35, isDown: false) == [KeyInput(keyCode: 0x35, isDown: false)])
+    #expect(state.releaseAll() == [KeyInput(keyCode: 0x00, isDown: false)])
+}
+
 @Test func trackpadRetainsFractionsAndDirectionOnBothAxes() {
     var scroll = ScrollAccumulator()
     #expect(scroll.accumulate(x: 0.1, y: -0.1, precise: true) == WheelInput(vertical: 0, horizontal: 0))

@@ -24,7 +24,7 @@ final class RemoteDesktopInput: NSObject {
     var onBlockedInput: (() -> Void)?
     private var connected = false
     private lazy var shortcutCapture = SystemShortcutCapture(
-        isFocused: { [weak self] in self?.canCapture == true },
+        isFocused: { [weak self] in self.map { $0.canCapture && !$0.menuIsOpen } ?? false },
         receive: { [weak self] event in self?.receiveKeyboardEvent(event) ?? false },
         releaseKeys: { [weak self] in
             guard let self else { return }
@@ -36,6 +36,9 @@ final class RemoteDesktopInput: NSObject {
         connected && input != nil && NSApp.isActive && view?.window?.isKeyWindow == true && view?.window?.firstResponder === view
     }
     private var canCapture: Bool { hasFocus && allowsHumanInput }
+    /// True while a menu of this app is open: one in the menu bar, a tab's, the toolbar's or the menu bar icon's.
+    /// The menu takes every key until it closes. The desktop keeps the focus, so capture stays reported.
+    private var menuIsOpen = false
     private var keyboard = KeyboardState()
     private var keyboardRouting = KeyboardRouting()
     private var scroll = ScrollAccumulator()
@@ -58,6 +61,7 @@ final class RemoteDesktopInput: NSObject {
         center.removeObserver(self)
         if let keyUpMonitor { NSEvent.removeMonitor(keyUpMonitor) }
         keyUpMonitor = nil
+        menuIsOpen = false
         guard let window = view?.window else { return }
         window.acceptsMouseMovedEvents = true
         // AppKit can consume Command key-ups before responder dispatch. Observe them
@@ -76,6 +80,8 @@ final class RemoteDesktopInput: NSObject {
         center.addObserver(self, selector: #selector(focusLost(_:)), name: NSApplication.didResignActiveNotification, object: nil)
         center.addObserver(self, selector: #selector(focusGained(_:)), name: NSWindow.didBecomeKeyNotification, object: window)
         center.addObserver(self, selector: #selector(focusGained(_:)), name: NSApplication.didBecomeActiveNotification, object: nil)
+        center.addObserver(self, selector: #selector(menuOpened(_:)), name: NSMenu.didBeginTrackingNotification, object: nil)
+        center.addObserver(self, selector: #selector(menuClosed(_:)), name: NSMenu.didEndTrackingNotification, object: nil)
     }
 
     @objc private func settingsChanged(_ notification: Notification) {
@@ -84,6 +90,20 @@ final class RemoteDesktopInput: NSObject {
 
     @objc private func focusGained(_ notification: Notification) { focusIn() }
     @objc private func focusLost(_ notification: Notification) { focusOut() }
+
+    /// The menu gets the keys from here on, so the remote computer would never see a held key released.
+    @objc private func menuOpened(_ notification: Notification) {
+        menuIsOpen = true
+        guard hasFocus else { return }
+        shortcutCapture.stop()
+        keyboardRouting = KeyboardRouting()
+        releaseKeys()
+    }
+
+    @objc private func menuClosed(_ notification: Notification) {
+        menuIsOpen = false
+        focusIn()
+    }
 
     func setConnected(_ connected: Bool) {
         if !connected { focusOut() }
@@ -145,9 +165,12 @@ final class RemoteDesktopInput: NSObject {
     }
 
     private func resetKeyboard() {
+        // A key can still be down from a press that went elsewhere, such as the Escape that closed a menu.
+        // The session's key state misses every event the capture discards, so it can show a released key as down.
+        let held = (0..<128 as Range<UInt16>).filter { CGEventSource.keyState(.hidSystemState, key: $0) }
         keyboard.reset(
             capsLockOn: NSEvent.modifierFlags.contains(.capsLock),
-            rawFlags: UInt(CGEventSource.flagsState(.combinedSessionState).rawValue))
+            rawFlags: UInt(CGEventSource.flagsState(.combinedSessionState).rawValue), heldKeys: Set(held))
     }
 
     func flagsChanged(_ event: NSEvent) {
@@ -162,7 +185,7 @@ final class RemoteDesktopInput: NSObject {
     /// The tap consumes remote events, so AppKit only sees bypass events and local chords.
     /// Both routes use the same eligibility, shortcut policy, and pressed-key state.
     private func receiveKeyboardEvent(_ event: NSEvent) -> Bool {
-        guard hasFocus, let input else { return false }
+        guard hasFocus, !menuIsOpen, let input else { return false }
         switch keyboardRouting.route(
             keyCode: event.keyCode, rawFlags: event.modifierFlags.rawValue,
             event: event.type == .flagsChanged

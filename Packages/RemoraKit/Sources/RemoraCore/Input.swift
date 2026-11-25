@@ -94,11 +94,14 @@ public struct KeyboardState: Sendable {
     private var pressed: Set<UInt16> = []
     private var capsLockOn = false
     private var staleModifiers: UInt = 0
+    /// Keys held at the last reset. Their press went elsewhere, so their repeats and release stay local.
+    private var staleKeys: Set<UInt16> = []
 
     public init() {}
 
     public mutating func key(keyCode: UInt16, isDown: Bool, rawFlags: UInt? = nil) -> [KeyInput] {
         guard Self.modifierMask(keyCode) == nil, keyCode != 0x39, keyCode != 0x3F else { return [] }
+        if isDown ? staleKeys.contains(keyCode) : staleKeys.remove(keyCode) != nil { return [] }
         let modifiers = isDown ? rawFlags.map { flagsChanged(keyCode: 0, rawFlags: $0) } ?? [] : []
         if isDown {
             pressed.insert(keyCode)
@@ -134,11 +137,14 @@ public struct KeyboardState: Sendable {
         return releases
     }
 
-    public mutating func reset(capsLockOn: Bool, rawFlags: UInt = 0) {
+    /// Starts again when the keyboard arrives, with the modifiers in `rawFlags` and the keys in `heldKeys` down.
+    /// The remote computer never saw them go down, so each stays local until it is released.
+    public mutating func reset(capsLockOn: Bool, rawFlags: UInt = 0, heldKeys: Set<UInt16> = []) {
         pressed.removeAll()
         self.capsLockOn = capsLockOn
         staleModifiers = 0
         staleModifiers = modifierFlags(rawFlags, keyCode: 0)
+        staleKeys = heldKeys
     }
 
     /// Aggregate-only accessibility events omit the side. Retain known held sides,
