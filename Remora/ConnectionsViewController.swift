@@ -39,7 +39,7 @@ final class ConnectionsViewController: NSViewController, NSTableViewDataSource, 
         tableView.addTableColumn(column)
         tableView.headerView = nil
         tableView.style = .inset
-        tableView.rowHeight = 44
+        tableView.rowHeight = 52
         tableView.columnAutoresizingStyle = .uniformColumnAutoresizingStyle
         tableView.allowsMultipleSelection = true
         tableView.dataSource = self
@@ -107,7 +107,7 @@ final class ConnectionsViewController: NSViewController, NSTableViewDataSource, 
 
     @objc func newConnection(_ sender: Any?) {
         presentEditor(
-            title: "New Connection", for: Connection(name: "", host: "", username: ""), password: "", identifiesVNCServer: true)
+            title: "New Connection", for: Connection(name: "", host: "", username: ""), password: "", isBlank: true)
     }
 
     /// Opens each target in a tab, or shows its tab. From the context menu it applies only
@@ -177,7 +177,7 @@ final class ConnectionsViewController: NSViewController, NSTableViewDataSource, 
         open([rows[row]])
     }
 
-    /// The hover button reads Disconnect for a live session and Connect otherwise.
+    /// The action button reads Disconnect for a live session and Connect otherwise.
     @objc private func actionButtonClicked(_ sender: NSButton) {
         let row = tableView.row(for: sender)
         guard row >= 0, row < rows.count else { return }
@@ -217,11 +217,18 @@ final class ConnectionsViewController: NSViewController, NSTableViewDataSource, 
         let cell =
             tableView.makeView(withIdentifier: ConnectionCellView.identifier, owner: self)
             as? ConnectionCellView ?? makeCell()
+        let id = rows[row].id
         cell.configure(
-            with: rows[row], session: sessionTabs.states[rows[row].id],
-            hovered: row == self.tableView.hoveredRow
+            with: rows[row], tab: sessionTabs.tabs.first { $0.id == id },
+            isRecording: sessionTabs.session(for: id)?.capture.recordingState.isWriting == true,
+            showsAction: row == self.tableView.actionRow
         )
         return cell
+    }
+
+    /// Several selected rows show no action button.
+    func tableViewSelectionDidChange(_ notification: Notification) {
+        tableView.updateHover()
     }
 
     func tableView(_ tableView: NSTableView, typeSelectStringFor tableColumn: NSTableColumn?, row: Int) -> String? {
@@ -318,7 +325,8 @@ final class ConnectionsViewController: NSViewController, NSTableViewDataSource, 
 
     private func observeSessions() {
         withObservationTracking {
-            _ = sessionTabs.states
+            // A row shows its session's one status, which a recording is part of.
+            for tab in sessionTabs.tabs { _ = sessionTabs.session(for: tab.id)?.capture.recordingState }
         } onChange: { [weak self] in
             Task { @MainActor [weak self] in
                 self?.reconfigureRows()
@@ -385,7 +393,9 @@ final class ConnectionsViewController: NSViewController, NSTableViewDataSource, 
     }
 
     /// Saves the connection, then its password. Safe to retry after a partial failure.
-    private func save(_ draft: Connection, password: String, original: Connection, originalPassword: String, isNew: Bool) {
+    /// Returns the saved connection, or nil after showing why it was not saved.
+    @discardableResult
+    private func save(_ draft: Connection, password: String, original: Connection, originalPassword: String, isNew: Bool) -> Connection? {
         var connection = draft
         do {
             if let current = connectionStore.connections.first(where: { $0.id == connection.id }) {
@@ -404,11 +414,12 @@ final class ConnectionsViewController: NSViewController, NSTableViewDataSource, 
             }
         } catch {
             showAlert("Couldn’t Save Connection", error: error, on: editorController?.view.window ?? hostWindow)
-            return
+            return nil
         }
         sessionTabs.update(connection)
         dismissEditor()
         select(id: connection.id)
+        return connection
     }
 
     private func deleteConnections(ids: Set<UUID>) {
@@ -425,19 +436,26 @@ final class ConnectionsViewController: NSViewController, NSTableViewDataSource, 
     // MARK: Presentation
 
     /// Only a new connection identifies its VNC server. A duplicate keeps the mode it copied.
-    private func presentEditor(title: String, for connection: Connection, password: String, identifiesVNCServer: Bool = false) {
+    /// - Parameter isBlank: A connection made from nothing. Its sheet detects a Mac and offers Connect.
+    private func presentEditor(title: String, for connection: Connection, password: String, isBlank: Bool = false) {
         guard editorController == nil else { return }
         let isNew = !connectionStore.connections.contains { $0.id == connection.id }
         let editor = ConnectionEditor(
             title: title,
             connection: connection,
             password: password,
-            identifyVNCServer: identifiesVNCServer
+            identifyVNCServer: isBlank
                 ? { @Sendable host, port in await VNCServerProbe.mode(host: host, port: port) } : nil,
             onCancel: { [weak self] in self?.dismissEditor() },
             onSave: { [weak self] draft, editedPassword in
                 self?.save(draft, password: editedPassword, original: connection, originalPassword: password, isNew: isNew)
-            }
+            },
+            onConnect: isBlank
+                ? { [weak self] draft, editedPassword in
+                    guard let self, let saved = save(draft, password: editedPassword, original: connection, originalPassword: password, isNew: isNew)
+                    else { return }
+                    open([saved])
+                } : nil
         )
         let controller = NSHostingController(rootView: editor)
         controller.sizingOptions = .preferredContentSize
@@ -502,8 +520,8 @@ struct EmptyStateView: View {
             } description: {
                 Text("Add a computer to connect to it.")
             } actions: {
-                Button("Add Connection", action: addConnection)
-                    .accessibilityIdentifier("addConnection")
+                Button("New Connection", action: addConnection)
+                    .accessibilityIdentifier("newConnection")
             }
         case .noResults(let query):
             ContentUnavailableView.search(text: query)

@@ -43,7 +43,7 @@ struct SessionStatusView: View {
     }
 
     private var content: some View {
-        VStack(spacing: 14) {
+        VStack(spacing: 16) {
             header
             VStack(spacing: 6) {
                 Text(title)
@@ -59,7 +59,7 @@ struct SessionStatusView: View {
             .fixedSize(horizontal: false, vertical: true)
             actions
                 .controlSize(.large)
-                .padding(.top, 6)
+                .padding(.top, 2)
         }
     }
 
@@ -69,7 +69,7 @@ struct SessionStatusView: View {
         case .connecting, .reconnecting:
             ProgressView()
                 .controlSize(.large)
-                .frame(height: 48)
+                .frame(height: 54)
         case .awaitingCredentials:
             symbol("person.badge.key")
         case .awaitingTrust:
@@ -81,9 +81,9 @@ struct SessionStatusView: View {
 
     private func symbol(_ name: String) -> some View {
         Image(systemName: name)
-            .font(.system(size: 40, weight: .regular))
+            .font(.system(size: 46, weight: .regular))
             .foregroundStyle(.secondary)
-            .frame(height: 48)
+            .frame(height: 54)
             .accessibilityHidden(true)
     }
 
@@ -105,7 +105,7 @@ struct SessionStatusView: View {
                 }
             }
             HStack(spacing: 12) {
-                Button("Close", action: onClose)
+                Button("Close Tab", action: onClose)
                     .keyboardShortcut(.cancelAction)
                     .focused($closeFocused)
                     .accessibilityIdentifier("sessionClose")
@@ -121,7 +121,7 @@ struct SessionStatusView: View {
         switch status {
         case .connecting: "Connecting to “\(computerName)”"
         case .awaitingCredentials: "Waiting for Credentials"
-        case .awaitingTrust: "Waiting for Certificate Approval"
+        case .awaitingTrust: "Waiting for Approval"
         case .reconnecting: "Reconnecting to “\(computerName)”"
         case .disconnected(let reason): Self.title(for: reason)
         }
@@ -194,6 +194,22 @@ struct ShortcutPermissionBanner: View {
     let onDismiss: () -> Void
 
     var body: some View {
+        // A window too narrow for one row puts the buttons under the text.
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 14) {
+                message(maxWidth: 440)
+                buttons
+            }
+            VStack(alignment: .trailing, spacing: 10) {
+                message(maxWidth: .infinity)
+                buttons
+            }
+        }
+        .padding(16)
+        .glassEffect(.regular, in: .rect(cornerRadius: 22))
+    }
+
+    private func message(maxWidth: CGFloat) -> some View {
         HStack(alignment: .center, spacing: 14) {
             Image(systemName: "command")
                 .font(.system(size: 22, weight: .medium))
@@ -205,20 +221,21 @@ struct ShortcutPermissionBanner: View {
                     .font(.headline)
                 Text("Shortcuts like Command-Tab and Command-Space stay on this Mac until you allow Remora to control this Mac in Privacy & Security settings.")
                     .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
             }
-            .frame(maxWidth: 440, alignment: .leading)
-            HStack(spacing: 8) {
-                Button("Not Now", action: onDismiss)
-                    .accessibilityIdentifier("shortcutPermissionNotNow")
-                Button("Open System Settings", action: onOpenSettings)
-                    .buttonStyle(.borderedProminent)
-                    .accessibilityIdentifier("shortcutPermissionOpenSettings")
-            }
-            .fixedSize()
+            .fixedSize(horizontal: false, vertical: true)
+            .frame(maxWidth: maxWidth, alignment: .leading)
         }
-        .padding(16)
-        .glassEffect(.regular, in: .rect(cornerRadius: 22))
+    }
+
+    private var buttons: some View {
+        HStack(spacing: 8) {
+            Button("Not Now", action: onDismiss)
+                .accessibilityIdentifier("shortcutPermissionNotNow")
+            Button("Open System Settings", action: onOpenSettings)
+                .buttonStyle(.borderedProminent)
+                .accessibilityIdentifier("shortcutPermissionOpenSettings")
+        }
+        .fixedSize()
     }
 }
 
@@ -277,49 +294,84 @@ struct DisplaySwitchStatus: View {
     }
 }
 
-/// The glass capsule at the top of a desktop while a command-line program controls it, is paused,
-/// or has just been stopped. Take Over and Resume share one button.
-struct AgentControlCapsule: View {
-    let state: SessionControl.State
+/// A full screen notice: a glass capsule at the top of the remote screen that names a change and offers its action.
+struct SessionNoticeCapsule: View {
+    let notice: SessionNotices.Notice
     let agent: String
     let action: () -> Void
 
-    var message: String {
-        switch state {
-        case .paused: "You're in control. \(agent) is paused."
-        default: state.agentStatus(agent) ?? ""
-        }
-    }
-
     var body: some View {
         HStack(spacing: 8) {
-            Image(systemName: state == .active ? "pointer.arrow.motionlines" : state == .paused ? "hand.raised.fill" : "stop.circle")
+            Image(systemName: notice.symbolName)
                 .font(.system(size: 14))
-                .foregroundStyle(state == .active ? AnyShapeStyle(Color(nsColor: .systemBlue)) : AnyShapeStyle(.secondary))
+                .foregroundStyle(notice.tint)
                 .accessibilityHidden(true)
-            Text(message)
+            Text(notice.message(agent: agent))
                 .font(.system(size: 13, weight: .semibold))
                 .lineLimit(1)
-            if state != .stopped {
-                Button(state == .active ? "Take Over" : "Resume", action: action)
-                    .buttonStyle(.borderedProminent)
-                    .buttonBorderShape(.capsule)
-                    .controlSize(.large)
-                    .tint(Color(nsColor: .systemBlue))
-                    .accessibilityIdentifier("agentControlButton")
+            if let title = notice.actionTitle {
+                Group {
+                    if notice == .recording {
+                        Button(title, action: action).buttonStyle(.bordered)
+                    } else {
+                        Button(title, action: action)
+                            .buttonStyle(.borderedProminent)
+                            .tint(Color(nsColor: .systemBlue))
+                    }
+                }
+                .buttonBorderShape(.capsule)
+                .controlSize(.large)
+                .accessibilityIdentifier("sessionNoticeButton")
             }
         }
         .padding(.leading, 14)
-        .padding(.trailing, state == .stopped ? 16 : 5)
+        .padding(.trailing, notice.actionTitle == nil ? 16 : 5)
         .frame(height: 38)
         .glassEffect(.regular, in: .capsule)
         .accessibilityElement(children: .contain)
-        .accessibilityLabel(message)
-        .accessibilityIdentifier("agentControlCapsule")
+        .accessibilityLabel(notice.message(agent: agent))
+        .accessibilityIdentifier("sessionNotice")
     }
 }
 
-/// The key press display on the same glass as AgentControlCapsule. `KeyPressPill` places every item,
+extension SessionNotices.Notice {
+    func message(agent: String) -> String {
+        switch self {
+        case .agentInControl: "\(agent) is in control"
+        case .agentPaused: "You’re in control. \(agent) is paused."
+        case .agentStopped: "\(agent) can no longer control this session."
+        case .recording: "Recording"
+        }
+    }
+
+    fileprivate var symbolName: String {
+        switch self {
+        case .agentInControl: "pointer.arrow.motionlines"
+        case .agentPaused: "pointer.arrow.slash"
+        case .agentStopped: "stop.circle"
+        case .recording: "record.circle"
+        }
+    }
+
+    fileprivate var tint: AnyShapeStyle {
+        switch self {
+        case .agentInControl: AnyShapeStyle(Color(nsColor: .systemBlue))
+        case .recording: AnyShapeStyle(Color(nsColor: .systemRed))
+        case .agentPaused, .agentStopped: AnyShapeStyle(.secondary)
+        }
+    }
+
+    fileprivate var actionTitle: String? {
+        switch self {
+        case .agentInControl: "Take Over"
+        case .agentPaused: "Resume"
+        case .agentStopped: nil
+        case .recording: "Stop"
+        }
+    }
+}
+
+/// The key press display on the same glass as SessionNoticeCapsule. `KeyPressPill` places every item,
 /// so recordings, which draw their own rendition of the glass, match it.
 struct KeyPressCapsule: View {
     let pill: KeyPressPill?

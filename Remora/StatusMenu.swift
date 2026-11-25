@@ -73,7 +73,7 @@ final class StatusMenu: NSObject, NSMenuDelegate {
         if #available(macOS 27, *) { item.preferredImageVisibility = .visible }
         let submenu = NSMenu()
         addItem("Show", #selector(showTab(_:)), for: tab.id, to: submenu)
-        let agentItems = windowController.agentControlItems(for: tab.id, includingStopAll: false)
+        let agentItems = windowController.agentControlItems(for: tab.id)
         if !agentItems.isEmpty { submenu.addItem(.separator()) }
         for agentItem in agentItems { submenu.addItem(agentItem) }
         if tab.state.isLive {

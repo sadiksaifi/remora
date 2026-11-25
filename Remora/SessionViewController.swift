@@ -313,14 +313,20 @@ final class SessionViewController: NSViewController {
             name: NSWorkspace.accessibilityDisplayOptionsDidChangeNotification, object: nil)
         refreshReduceMotion()
         refreshOverlaySettings()
-        capture.onRecordingStateChange = { [weak self] in self?.onControlEvent?("recording.state", nil) }
+        capture.onRecordingStateChange = { [weak self] in
+            self?.onControlEvent?("recording.state", nil)
+            self?.reportRecording()
+        }
         capture.onRecordingActivityChange = { [weak self] active in
             self?.display.setRecording(active)
             self?.updateDesktopAccessibility()
             if !active { self?.reportRecordingResult() }
         }
         container.onResize = { [weak self] in self?.display.requestResize() }
-        container.onVisibilityChange = { [weak self] in self?.display.visibilityChanged() }
+        container.onVisibilityChange = { [weak self] in
+            self?.display.visibilityChanged()
+            self?.overlays?.presentationChanged()
+        }
     }
 
     required init?(coder: NSCoder) {
@@ -411,7 +417,13 @@ final class SessionViewController: NSViewController {
     }
 
     func windowWillTransition() { display.willTransition() }
-    func windowDidTransition() { display.didTransition() }
+    func windowDidTransition() {
+        display.didTransition()
+        overlays?.presentationChanged()
+    }
+
+    /// In full screen the toolbar slides in over the top of the remote screen.
+    func toolbarRevealed(_ revealed: Bool) { overlays?.toolbarRevealed(revealed) }
     func windowDidChangeSize() { display.requestResize() }
 
     // MARK: Session menu
@@ -419,7 +431,6 @@ final class SessionViewController: NSViewController {
     var canDisconnect: Bool { session != nil }
     var canReconnect: Bool { session == nil && !closed }
     var isConnected: Bool { state == .connected }
-    var hasKeyboard: Bool { control.allowsHumanInput && state == .connected && view.window?.firstResponder === desktopView }
 
     func disconnectSession() {
         finishCapture()
@@ -437,10 +448,19 @@ final class SessionViewController: NSViewController {
         Task { [weak self] in
             let result = await capture.stopRecording()
             self?.updateDesktopAccessibility()
-            guard case .failure(let failure) = result else { return }
-            sessionLog.error("Capture: \(failure.localizedDescription, privacy: .public)")
-            self?.presentCaptureFailure(failure)
+            switch result {
+            // On the tab's page and not on the desktop, which a disconnect removes before the file is written.
+            case .success: if let self { SessionOverlays.showNote("Recording Saved", in: container) }
+            case .failure(let failure):
+                sessionLog.error("Capture: \(failure.localizedDescription, privacy: .public)")
+                self?.presentCaptureFailure(failure)
+            case nil: break
+            }
         }
+    }
+
+    private func reportRecording() {
+        if case .recording = capture.recordingState { overlays?.recordingChanged(true) } else { overlays?.recordingChanged(false) }
     }
 
     /// Saves or copies a screenshot of the desktop, with a short confirmation or a failure sheet.
@@ -598,6 +618,7 @@ final class SessionViewController: NSViewController {
             let desktopView = RemoteDesktopView(renderer: renderer)
             desktopView.allowsHumanInput = control.allowsHumanInput
             desktopView.onHumanInput = { [weak self] kind in self?.control.record(kind) }
+            desktopView.onBlockedInput = { [weak self] in self?.overlays?.inputBlocked() }
             desktopView.input = session
             desktopView.overlayState = inputOverlays
             updateOverlayCursor(.systemDefault)
@@ -605,9 +626,11 @@ final class SessionViewController: NSViewController {
             overlays = SessionOverlays(
                 desktop: desktopView, computerName: connection.name, address: connection.displayAddress,
                 cancel: { [weak session] in session?.disconnect() },
-                toggleControl: { [weak self] in self?.toggleAgentControl() }
+                toggleControl: { [weak self] in self?.toggleAgentControl() },
+                stopRecording: { [weak self] in Task { await self?.stopRecording() } }
             )
-            overlays?.controlChanged(control, agent: agentName, showsStop: false)
+            overlays?.controlChanged(control, agent: agentName, announcesStop: false)
+            reportRecording()
             refreshOverlaySettings()
             self.session = session
             remoteClipboard = RemoteClipboard()
@@ -662,6 +685,8 @@ final class SessionViewController: NSViewController {
                 clipboardSync?.sessionDidConnect()
                 dismissChallenge()
                 setContent(desktopView)
+                // The desktop may join a window that is already in full screen.
+                overlays?.presentationChanged()
                 if case .reconnecting = previous { announce("Reconnected to “\(connection.name)”") }
                 overlays?.connected()
                 // Leave the keyboard with the search field while the user types in it.
@@ -891,7 +916,8 @@ final class SessionViewController: NSViewController {
         content?.removeFromSuperview()
         newContent.frame = container.bounds
         newContent.autoresizingMask = [.width, .height]
-        container.addSubview(newContent)
+        // Below a note that is still showing.
+        container.addSubview(newContent, positioned: .below, relativeTo: nil)
         content = newContent
     }
 
@@ -1133,7 +1159,7 @@ extension SessionViewController {
             allowsMacClipboardSync = control.allowsHumanInput
         }
         desktopView?.allowsHumanInput = control.allowsHumanInput
-        overlays?.controlChanged(control, agent: agentName, showsStop: isConnected && !sessionEnded)
+        overlays?.controlChanged(control, agent: agentName, announcesStop: isConnected && !sessionEnded)
         inputOverlays.setAgentCursorVisible(control.state == .active && !sessionEnded)
         if sessionEnded { inputOverlays.reset() }
         refreshOverlaySettings()

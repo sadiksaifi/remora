@@ -7,56 +7,163 @@ import SwiftUI
 final class SessionOverlays: NSObject {
     private weak var desktop: RemoteDesktopView?
     private var reconnectingView: NSHostingView<SessionStatusView>?
-    private var permissionView: NSView?
-    private var confirmationView: NSView?
-    private var capsuleView: NSView?
+    private var permissionBanner: NSViewController?
+    private var permissionView: NSView? { permissionBanner?.view }
     private var displaySwitchView: NSView?
     private var displaySwitchTask: Task<Void, Never>?
-    private var capsule: AgentControlCapsule?
+    /// Full screen has no toolbar to carry the agent's and the recording's state, so a capsule reports each change.
+    private var notices = SessionNotices()
+    private var noticeView: NSView?
+    private var shownNotice: SessionNotices.Notice?
+    private var shownAgent = ""
+    private var fadingNotice: NSView?
+    private var noticeTask: Task<Void, Never>?
+    private var control = SessionControl.State.idle
+    private var agent = ""
+    /// The control state VoiceOver last heard, so repeated control events stay quiet.
+    private var announced: SessionControl.State?
+    private var isRecording = false
     private var offeredPermission = false
     private let computerName: String
     private let address: String
     private let cancel: () -> Void
     private let toggleControl: () -> Void
+    private let stopRecording: () -> Void
     private static let dismissedPermissionKey = "ShortcutCapturePermissionDismissed"
 
     init(
         desktop: RemoteDesktopView, computerName: String, address: String,
-        cancel: @escaping () -> Void, toggleControl: @escaping () -> Void
+        cancel: @escaping () -> Void, toggleControl: @escaping () -> Void, stopRecording: @escaping () -> Void
     ) {
         self.desktop = desktop
         self.computerName = computerName
         self.address = address
         self.cancel = cancel
         self.toggleControl = toggleControl
+        self.stopRecording = stopRecording
         super.init()
         NotificationCenter.default.addObserver(
             self, selector: #selector(appBecameActive),
             name: NSApplication.didBecomeActiveNotification, object: nil)
     }
 
-    /// Control changes post on every agent command, so only a new capsule state replaces the capsule.
-    /// The stopped capsule shows only when `showsStop` and the agent had control or was paused; it fades after 4 s.
-    func controlChanged(_ control: SessionControl, agent: String, showsStop: Bool) {
+    /// Control changes post on every agent command, so VoiceOver hears only a new state or agent.
+    /// It hears that control stopped only when `announcesStop` and the agent had control or was paused.
+    /// In a window the toolbar's agent button shows the state. In full screen a notice does.
+    func controlChanged(_ control: SessionControl, agent: String, announcesStop: Bool) {
         if !control.allowsHumanInput { removePermissionBanner() }
-        let next: AgentControlCapsule?
-        switch control.state {
-        case .active, .paused:
-            next = AgentControlCapsule(state: control.state, agent: agent, action: toggleControl)
-        case .stopped where showsStop && capsule != nil && capsule?.state != .stopped:
-            next = AgentControlCapsule(state: .stopped, agent: capsule?.agent ?? agent, action: toggleControl)
-        case .stopped where capsule?.state == .stopped:
-            return
-        default:
-            next = nil
+        let changed = control.state != self.control || agent != self.agent
+        // Another program that takes the input from the first is news in full screen, like the first one was.
+        if control.state == .active, self.control == .active, agent != self.agent { notices.repeatAgentNotice(at: .now) }
+        self.control = control.state
+        self.agent = agent
+        guard changed else { return }
+        let announcement: String? =
+            switch control.state {
+            case .active: SessionNotices.Notice.agentInControl.message(agent: agent)
+            case .paused: SessionNotices.Notice.agentPaused.message(agent: agent)
+            case .stopped where announcesStop && announced != nil && announced != .stopped:
+                SessionNotices.Notice.agentStopped.message(agent: agent)
+            case .stopped, .idle: nil
+            }
+        announced = announcement == nil ? nil : control.state
+        if let announcement { announce(announcement) }
+        updateNotices()
+    }
+
+    private func announce(_ message: String) {
+        guard let desktop else { return }
+        NSAccessibility.post(
+            element: desktop, notification: .announcementRequested,
+            userInfo: [.announcement: message, .priority: NSAccessibilityPriorityLevel.high.rawValue])
+    }
+
+    func recordingChanged(_ isRecording: Bool) {
+        guard isRecording != self.isRecording else { return }
+        self.isRecording = isRecording
+        updateNotices()
+    }
+
+    /// The desktop joined or left the window, or the window entered or left full screen.
+    func presentationChanged() {
+        notices.setPresenting(desktop?.window?.styleMask.contains(.fullScreen) == true, at: .now)
+        showNotice()
+    }
+
+    /// The toolbar that slides in at the top of a full screen window carries the same state as a notice.
+    func toolbarRevealed(_ revealed: Bool) {
+        notices.isCovered = revealed
+        showNotice()
+    }
+
+    /// The person clicked or typed while the agent holds the input.
+    func inputBlocked() {
+        // The notice came back, so VoiceOver hears why the input did nothing, also while the toolbar covers the notice.
+        if notices.repeatAgentNotice(at: .now) {
+            announce(SessionNotices.Notice.agentInControl.message(agent: agent))
         }
-        guard next?.state != capsule?.state || next?.agent != capsule?.agent else { return }
-        capsule = next
-        capsuleView?.removeFromSuperview()
-        capsuleView = nil
-        guard let next, let desktop else { return }
-        removePermissionBanner()
-        let view = NSHostingView(rootView: next)
+        showNotice()
+    }
+
+    private func updateNotices() {
+        notices.update(control: control, isRecording: isRecording, at: .now)
+        showNotice()
+    }
+
+    /// Shows what `notices` says and wakes when the notice ends.
+    private func showNotice() {
+        noticeTask?.cancel()
+        noticeTask = nil
+        if let deadline = notices.deadline {
+            noticeTask = Task { @MainActor [weak self] in
+                try? await Task.sleep(until: deadline, clock: .continuous)
+                guard !Task.isCancelled, let self else { return }
+                notices.advance(to: .now)
+                showNotice()
+            }
+        }
+        let notice = notices.visible
+        // The revealed toolbar shows the same state, so a notice that is fading under it leaves at once too.
+        if notices.isCovered, let fading = fadingNotice {
+            fading.removeFromSuperview()
+            fadingNotice = nil
+            permissionView?.isHidden = false
+        }
+        guard notice != shownNotice || (notice != nil && agent != shownAgent) else { return }
+        shownNotice = notice
+        shownAgent = agent
+        let old = noticeView
+        noticeView = nil
+        // A notice that is still fading leaves at once, so two never show together.
+        fadingNotice?.removeFromSuperview()
+        fadingNotice = nil
+        guard let notice, let desktop else {
+            // The revealed toolbar shows the same state, so its notice leaves at once.
+            guard let old, !notices.isCovered else {
+                old?.removeFromSuperview()
+                permissionView?.isHidden = false
+                return
+            }
+            // A notice whose time is up fades. The permission banner sits in the same place and returns after it.
+            fadingNotice = old
+            Task { @MainActor [weak self] in
+                await NSAnimationContext.runAnimationGroup {
+                    $0.duration = 0.3
+                    old.animator().alphaValue = 0
+                }
+                old.removeFromSuperview()
+                guard let self, fadingNotice === old else { return }
+                fadingNotice = nil
+                permissionView?.isHidden = false
+            }
+            return
+        }
+        old?.removeFromSuperview()
+        permissionView?.isHidden = true
+        let view = NSHostingView(
+            rootView: SessionNoticeCapsule(
+                notice: notice, agent: agent,
+                action: notice == .recording ? stopRecording : toggleControl))
         view.sizingOptions = .intrinsicContentSize
         view.translatesAutoresizingMaskIntoConstraints = false
         desktop.addSubview(view, positioned: .below, relativeTo: reconnectingView)
@@ -65,39 +172,24 @@ final class SessionOverlays: NSObject {
             view.centerXAnchor.constraint(equalTo: desktop.centerXAnchor),
             view.widthAnchor.constraint(lessThanOrEqualTo: desktop.widthAnchor, constant: -24),
         ])
-        capsuleView = view
-        NSAccessibility.post(
-            element: view, notification: .announcementRequested,
-            userInfo: [.announcement: next.message, .priority: NSAccessibilityPriorityLevel.high.rawValue])
-        guard next.state == .stopped else { return }
-        Task { @MainActor [weak self, weak view] in
-            try? await Task.sleep(for: .seconds(4))
-            guard let self, let view, capsuleView === view else { return }
-            await NSAnimationContext.runAnimationGroup {
-                $0.duration = 0.3
-                view.animator().alphaValue = 0
-            }
-            guard capsuleView === view else { return }
-            view.removeFromSuperview()
-            capsuleView = nil
-            capsule = nil
-        }
+        noticeView = view
     }
 
     func connected() {
         reconnectingView?.removeFromSuperview()
         reconnectingView = nil
-        guard desktop?.allowsHumanInput == true, capsuleView == nil, !offeredPermission else { return }
+        guard desktop?.allowsHumanInput == true, control == .idle, !offeredPermission else { return }
         offeredPermission = true
         guard SystemShortcutCapture.isEnabled, !SystemShortcutCapture.isTrusted,
             !UserDefaults.standard.bool(forKey: Self.dismissedPermissionKey), let desktop
         else { return }
-        let banner = NSHostingView(
+        let controller = WrappingHostingController(
             rootView: ShortcutPermissionBanner(
                 onOpenSettings: { [weak self] in self?.openSettings() },
                 onDismiss: { [weak self] in self?.dismissPermission() }
             ))
-        banner.sizingOptions = .intrinsicContentSize
+        controller.sizingOptions = .intrinsicContentSize
+        let banner = controller.view
         banner.translatesAutoresizingMaskIntoConstraints = false
         desktop.addSubview(banner)
         NSLayoutConstraint.activate([
@@ -105,7 +197,8 @@ final class SessionOverlays: NSObject {
             banner.centerXAnchor.constraint(equalTo: desktop.centerXAnchor),
             banner.widthAnchor.constraint(lessThanOrEqualTo: desktop.widthAnchor, constant: -24),
         ])
-        permissionView = banner
+        banner.isHidden = noticeView != nil
+        permissionBanner = controller
     }
 
     func reconnecting(attempt: Int) {
@@ -172,34 +265,38 @@ final class SessionOverlays: NSObject {
             userInfo: [.announcement: status.message, .priority: NSAccessibilityPriorityLevel.high.rawValue])
     }
 
-    /// Shows a short note at the bottom of the desktop. Capture notes play the system screen capture sound,
-    /// like macOS screenshots do. The note is not part of any capture and ignores the pointer.
+    /// Shows a short note at the bottom of the session's page. Capture notes play the system screen capture
+    /// sound, like macOS screenshots do.
     func confirm(_ message: String, systemImage: String = "checkmark.circle.fill", sound: Bool = true) {
-        confirmationView?.removeFromSuperview()
         guard let desktop else { return }
-        let note = PassthroughHostingView(rootView: CaptureConfirmation(message: message, systemImage: systemImage))
-        note.sizingOptions = .intrinsicContentSize
-        note.translatesAutoresizingMaskIntoConstraints = false
-        desktop.addSubview(note)
-        NSLayoutConstraint.activate([
-            note.bottomAnchor.constraint(equalTo: desktop.bottomAnchor, constant: -16),
-            note.centerXAnchor.constraint(equalTo: desktop.centerXAnchor),
-        ])
-        confirmationView = note
-        NSAccessibility.post(
-            element: note, notification: .announcementRequested,
-            userInfo: [.announcement: message, .priority: NSAccessibilityPriorityLevel.medium.rawValue])
+        Self.showNote(message, systemImage: systemImage, in: desktop.superview ?? desktop)
         if sound, UserDefaults.standard.object(forKey: "com.apple.sound.uiaudio.enabled") as? Bool ?? true {
             Self.captureSound?.play()
         }
-        Task { @MainActor [weak self, weak note] in
+    }
+
+    /// Shows a short note at the bottom of `host` in place of the note that shows there, and tells VoiceOver.
+    /// The note is not part of any capture, ignores the pointer and leaves by itself.
+    static func showNote(_ message: String, systemImage: String = "checkmark.circle.fill", in host: NSView) {
+        for case let shown as PassthroughHostingView<CaptureConfirmation> in host.subviews { shown.removeFromSuperview() }
+        let note = PassthroughHostingView(rootView: CaptureConfirmation(message: message, systemImage: systemImage))
+        note.sizingOptions = .intrinsicContentSize
+        note.translatesAutoresizingMaskIntoConstraints = false
+        host.addSubview(note)
+        NSLayoutConstraint.activate([
+            note.bottomAnchor.constraint(equalTo: host.bottomAnchor, constant: -16),
+            note.centerXAnchor.constraint(equalTo: host.centerXAnchor),
+        ])
+        NSAccessibility.post(
+            element: note, notification: .announcementRequested,
+            userInfo: [.announcement: message, .priority: NSAccessibilityPriorityLevel.medium.rawValue])
+        Task { @MainActor [weak note] in
             try? await Task.sleep(for: .seconds(1.5))
             await NSAnimationContext.runAnimationGroup {
                 $0.duration = 0.3
                 note?.animator().alphaValue = 0
             }
             note?.removeFromSuperview()
-            if let self, confirmationView === note { confirmationView = nil }
         }
     }
 
@@ -220,11 +317,26 @@ final class SessionOverlays: NSObject {
 
     private func removePermissionBanner() {
         permissionView?.removeFromSuperview()
-        permissionView = nil
+        permissionBanner = nil
     }
 
     @objc private func appBecameActive() {
         if SystemShortcutCapture.isTrusted { removePermissionBanner() }
+    }
+}
+
+/// Hosts content that wraps. The ideal size counts one line of text, so the height follows the width that
+/// the constraints give the view.
+private final class WrappingHostingController<Content: View>: NSHostingController<Content> {
+    private lazy var height = view.heightAnchor.constraint(equalToConstant: 0)
+
+    override func viewDidLayout() {
+        super.viewDidLayout()
+        guard view.bounds.width > 0 else { return }
+        let fitting = sizeThatFits(in: NSSize(width: view.bounds.width, height: .greatestFiniteMagnitude)).height
+        guard height.constant != fitting || !height.isActive else { return }
+        height.constant = fitting
+        height.isActive = true
     }
 }
 

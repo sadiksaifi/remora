@@ -9,6 +9,7 @@ struct ConnectionEditor: View {
     private let originalPassword: String
     private let onCancel: () -> Void
     private let onSave: (Connection, String) -> Void
+    private let onConnect: ((Connection, String) -> Void)?
     private let identifyVNCServer: (@Sendable (String, Int) async -> VNCMode?)?
 
     @State private var kind: Connection.Kind
@@ -26,6 +27,12 @@ struct ConnectionEditor: View {
     @State private var vncModeChosen = false
     /// The address whose greeting came from a Mac. It applies only while the fields still show that address.
     @State private var detectedMac: ServerAddress?
+    /// The address whose server answered the check. A check without an answer runs again.
+    @State private var identifiedServer: ServerAddress?
+    /// Connect waiting for the check of the address it is about to open.
+    @State private var connecting: Task<Void, Never>?
+    /// The check in flight. The editor's own check and Connect's wait share it.
+    @State private var check: (server: ServerAddress, mode: Task<VNCMode?, Never>)?
     @FocusState private var focusedField: Field?
 
     private enum ResolutionChoice: String, CaseIterable {
@@ -57,13 +64,15 @@ struct ConnectionEditor: View {
 
     /// With `identifyVNCServer`, the editor reads a VNC server's greeting and picks Apple mode for a Mac.
     /// Pass it only for a new connection, so a saved or copied mode never changes behind the user's back.
+    /// With `onConnect`, the sheet adds a Connect button, which is then the default instead of Save.
     init(
         title: String,
         connection: Connection,
         password: String,
         identifyVNCServer: (@Sendable (String, Int) async -> VNCMode?)? = nil,
         onCancel: @escaping () -> Void,
-        onSave: @escaping (Connection, String) -> Void
+        onSave: @escaping (Connection, String) -> Void,
+        onConnect: ((Connection, String) -> Void)? = nil
     ) {
         self.title = title
         original = connection
@@ -71,6 +80,7 @@ struct ConnectionEditor: View {
         self.identifyVNCServer = identifyVNCServer
         self.onCancel = onCancel
         self.onSave = onSave
+        self.onConnect = onConnect
         _kind = State(initialValue: connection.kind)
         _name = State(initialValue: connection.name)
         _host = State(initialValue: connection.host)
@@ -114,6 +124,7 @@ struct ConnectionEditor: View {
         // The reset discards the user's pick, so detection resumes.
         vncModeChosen = false
         detectedMac = nil
+        identifiedServer = nil
     }
 
     /// The address in the fields, or nil while it is incomplete or invalid.
@@ -139,12 +150,46 @@ struct ConnectionEditor: View {
     }
 
     private func identify(_ server: ServerAddress?) async {
-        guard let server, let identifyVNCServer else { return }
+        guard let server else { return }
         // Wait for typing to pause, so Remora does not connect to every partial host name.
-        guard (try? await Task.sleep(for: .milliseconds(600))) != nil else { return }
-        let mode = await identifyVNCServer(server.host, server.port)
+        guard identifyVNCServer != nil, (try? await Task.sleep(for: .milliseconds(600))) != nil else { return }
+        let mode = await checkedMode(of: server)
         guard !Task.isCancelled else { return }
         detectedMac = mode == .apple ? server : nil
+        if mode != nil { identifiedServer = server }
+    }
+
+    /// Reads the server's greeting once per address. A second caller waits for the check in flight, so its
+    /// answer is never lost to a second check that started later and timed out.
+    private func checkedMode(of server: ServerAddress) async -> VNCMode? {
+        guard let identifyVNCServer else { return nil }
+        let mode: Task<VNCMode?, Never>
+        if let check, check.server == server {
+            mode = check.mode
+        } else {
+            check?.mode.cancel()
+            mode = Task { await identifyVNCServer(server.host, server.port) }
+            check = (server, mode)
+        }
+        let found = await mode.value
+        if check?.mode == mode { check = nil }
+        return found
+    }
+
+    /// Connect opens the connection with the saved mode at once, so it first finishes the check of the
+    /// address in the fields. Save leaves an unfinished check alone, as the mode can still be edited.
+    private func connect(with open: @escaping (Connection, String) -> Void) {
+        guard let server = serverToIdentify, server != identifiedServer else {
+            return submit(to: open)
+        }
+        connecting = Task {
+            let mode = await checkedMode(of: server)
+            guard !Task.isCancelled else { return }
+            detectedMac = mode == .apple ? server : nil
+            if mode != nil { identifiedServer = server }
+            connecting = nil
+            submit(to: open)
+        }
     }
 
     /// The user's own pick ends detection for this sheet.
@@ -168,6 +213,10 @@ struct ConnectionEditor: View {
                 .font(.headline)
                 .padding(.top, 20)
             Form {
+                Section {
+                    TextField("Name", text: $name, prompt: Text(trimmedHost.isEmpty ? "Optional" : trimmedHost))
+                        .accessibilityIdentifier("editorName")
+                }
                 Section {
                     Picker("Protocol", selection: $kind) {
                         ForEach([Connection.Kind.rdp, .vnc], id: \.self) { kind in
@@ -214,11 +263,15 @@ struct ConnectionEditor: View {
                 } header: {
                     Text("Account")
                 } footer: {
-                    if removesSavedPassword {
-                        Label("Changing the protocol clears the password.", systemImage: "exclamationmark.triangle.fill")
-                            .foregroundStyle(.secondary)
+                    VStack(alignment: .leading, spacing: 4) {
+                        if removesSavedPassword {
+                            Label {
+                                Text("Changing the protocol clears the password.").foregroundStyle(.primary)
+                            } icon: {
+                                Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.yellow)
+                            }
                             .accessibilityIdentifier("editorPasswordRemoved")
-                    } else {
+                        }
                         Text(
                             kind == .vnc
                                 ? "Some VNC servers ask only for a password. Remora saves the password in your keychain."
@@ -298,35 +351,47 @@ struct ConnectionEditor: View {
                         }
                     }
                 }
-                Section {
-                    TextField("Name", text: $name, prompt: Text(trimmedHost.isEmpty ? "Optional" : trimmedHost))
-                        .accessibilityIdentifier("editorName")
-                } footer: {
-                    Text("Shown in the connections list.")
-                        .foregroundStyle(.secondary)
-                }
             }
             .formStyle(.grouped)
             .scrollDisabled(true)
             .fixedSize(horizontal: false, vertical: true)
+            .disabled(connecting != nil)
 
             HStack {
+                if connecting != nil { ProgressView().controlSize(.small) }
                 Spacer()
-                Button("Cancel", role: .cancel, action: onCancel)
-                    .keyboardShortcut(.cancelAction)
-                    .accessibilityIdentifier("editorCancel")
-                Button("Save", action: save)
-                    .keyboardShortcut(.defaultAction)
+                Button("Cancel", role: .cancel) {
+                    connecting?.cancel()
+                    onCancel()
+                }
+                .keyboardShortcut(.cancelAction)
+                .accessibilityIdentifier("editorCancel")
+                Button("Save") { submit(to: onSave) }
+                    .keyboardShortcut(onConnect == nil ? .defaultAction : nil)
                     .accessibilityIdentifier("editorSave")
-                    .disabled(draft == nil)
+                    .disabled(draft == nil || connecting != nil)
+                if let onConnect {
+                    Button("Connect") { connect(with: onConnect) }
+                        .keyboardShortcut(.defaultAction)
+                        .accessibilityIdentifier("editorConnect")
+                        .disabled(draft == nil || connecting != nil)
+                }
             }
             .controlSize(.large)
             .padding([.horizontal, .bottom], 20)
         }
         .frame(width: 460)
-        // The protocol control comes first, but typing starts in Host.
+        // The optional name comes first, but typing starts in Host.
         .onAppear { focusedField = .host }
         .task(id: serverToIdentify) { await identify(serverToIdentify) }
+        // A check of an address the fields no longer show, or for a sheet that closed, has no use.
+        .onChange(of: serverToIdentify) { _, server in
+            if let check, check.server != server { check.mode.cancel() }
+        }
+        .onDisappear {
+            check?.mode.cancel()
+            connecting?.cancel()
+        }
     }
 
     private var trimmedHost: String {
@@ -386,9 +451,9 @@ struct ConnectionEditor: View {
         return connection
     }
 
-    private func save() {
+    private func submit(to receive: (Connection, String) -> Void) {
         guard let draft else { return }
-        onSave(draft, password)
+        receive(draft, password)
     }
 }
 
@@ -403,6 +468,5 @@ struct ValidationMessage: View {
     var body: some View {
         Label(text, systemImage: "exclamationmark.circle.fill")
             .foregroundStyle(.red)
-            .font(.callout)
     }
 }

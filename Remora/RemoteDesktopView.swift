@@ -22,6 +22,11 @@ final class RemoteDesktopView: NSView {
         get { desktopInput.onHumanInput }
         set { desktopInput.onHumanInput = newValue }
     }
+    /// A click or key press that an agent's control kept from the remote computer.
+    var onBlockedInput: (() -> Void)? {
+        get { desktopInput.onBlockedInput }
+        set { desktopInput.onBlockedInput = newValue }
+    }
     var onFocus: (() -> Void)?
     /// Called when the desktop gains or loses the keyboard: it is first responder of the key window,
     /// the app is active, and the session is connected. System shortcut capture follows the same state.

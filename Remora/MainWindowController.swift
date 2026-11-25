@@ -2,41 +2,59 @@ import AppKit
 import RemoraCore
 import SwiftUI
 
-/// The app's only window. Home shows the connections list; each session shows as a tab in the toolbar.
+/// The app's only window. It shows the connections list or one session, and each session is a tab in the toolbar.
 /// Native window tabbing is off, so window managers see exactly one window.
+/// The toolbar leads with the tabs and the button that shows the connections list. Its trailing end holds the
+/// shown page's controls: search on the connections list, agent control and capture on a session, then More.
 @MainActor
 final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolbarDelegate, NSSearchFieldDelegate,
-    NSMenuItemValidation, NSTextSuggestionsDelegate
+    NSMenuItemValidation, NSMenuDelegate
 {
-    typealias SuggestionItemType = UUID
-
-    private static let homeItem = NSToolbarItem.Identifier("home")
     private static let tabsItem = NSToolbarItem.Identifier("tabs")
-    private static let newConnectionItem = NSToolbarItem.Identifier("newConnection")
+    private static let connectionsItem = NSToolbarItem.Identifier("connections")
+    private static let agentItem = NSToolbarItem.Identifier("agent")
+    private static let captureItem = NSToolbarItem.Identifier("capture")
     private static let searchItem = NSToolbarItem.Identifier("search")
+    private static let moreItem = NSToolbarItem.Identifier("more")
+    /// Below this window width the capture group leaves the toolbar and the agent button keeps only its icon.
+    /// The capture commands stay in the More menu.
+    private static let compactWidth: CGFloat = 640
+    /// Whether the toolbar last showed its compact set of controls.
+    private var shownCompact = false
     /// Narrower than the search field's minimum, so the toolbar shows the collapsed search button.
     private static let collapsedSearchWidth: CGFloat = 30
     private static let expandedSearchWidth: CGFloat = 240
+    /// A filter that is not being edited keeps this width in a compact toolbar, beside the tabs.
+    private static let compactFilterWidth: CGFloat = 96
 
-    private let connectionStore: ConnectionStore
     private let sessionTabs: SessionTabs
     private let connectionsViewController: ConnectionsViewController
     /// Holds the shown page: the connections list or one session tab.
     private let pageViewController = NSViewController()
     private var currentPage: NSViewController
-    private let homeToolbarItem = NSToolbarItem(itemIdentifier: MainWindowController.homeItem)
     private let tabsToolbarItem = NSToolbarItem(itemIdentifier: MainWindowController.tabsItem)
     private let tabStrip: NSHostingView<SessionTabStrip>
     private let tabStripLayout = SessionTabStripLayout()
     private let tabStripWidth: NSLayoutConstraint
+    private let connectionsToolbarItem = NSToolbarItem(itemIdentifier: MainWindowController.connectionsItem)
+    private let connectionsButton = NSButton()
+    private let agentToolbarItem = NSToolbarItem(itemIdentifier: MainWindowController.agentItem)
+    private let agentButton = NSHostingView(rootView: AgentControlButton())
+    private let captureToolbarItem = NSToolbarItem(itemIdentifier: MainWindowController.captureItem)
+    /// Capture Keyboard, Take Screenshot, and Start or Stop Recording, in that order.
+    private let captureControl = NSSegmentedControl()
     private let searchToolbarItem = NSSearchToolbarItem(itemIdentifier: MainWindowController.searchItem)
     private let searchWidth: NSLayoutConstraint
+    private let moreToolbarItem = NSMenuToolbarItem(itemIdentifier: MainWindowController.moreItem)
+    private var callout: NSPopover?
+    /// The control state the toolbar last showed, which tells an agent's change from a change of tab.
+    private var shownControl: (tab: UUID, state: SessionControl.State, agent: String)?
+    private var shownCapture: CaptureControls?
     /// Window > a separator and tab 1 through 9, hidden past the last tab.
     private(set) var tabMenuItems: [NSMenuItem] = []
     private var eventMonitor: Any?
 
     init(connectionStore: ConnectionStore, credentialStore: CredentialStore, sessionTabs: SessionTabs) {
-        self.connectionStore = connectionStore
         self.sessionTabs = sessionTabs
         connectionsViewController = ConnectionsViewController(
             connectionStore: connectionStore,
@@ -46,7 +64,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
         currentPage = connectionsViewController
         tabStrip = NSHostingView(rootView: SessionTabStrip(tabs: sessionTabs, layout: tabStripLayout))
         tabStripWidth = tabStrip.widthAnchor.constraint(
-            lessThanOrEqualToConstant: SessionTabStrip.idealWidth(forTabCount: 1)
+            lessThanOrEqualToConstant: SessionTabStrip.idealTabWidth
         )
         searchWidth = searchToolbarItem.searchField.widthAnchor.constraint(equalToConstant: Self.collapsedSearchWidth)
         let size = NSSize(width: 960, height: 640)
@@ -60,7 +78,6 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
             defer: false
         )
         window.title = "Connections"
-        window.minSize = NSSize(width: 480, height: 320)
         window.isReleasedWhenClosed = false
         // Sessions are tabs inside this one window. Native tabs are separate windows, so window
         // managers such as AeroSpace, yabai and Rectangle would see one window per session.
@@ -82,6 +99,8 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
         toolbar.allowsDisplayModeCustomization = false
         window.toolbar = toolbar
         window.toolbarStyle = .unified
+        // 480 x 320 with the 52 pt toolbar. The toolbar adds its height to a frame minimum when it attaches.
+        window.contentMinSize = NSSize(width: 480, height: 268)
         // Place the window only once the toolbar has its height. A frame restored earlier grows
         // when the toolbar attaches, and Zoom then treats the pre-toolbar frame as the user's size.
         window.center()
@@ -104,7 +123,13 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
             let consumed = MainActor.assumeIsolated { self?.consume(event) ?? false }
             return consumed ? nil : event
         }
+        // A hand-over in progress is not part of a tab's state, so the agent button follows the session itself.
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(controlDidChange(_:)), name: SessionViewController.controlDidChange, object: nil)
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(windowOcclusionDidChange(_:)), name: NSWindow.didChangeOcclusionStateNotification, object: nil)
         observeTabs()
+        observeRecording()
         updateChrome()
     }
 
@@ -142,6 +167,8 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
     private func showPage(_ selection: UUID?) {
         let page: NSViewController = selection.flatMap { sessionTabs.session(for: $0) } ?? connectionsViewController
         guard page !== currentPage else { return }
+        // An open More menu was built for the page that is leaving.
+        moreToolbarItem.menu.cancelTrackingWithoutAnimation()
         resetSearch()
         currentPage.view.removeFromSuperview()
         if page.parent == nil { pageViewController.addChild(page) }
@@ -182,18 +209,50 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
         }
     }
 
-    /// Shows the Home button and tab strip only while tabs are open. The strip replaces the visible title,
-    /// and the window title names the shown page for the Window menu and accessibility.
+    /// The record button follows the shown session's recording, which also starts and stops from the command line.
+    private func observeRecording() {
+        withObservationTracking {
+            _ = sessionTabs.selectedSession?.capture.recordingState
+        } onChange: { [weak self] in
+            Task { @MainActor [weak self] in
+                self?.updateCaptureControls()
+                self?.observeRecording()
+            }
+        }
+    }
+
+    private var isCompact: Bool {
+        guard let window else { return false }
+        return window.frame.width < Self.compactWidth
+    }
+
+    /// Shows the controls of the shown page. The tab strip and the Connections button show only while tabs are
+    /// open, and without tabs the window title takes their place. The window title always names the shown page
+    /// for the Window menu and accessibility.
     private func updateChrome() {
         guard let window else { return }
         let tabs = sessionTabs.tabs
-        homeToolbarItem.isHidden = tabs.isEmpty
-        tabsToolbarItem.isHidden = tabs.isEmpty
-        window.titleVisibility = tabs.isEmpty ? .visible : .hidden
+        let session = sessionTabs.selectedSession
+        shownCompact = isCompact
+        searchWidth.constant = searchFieldWidth
+        // A compact toolbar has no room for the tabs or the title beside the search field while it has the keyboard.
+        let searchTakesToolbar = isCompact && session == nil && searchWidth.constant == Self.expandedSearchWidth
+        tabsToolbarItem.isHidden = tabs.isEmpty || searchTakesToolbar
+        connectionsToolbarItem.isHidden = tabs.isEmpty || searchTakesToolbar
+        // A lone shown tab is its pill alone, without the track.
+        tabStrip.rootView.showsTrack = tabs.count != 1 || session == nil
+        connectionsButton.state = session == nil ? .on : .off
+        searchToolbarItem.isHidden = session != nil
+        captureToolbarItem.isHidden = session == nil || isCompact
+        updateAgentControl()
+        reportToolbarReveal()
+        window.titleVisibility = tabs.isEmpty && !searchTakesToolbar ? .visible : .hidden
         let shown = tabs.first { $0.id == sessionTabs.selection }
         window.title = shown.map { tab in tab.display.map { "\(tab.title) – \($0)" } ?? tab.title } ?? "Connections"
-        tabStripWidth.constant = SessionTabStrip.idealWidth(forTabCount: tabs.count)
-        searchToolbarItem.searchField.suggestionsDelegate = currentPage is SessionViewController ? self : nil
+        // In a compact toolbar the tabs beside the shown one keep only their icon.
+        let restingAsIcons = isCompact && session != nil
+        tabStrip.rootView.isCompact = restingAsIcons
+        tabStripWidth.constant = SessionTabStrip.idealWidth(forTabCount: tabs.count, restingAsIcons: restingAsIcons)
         for item in tabMenuItems {
             if item.isSeparatorItem {
                 item.isHidden = tabs.isEmpty
@@ -202,6 +261,86 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
                 if tabs.indices.contains(item.tag) { item.title = tabs[item.tag].title }
             }
         }
+        updateCaptureControls()
+    }
+
+    // MARK: Full screen toolbar
+
+    /// Full screen moves the toolbar into a window of its own, which is on screen only while the pointer
+    /// at the top edge reveals it.
+    @objc private func windowOcclusionDidChange(_ notification: Notification) {
+        guard let toolbarWindow = tabStrip.window, toolbarWindow !== window, notification.object as? NSWindow === toolbarWindow else { return }
+        reportToolbarReveal()
+    }
+
+    /// Tells the shown session whether the revealed toolbar covers the top of the remote screen.
+    private func reportToolbarReveal() {
+        let toolbarWindow = tabStrip.window
+        sessionTabs.selectedSession?.toolbarRevealed(toolbarWindow !== window && toolbarWindow?.occlusionState.contains(.visible) == true)
+    }
+
+    // MARK: Agent control
+
+    @objc private func controlDidChange(_ notification: Notification) {
+        guard let session = notification.object as? SessionViewController, session === sessionTabs.selectedSession else { return }
+        updateAgentControl()
+    }
+
+    /// The agent button exists only once a program has controlled the shown session.
+    /// A change on the shown tab, as opposed to a change of tab, shows the callout that explains it.
+    private func updateAgentControl() {
+        let session = sessionTabs.selectedSession
+        let control = session?.control
+        let state = control?.state ?? .idle
+        let button = AgentControlButton(
+            state: state,
+            isTransferring: control?.isTransferring == true,
+            agent: session?.agentName ?? "",
+            isEnabled: control?.canTakeOver == true || (control?.canResume == true && session?.isConnected == true),
+            showsTitle: !isCompact,
+            action: { [weak session] in session?.toggleAgentControl() }
+        )
+        agentToolbarItem.style = button.isProminent ? .prominent : .plain
+        agentToolbarItem.backgroundTintColor = button.isProminent ? .systemBlue : nil
+        agentButton.rootView = button
+        agentToolbarItem.isHidden = state == .idle
+        let previous = shownControl
+        shownControl = session.map { ($0.connection.id, state, $0.agentName) }
+        guard let session, let previous, previous.tab == session.connection.id else { return closeCallout() }
+        guard previous.state != state || (state == .active && previous.agent != session.agentName) else { return }
+        switch (previous.state, state) {
+        // A second program that takes the input is news as well.
+        case (.idle, .active), (.active, .active): showCallout(.inControl, agent: session.agentName)
+        case (.active, .stopped), (.paused, .stopped): showCallout(.stopped, agent: session.agentName)
+        default: closeCallout()
+        }
+    }
+
+    /// A stock popover under the agent button, closed again after four seconds. Full screen hides the toolbar
+    /// and shows the same news in a capsule over the remote screen instead.
+    private func showCallout(_ kind: AgentControlCallout.Kind, agent: String) {
+        closeCallout()
+        guard let window, window.isVisible, !window.styleMask.contains(.fullScreen) else { return }
+        // The button may have joined the toolbar in this pass.
+        window.layoutIfNeeded()
+        guard agentButton.window === window else { return }
+        let content = NSHostingController(rootView: AgentControlCallout(kind: kind, agent: agent))
+        content.sizingOptions = .preferredContentSize
+        let popover = NSPopover()
+        popover.behavior = .applicationDefined
+        popover.contentViewController = content
+        popover.show(relativeTo: agentButton.bounds, of: agentButton, preferredEdge: .maxY)
+        callout = popover
+        Task { @MainActor [weak self, weak popover] in
+            try? await Task.sleep(for: SessionNotices.duration)
+            guard let self, let popover, callout === popover else { return }
+            closeCallout()
+        }
+    }
+
+    private func closeCallout() {
+        callout?.close()
+        callout = nil
     }
 
     // MARK: Actions
@@ -210,13 +349,20 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
         connectionsViewController.newConnection(sender)
     }
 
+    /// Search belongs to the connections list, so Find shows the list first.
     @objc func startSearch(_ sender: Any?) {
-        searchWidth.constant = Self.expandedSearchWidth
+        select(nil)
+        guard currentPage === connectionsViewController else { return }
+        // A session hides the search item. The toolbar puts the field back in the window in its next layout.
+        window?.layoutIfNeeded()
         searchToolbarItem.beginSearchInteraction()
+        updateSearchWidth()
     }
 
     @objc func showHome(_ sender: Any?) {
         select(nil)
+        // The button toggled itself on the click. It shows the page, not the click.
+        connectionsButton.state = sessionTabs.selection == nil ? .on : .off
     }
 
     @objc func showPreviousTab(_ sender: Any?) {
@@ -235,8 +381,8 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
     }
 
     @objc func closeTab(_ sender: Any?) {
-        guard let selection = sessionTabs.selection else { return }
-        close(selection)
+        guard let id = (sender as? NSMenuItem)?.representedObject as? UUID ?? sessionTabs.selection else { return }
+        close(id)
     }
 
     /// Take Over, which validation retitles Resume while the tab is paused or stopped.
@@ -254,48 +400,76 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
         }
     }
 
-    @objc func disconnectSession(_ sender: Any?) { sessionTabs.selectedSession?.disconnectSession() }
+    @objc func disconnectSession(_ sender: Any?) { targetSession(sender)?.disconnectSession() }
     @objc func reconnectSession(_ sender: Any?) { sessionTabs.selectedSession?.reconnect() }
     @objc func sendCtrlAltDelete(_ sender: Any?) { sessionTabs.selectedSession?.sendCtrlAltDelete() }
     @objc func releaseKeyboardCapture(_ sender: Any?) { sessionTabs.selectedSession?.releaseKeyboardCapture() }
     @objc func takeScreenshot(_ sender: Any?) { targetSession(sender)?.captureScreenshot(copyToClipboard: false) }
     @objc func copyScreenshot(_ sender: Any?) { targetSession(sender)?.captureScreenshot(copyToClipboard: true) }
-    @objc func toggleRecording(_ sender: Any?) { targetSession(sender)?.toggleRecording() }
+    /// A menu item does what its title said when its menu opened, or nothing: the command-line tool may have
+    /// started or stopped the recording since.
+    @objc func toggleRecording(_ sender: Any?) {
+        guard let session = targetSession(sender) else { return }
+        if let item = sender as? NSMenuItem, item.tag != recordingCommand(for: session).rawValue { return }
+        session.toggleRecording()
+    }
+    /// A tab's menu stops a recording and never starts one. A recording that has ended ignores the request.
+    @objc private func stopRecording(_ sender: Any?) {
+        guard let session = targetSession(sender) else { return }
+        Task { await session.stopRecording() }
+    }
     @objc func showNextDisplay(_ sender: Any?) { sessionTabs.selectedSession?.selectAdjacentDisplay(forward: true) }
     @objc func showPreviousDisplay(_ sender: Any?) { sessionTabs.selectedSession?.selectAdjacentDisplay(forward: false) }
 
-    /// A display item in a tab's menu. Choosing one from a hidden tab's menu shows that tab too,
-    /// because Remora draws only the shown tab.
-    private struct DisplayChoice {
-        let tab: UUID
-        let display: UInt32
+    /// True while the shown session's desktop receives the keys. The session reports each change, which
+    /// covers a window that is no longer the key window and an agent that holds the input.
+    private var hasKeyboard: Bool {
+        sessionTabs.tabs.first { $0.id == sessionTabs.selection }?.isKeyboardCaptured == true
+    }
+
+    /// Gives the shown session's desktop the keyboard, or takes it back.
+    @objc func toggleKeyboardCapture(_ sender: Any?) {
+        guard let session = sessionTabs.selectedSession else { return }
+        if hasKeyboard { session.releaseKeyboardCapture() } else { session.focusDesktop() }
+    }
+
+    /// A global setting, so every session shows the same state.
+    @objc func toggleShowKeyPresses(_ sender: Any?) {
+        UserDefaults.standard.set(!AppSettings.showKeyPresses, forKey: AppSettings.showKeyPressesKey)
     }
 
     @objc private func chooseDisplay(_ sender: NSMenuItem) {
-        guard let choice = sender.representedObject as? DisplayChoice, let session = sessionTabs.session(for: choice.tab) else { return }
-        select(choice.tab)
-        guard sessionTabs.selection == choice.tab else { return }
+        guard let display = sender.representedObject as? UInt32, let session = sessionTabs.selectedSession else { return }
         let displays = session.displays
-        guard displays.pendingID != nil || displays.selectedID != choice.display else { return }
-        if case .failure = session.selectDisplay(choice.display) { NSSound.beep() }
+        guard displays.pendingID != nil || displays.selectedID != display else { return }
+        if case .failure = session.selectDisplay(display) { NSSound.beep() }
     }
 
-    /// The Display section of a tab's menu, or nothing while the remote reports at most one display.
-    private func displayItems(for id: UUID) -> [NSMenuItem] {
-        guard let displays = sessionTabs.session(for: id)?.displays, displays.displays.count > 1 else { return [] }
+    /// The Display section of the More menu, or nothing while the remote reports at most one display.
+    private func displayItems(for session: SessionViewController) -> [NSMenuItem] {
+        let displays = session.displays
+        guard displays.displays.count > 1 else { return [] }
         let shown = displays.pendingID ?? displays.selectedID
         return [.sectionHeader(title: "Display")]
             + displays.ordered.map { display in
                 let item = NSMenuItem(title: displays.name(of: display.id) ?? "", action: #selector(chooseDisplay(_:)), keyEquivalent: "")
                 item.subtitle = "\(display.size.width) × \(display.size.height)" + (display.isMain ? " · Main" : "")
                 item.target = self
-                item.representedObject = DisplayChoice(tab: id, display: display.id)
+                item.representedObject = display.id
                 item.state = display.id == shown ? .on : .off
                 return item
             }
     }
 
-    /// Take Screenshot, Copy Screenshot, and Start Recording, for the Session menu and the tab actions menu.
+    /// Capture Keyboard and Show Key Presses, for the Session menu and the More menu. Validation sets their checkmarks.
+    static func makeKeyboardItems() -> [NSMenuItem] {
+        [
+            NSMenuItem(title: "Capture Keyboard", action: #selector(toggleKeyboardCapture(_:)), keyEquivalent: ""),
+            NSMenuItem(title: "Show Key Presses", action: #selector(toggleShowKeyPresses(_:)), keyEquivalent: ""),
+        ]
+    }
+
+    /// Take Screenshot, Copy Screenshot, and Start Recording, for the Session menu and the More menu.
     /// Copy Screenshot is a visible item, because an alternate would only show while holding all four modifiers.
     /// Validation retitles the recording item while a recording runs or finishes.
     static func makeCaptureItems() -> [NSMenuItem] {
@@ -313,9 +487,9 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
         sessionTabs.tabs.contains { sessionTabs.session(for: $0.id)?.control.canStop == true }
     }
 
-    /// Take Over or Resume and Stop Agent Control for one tab, then Stop All Agent Control, leaving out
-    /// the items that don't apply. For the tab menus and the menu bar menu.
-    func agentControlItems(for id: UUID, includingStopAll: Bool) -> [NSMenuItem] {
+    /// Take Over or Resume and Stop Agent Control for one tab, leaving out the items that don't apply.
+    /// For the tab's menu and the menu bar item's menu.
+    func agentControlItems(for id: UUID) -> [NSMenuItem] {
         guard let control = sessionTabs.session(for: id)?.control else { return [] }
         var items: [NSMenuItem] = []
         func add(_ title: String, _ action: Selector, _ applies: Bool) {
@@ -329,7 +503,6 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
             control.canResume ? "Resume" : "Take Over", #selector(toggleAgentControl(_:)),
             control.canTakeOver || (control.canResume && sessionTabs.session(for: id)?.isConnected == true))
         add("Stop Agent Control", #selector(stopAgentControl(_:)), control.canStop)
-        add("Stop All Agent Control", #selector(stopAllAgentControl(_:)), includingStopAll && canStopAnyAgent)
         return items
     }
 
@@ -339,20 +512,24 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
         return sessionTabs.selectedSession
     }
 
-    /// From the tab's accessibility action and its menu. Only the shown tab's desktop can take the keyboard.
-    private func setKeyboardCapture(_ id: UUID, captured: Bool) {
-        guard let session = sessionTabs.session(for: id) else { return }
-        if captured { session.focusDesktop() } else { session.releaseKeyboardCapture() }
+    // MARK: Validation
+
+    /// Its raw value is the tag of a validated recording menu item. An item that was never validated has tag 0.
+    private enum RecordingCommand: Int {
+        case start = 1
+        case stop, finishing
     }
 
-    @objc private func toggleTabKeyboardCapture(_ sender: NSMenuItem) {
-        guard let id = sender.representedObject as? UUID, let session = sessionTabs.session(for: id) else { return }
-        setKeyboardCapture(id, captured: !session.hasKeyboard)
+    private func recordingCommand(for session: SessionViewController?) -> RecordingCommand {
+        switch session?.capture.recordingState {
+        case .recording: .stop
+        case .finishing: .finishing
+        default: .start
+        }
     }
 
-    /// A global setting, so every tab's menu shows the same state.
-    @objc private func toggleShowKeyPresses(_ sender: NSMenuItem) {
-        UserDefaults.standard.set(!AppSettings.showKeyPresses, forKey: AppSettings.showKeyPressesKey)
+    private func canCapture(_ session: SessionViewController?) -> Bool {
+        session?.isConnected == true && session?.displayIsReady == true
     }
 
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
@@ -360,6 +537,8 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
         switch menuItem.action {
         case #selector(showHome(_:)):
             return canChangeTabs
+        case #selector(startSearch(_:)):
+            return currentPage === connectionsViewController || canChangeTabs
         case #selector(showPreviousTab(_:)), #selector(showNextTab(_:)):
             return !sessionTabs.tabs.isEmpty && canChangeTabs
         case #selector(showTab(_:)):
@@ -370,15 +549,10 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
             return tabs.indices.contains(menuItem.tag) && canChangeTabs
         case #selector(closeTab(_:)):
             return session != nil && canChangeTabs
-        case #selector(closeClickedTab(_:)):
-            return canChangeTabs
-        case #selector(toggleTabKeyboardCapture(_:)):
-            menuItem.state = session?.hasKeyboard == true ? .on : .off
-            return session?.isConnected == true && session === sessionTabs.selectedSession
-        case #selector(chooseDisplay(_:)):
-            guard let choice = menuItem.representedObject as? DisplayChoice else { return false }
-            return sessionTabs.session(for: choice.tab)?.canChooseDisplay == true && canChangeTabs
-        case #selector(showNextDisplay(_:)), #selector(showPreviousDisplay(_:)):
+        case #selector(toggleKeyboardCapture(_:)):
+            menuItem.state = hasKeyboard ? .on : .off
+            return session?.isConnected == true
+        case #selector(chooseDisplay(_:)), #selector(showNextDisplay(_:)), #selector(showPreviousDisplay(_:)):
             return sessionTabs.selectedSession?.canChooseDisplay == true
         case #selector(toggleShowKeyPresses(_:)):
             menuItem.state = AppSettings.showKeyPresses ? .on : .off
@@ -396,23 +570,130 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
         case #selector(sendCtrlAltDelete(_:)):
             return session?.isConnected == true && session?.control.allowsHumanInput == true
         case #selector(releaseKeyboardCapture(_:)):
-            return session?.hasKeyboard ?? false
+            return hasKeyboard
         case #selector(takeScreenshot(_:)), #selector(copyScreenshot(_:)):
-            return session?.isConnected == true && session?.displayIsReady == true
+            return canCapture(session)
+        case #selector(stopRecording(_:)):
+            return recordingCommand(for: session) == .stop
         case #selector(toggleRecording(_:)):
-            switch session?.capture.recordingState {
-            case .recording:
+            let command = recordingCommand(for: session)
+            menuItem.tag = command.rawValue
+            switch command {
+            case .stop:
                 menuItem.title = "Stop Recording"
                 return true
             case .finishing:
                 menuItem.title = "Finishing Recording\u{2026}"
                 return false
-            default:
+            case .start:
                 menuItem.title = "Start Recording"
-                return session?.isConnected == true && session?.displayIsReady == true
+                return canCapture(session)
             }
         default:
             return true
+        }
+    }
+
+    private struct CaptureControls: Equatable {
+        var hasKeyboard: Bool
+        var isConnected: Bool
+        var canCapture: Bool
+        var recording: RecordingCommand
+    }
+
+    /// The capture group follows the same rules as the menu items with the same actions. A click selects its
+    /// segment, so `afterClick` puts back what the session says: only Capture Keyboard stays selected, while
+    /// the desktop has the keyboard. Otherwise the control changes only when the session does.
+    private func updateCaptureControls(afterClick: Bool = false) {
+        let session = sessionTabs.selectedSession
+        let controls = CaptureControls(
+            hasKeyboard: hasKeyboard, isConnected: session?.isConnected == true, canCapture: canCapture(session),
+            recording: recordingCommand(for: session))
+        guard afterClick || controls != shownCapture else { return }
+        captureControl.setSelected(controls.hasKeyboard, forSegment: 0)
+        captureControl.setSelected(false, forSegment: 1)
+        captureControl.setSelected(false, forSegment: 2)
+        captureControl.setEnabled(controls.isConnected, forSegment: 0)
+        captureControl.setEnabled(controls.canCapture, forSegment: 1)
+        let command = controls.recording
+        if command != shownCapture?.recording {
+            let title =
+                switch command {
+                case .start: "Start Recording"
+                case .stop: "Stop Recording"
+                case .finishing: "Finishing Recording"
+                }
+            captureControl.setToolTip(title, forSegment: 2)
+            captureControl.setImage(
+                command == .stop
+                    ? NSImage(systemSymbolName: "stop.circle", accessibilityDescription: title)?
+                        .withSymbolConfiguration(.init(paletteColors: [.systemRed]))
+                    : NSImage(systemSymbolName: "record.circle", accessibilityDescription: title),
+                forSegment: 2)
+        }
+        captureControl.setEnabled(command == .stop || (command == .start && controls.canCapture), forSegment: 2)
+        shownCapture = controls
+    }
+
+    /// The clicked segment is the one whose selection no longer matches the session.
+    @objc private func captureControlClicked(_ sender: NSSegmentedControl) {
+        let session = sessionTabs.selectedSession
+        if sender.isSelected(forSegment: 1) {
+            session?.captureScreenshot(copyToClipboard: false)
+        } else if sender.isSelected(forSegment: 2) {
+            session?.toggleRecording()
+        } else if sender.isSelected(forSegment: 0) != hasKeyboard {
+            toggleKeyboardCapture(sender)
+        }
+        updateCaptureControls(afterClick: true)
+    }
+
+    // MARK: Menus
+
+    /// The More menu is built each time it opens, for the shown page. New Connection always leads it.
+    func menuNeedsUpdate(_ menu: NSMenu) {
+        menu.removeAllItems()
+        // The toolbar takes the first item of this menu for the button's title and leaves it out of the open menu.
+        defer { menu.insertItem(NSMenuItem(), at: 0) }
+        menu.addItem(withTitle: "New Connection…", action: #selector(newConnection(_:)), keyEquivalent: "n").target = self
+        guard let session = sessionTabs.selectedSession else {
+            let connections = [
+                NSMenuItem(title: "Connect", action: #selector(ConnectionsViewController.connect(_:)), keyEquivalent: "o"),
+                NSMenuItem(title: "Edit Connection…", action: #selector(ConnectionsViewController.editConnection(_:)), keyEquivalent: ""),
+                NSMenuItem(title: "Duplicate", action: #selector(ConnectionsViewController.duplicateConnection(_:)), keyEquivalent: "d"),
+                NSMenuItem(
+                    title: "Delete", action: #selector(ConnectionsViewController.delete(_:)),
+                    keyEquivalent: String(UnicodeScalar(NSBackspaceCharacter)!)),
+            ]
+            for item in connections { item.target = connectionsViewController }
+            add([connections], to: menu)
+            return
+        }
+        let close = NSMenuItem(title: "Close Tab", action: #selector(closeTab(_:)), keyEquivalent: "w")
+        close.keyEquivalentModifierMask = [.control, .option, .command]
+        var ending = [close]
+        if session.canDisconnect {
+            ending.insert(NSMenuItem(title: "Disconnect", action: #selector(disconnectSession(_:)), keyEquivalent: ""), at: 0)
+        }
+        if session.control.canStop {
+            ending.insert(NSMenuItem(title: "Stop Agent Control", action: #selector(stopAgentControl(_:)), keyEquivalent: ""), at: 0)
+        }
+        let groups = [
+            displayItems(for: session),
+            Self.makeKeyboardItems(),
+            Self.makeCaptureItems(),
+            [NSMenuItem(title: "Send Ctrl-Alt-Delete", action: #selector(sendCtrlAltDelete(_:)), keyEquivalent: "")],
+            ending,
+        ]
+        for item in groups.joined() { item.target = self }
+        add(groups, to: menu)
+    }
+
+    /// Adds each group that has items after a separator.
+    private func add(_ groups: [[NSMenuItem]], to menu: NSMenu) {
+        for group in groups where !group.isEmpty {
+            if !menu.items.isEmpty { menu.addItem(.separator()) }
+            for item in group { menu.addItem(item) }
         }
     }
 
@@ -423,67 +704,63 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
         }
         let point = tabStrip.convert(event.locationInWindow, from: nil)
         guard tabStrip.bounds.contains(point), let id = tabStripLayout.tab(at: point) else { return false }
-        NSMenu.popUpContextMenu(tabMenu(for: id, includingActions: false), with: event, for: tabStrip)
+        NSMenu.popUpContextMenu(tabMenu(for: id), with: event, for: tabStrip)
         return true
     }
 
-    /// Hangs the tab's menu under its actions button, centered like Safari's page menu. AppKit has no
-    /// public menu with an arrow, so it is a plain pop-up menu. `button` is in the strip's flipped coordinates.
-    private func showTabActions(for id: UUID, below button: CGRect) {
-        let menu = tabMenu(for: id, includingActions: true)
-        menu.popUp(positioning: nil, at: NSPoint(x: button.midX - menu.size.width / 2, y: button.maxY + 6), in: tabStrip)
-    }
-
-    /// The context menu has the agent control items that apply and Close Tab. The menu button's menu
-    /// puts the remote displays, Capture Keyboard, Show Key Presses, and the capture items first.
-    private func tabMenu(for id: UUID, includingActions: Bool) -> NSMenu {
-        let menu = NSMenu()
-        if includingActions {
-            let displayItems = displayItems(for: id)
-            for item in displayItems { menu.addItem(item) }
-            if !displayItems.isEmpty { menu.addItem(.separator()) }
-            let keyboard = menu.addItem(withTitle: "Capture Keyboard", action: #selector(toggleTabKeyboardCapture(_:)), keyEquivalent: "")
-            keyboard.target = self
-            keyboard.representedObject = id
-            menu.addItem(withTitle: "Show Key Presses", action: #selector(toggleShowKeyPresses(_:)), keyEquivalent: "").target = self
-            menu.addItem(.separator())
-            for item in Self.makeCaptureItems() {
-                item.target = self
-                item.representedObject = id
-                menu.addItem(item)
+    /// Opens a tab's menu under the tab, for VoiceOver. The menu opens on the next turn of the main loop,
+    /// because `popUp` returns only when the menu closes and the accessibility action must return before that.
+    /// A run loop block carries it: a main-actor task would hold up every other task until the menu closes.
+    private func showTabMenu(forTab id: UUID) {
+        RunLoop.main.perform { [weak self] in
+            MainActor.assumeIsolated {
+                guard let self, let frame = self.tabStripLayout.frame(of: id) else { return }
+                self.tabMenu(for: id).popUp(positioning: nil, at: NSPoint(x: frame.minX, y: frame.maxY), in: self.tabStrip)
             }
-            menu.addItem(.separator())
         }
-        let agentItems = agentControlItems(for: id, includingStopAll: true)
-        for item in agentItems { menu.addItem(item) }
-        if !agentItems.isEmpty { menu.addItem(.separator()) }
-        let close = menu.addItem(withTitle: "Close Tab", action: #selector(closeClickedTab(_:)), keyEquivalent: "")
-        close.target = self
-        close.representedObject = id
-        return menu
     }
 
-    @objc private func closeClickedTab(_ sender: NSMenuItem) {
-        guard let id = sender.representedObject as? UUID else { return }
-        close(id)
+    /// A tab's menu holds what a tab that is not showing may need: the agent control items, Stop Recording and
+    /// Disconnect where they apply, and Close Tab. Everything else is in the shown session's More menu.
+    private func tabMenu(for id: UUID) -> NSMenu {
+        let menu = NSMenu()
+        let session = sessionTabs.session(for: id)
+        func item(_ title: String, _ action: Selector) -> NSMenuItem {
+            let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
+            item.target = self
+            item.representedObject = id
+            return item
+        }
+        var recording: [NSMenuItem] = []
+        if recordingCommand(for: session) == .stop { recording = [item("Stop Recording", #selector(stopRecording(_:)))] }
+        add(
+            [
+                agentControlItems(for: id),
+                recording,
+                session?.canDisconnect == true ? [item("Disconnect", #selector(disconnectSession(_:)))] : [],
+                [item("Close Tab", #selector(closeTab(_:)))],
+            ], to: menu)
+        return menu
     }
 
     // MARK: Search
 
     @objc private func searchChanged(_ sender: NSSearchField) {
         updateSearchWidth()
-        // On a session tab the text only drives suggestions.
-        if currentPage === connectionsViewController {
-            connectionsViewController.searchText = sender.stringValue
-        }
+        connectionsViewController.searchText = sender.stringValue
     }
 
-    /// Keeps the field open while a filter is active on the connections list.
-    private func updateSearchWidth() {
+    /// The field is a button until it has the keyboard or a filter. In a compact toolbar a filter that is
+    /// not being edited keeps a short field, so the tabs fit beside it.
+    private var searchFieldWidth: CGFloat {
         let field = searchToolbarItem.searchField
-        searchWidth.constant =
-            field.stringValue.isEmpty && field.currentEditor() == nil
-            ? Self.collapsedSearchWidth : Self.expandedSearchWidth
+        if field.currentEditor() != nil { return Self.expandedSearchWidth }
+        if field.stringValue.isEmpty { return Self.collapsedSearchWidth }
+        return isCompact ? Self.compactFilterWidth : Self.expandedSearchWidth
+    }
+
+    private func updateSearchWidth() {
+        if searchFieldWidth != searchWidth.constant { updateChrome() }
     }
 
     /// Clears the search and closes the field when the page changes.
@@ -496,70 +773,19 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
         updateSearchWidth()
     }
 
-    /// Closes the search on a session tab and gives the keyboard back to the desktop.
-    private func finishSessionSearch() {
-        let field = searchToolbarItem.searchField
-        field.stringValue = ""
-        searchToolbarItem.endSearchInteraction()
-        if field.currentEditor() != nil { field.window?.makeFirstResponder(nil) }
-        updateSearchWidth()
-        sessionTabs.selectedSession?.focusDesktop()
-    }
-
-    func controlTextDidBeginEditing(_ notification: Notification) {
-        updateSearchWidth()
+    /// Escape in the empty search field closes it. With text in it, the field clears the text first.
+    func control(_ control: NSControl, textView: NSTextView, doCommandBy selector: Selector) -> Bool {
+        guard selector == #selector(NSResponder.cancelOperation(_:)), control.stringValue.isEmpty else { return false }
+        window?.makeFirstResponder(connectionsViewController.initialFirstResponder)
+        return true
     }
 
     func controlTextDidEndEditing(_ notification: Notification) {
-        if currentPage !== connectionsViewController {
-            searchToolbarItem.searchField.stringValue = ""
-        }
         // Collapse once the field has given up the keyboard, unless a filter is active.
         Task { @MainActor [weak self] in
             guard let self, searchToolbarItem.searchField.currentEditor() == nil else { return }
             updateSearchWidth()
             if searchToolbarItem.searchField.stringValue.isEmpty { searchToolbarItem.endSearchInteraction() }
-        }
-    }
-
-    /// On a session tab, Escape clears and closes the search and gives the keyboard back to the desktop.
-    /// While suggestions show, the field gives the first Escape to them, and they only close.
-    func control(_ control: NSControl, textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
-        guard commandSelector == #selector(NSResponder.cancelOperation(_:)),
-            currentPage !== connectionsViewController
-        else { return false }
-        finishSessionSearch()
-        return true
-    }
-
-    /// Saved connections matching the search, offered while a session tab shows.
-    func textField(_ textField: NSTextField, provideUpdatedSuggestions responseHandler: @escaping (ItemResponse) -> Void) {
-        let query = textField.stringValue.trimmingCharacters(in: .whitespaces)
-        let matches =
-            query.isEmpty
-            ? []
-            : connectionStore.connections
-                .filter { $0.matches(query) }
-                .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
-        var response = ItemResponse(
-            items: matches.map { connection in
-                var item = Item(representedValue: connection.id, title: connection.name)
-                item.secondaryTitle = ConnectionCellView.subtitle(for: connection)
-                item.image = NSImage(systemSymbolName: "desktopcomputer", accessibilityDescription: nil)
-                return item
-            })
-        response.phase = .final
-        responseHandler(response)
-    }
-
-    /// Opens the chosen connection in a new tab, or shows its open tab.
-    func textField(_ textField: NSTextField, didSelect item: Item) {
-        let id = item.representedValue
-        // Let the field finish its own handling of the choice first.
-        Task { @MainActor [weak self] in
-            guard let self, let connection = connectionStore.connections.first(where: { $0.id == id }) else { return }
-            finishSessionSearch()
-            connectionsViewController.open([connection])
         }
     }
 
@@ -577,22 +803,39 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
         proposedOptions.union([.fullScreen, .autoHideMenuBar, .autoHideToolbar])
     }
 
-    func windowWillEnterFullScreen(_ notification: Notification) { sessionTabs.selectedSession?.windowWillTransition() }
+    func windowWillEnterFullScreen(_ notification: Notification) {
+        closeCallout()
+        sessionTabs.selectedSession?.windowWillTransition()
+    }
     func windowWillExitFullScreen(_ notification: Notification) { sessionTabs.selectedSession?.windowWillTransition() }
-    func windowDidEnterFullScreen(_ notification: Notification) { sessionTabs.selectedSession?.windowDidTransition() }
-    func windowDidExitFullScreen(_ notification: Notification) { sessionTabs.selectedSession?.windowDidTransition() }
+    func windowDidEnterFullScreen(_ notification: Notification) {
+        sessionTabs.selectedSession?.windowDidTransition()
+        reportToolbarReveal()
+    }
+    func windowDidExitFullScreen(_ notification: Notification) {
+        sessionTabs.selectedSession?.windowDidTransition()
+        reportToolbarReveal()
+    }
     func windowDidFailToEnterFullScreen(_ window: NSWindow) { sessionTabs.selectedSession?.windowDidTransition() }
     func windowDidFailToExitFullScreen(_ window: NSWindow) { sessionTabs.selectedSession?.windowDidTransition() }
     func windowDidEndLiveResize(_ notification: Notification) { sessionTabs.selectedSession?.windowDidChangeSize() }
     func windowDidChangeScreen(_ notification: Notification) { sessionTabs.selectedSession?.windowDidChangeSize() }
 
+    /// AppKit sends this after every event. The search field takes the keyboard and the remote display
+    /// changes without a notification of their own, so both are compared here with what the toolbar shows.
+    func windowDidUpdate(_ notification: Notification) {
+        updateSearchWidth()
+        updateCaptureControls()
+    }
+
+    /// Crossing `compactWidth` changes which controls the toolbar holds.
+    func windowDidResize(_ notification: Notification) {
+        if isCompact != shownCompact { updateChrome() }
+    }
+
     // MARK: Toolbar
 
     private func configureToolbarItems() {
-        homeToolbarItem.view = toolbarButton("house", "Connections", action: #selector(showHome(_:)), identifier: "home")
-        homeToolbarItem.label = "Connections"
-        homeToolbarItem.toolTip = "Show Connections"
-
         tabStrip.rootView = SessionTabStrip(
             tabs: sessionTabs,
             layout: tabStripLayout,
@@ -602,21 +845,54 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
                 guard let session = self?.sessionTabs.session(for: id) else { return }
                 Task { await session.stopRecording() }
             },
-            onShowActions: { [weak self] id, button in self?.showTabActions(for: id, below: button) },
-            onSetKeyboardCapture: { [weak self] id, captured in self?.setKeyboardCapture(id, captured: captured) }
+            onShowMenu: { [weak self] id in self?.showTabMenu(forTab: id) }
         )
         tabStrip.sizingOptions = []
         tabStrip.safeAreaRegions = []
         tabStrip.translatesAutoresizingMaskIntoConstraints = false
-        // Flexible spaces on both sides center the strip. It grows to its ideal width, then shrinks to fit.
+        // The strip grows to its ideal width, then shrinks to fit the toolbar.
         NSLayoutConstraint.activate([
             tabStrip.heightAnchor.constraint(equalToConstant: SessionTabStrip.height),
-            tabStrip.widthAnchor.constraint(greaterThanOrEqualToConstant: 120),
+            tabStrip.widthAnchor.constraint(greaterThanOrEqualToConstant: SessionTabStrip.minimumWidth),
             tabStripWidth,
         ])
         tabsToolbarItem.view = tabStrip
+        // The strip draws its own track. The toolbar's glass belongs to the shown tab alone.
+        tabsToolbarItem.isBordered = false
         tabsToolbarItem.label = "Tabs"
         tabsToolbarItem.visibilityPriority = .high
+
+        // A button and not an image item, so it can draw pressed while the connections list shows
+        // and carry an accessibility identifier.
+        connectionsButton.image = NSImage(systemSymbolName: "list.bullet", accessibilityDescription: "Show Connections")
+        connectionsButton.bezelStyle = .toolbar
+        connectionsButton.setButtonType(.pushOnPushOff)
+        connectionsButton.target = self
+        connectionsButton.action = #selector(showHome(_:))
+        connectionsButton.setAccessibilityIdentifier("showConnections")
+        connectionsToolbarItem.view = connectionsButton
+        connectionsButton.setAccessibilityLabel("Show Connections")
+        connectionsToolbarItem.label = "Show Connections"
+        connectionsToolbarItem.toolTip = "Show Connections"
+        connectionsToolbarItem.visibilityPriority = .high
+
+        agentButton.sizingOptions = .intrinsicContentSize
+        agentToolbarItem.view = agentButton
+        agentToolbarItem.label = "Agent Control"
+        agentToolbarItem.visibilityPriority = .high
+
+        captureControl.segmentCount = 3
+        captureControl.trackingMode = .selectAny
+        for (segment, (symbol, title)) in [("keyboard", "Capture Keyboard"), ("camera", "Take Screenshot")].enumerated() {
+            captureControl.setImage(NSImage(systemSymbolName: symbol, accessibilityDescription: title), forSegment: segment)
+            captureControl.setToolTip(title, forSegment: segment)
+        }
+        for segment in 0..<3 { captureControl.setWidth(38, forSegment: segment) }
+        captureControl.target = self
+        captureControl.action = #selector(captureControlClicked(_:))
+        captureControl.setAccessibilityIdentifier("captureControls")
+        captureToolbarItem.view = captureControl
+        captureToolbarItem.label = "Capture"
 
         let field = searchToolbarItem.searchField
         field.setAccessibilityIdentifier("connectionsSearch")
@@ -624,26 +900,23 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
         field.target = self
         field.action = #selector(searchChanged(_:))
         field.delegate = self
-        searchToolbarItem.preferredWidthForSearchField = Self.expandedSearchWidth
-        // Below the item's own constraints, so the field still expands while it has the keyboard.
+        // The item keeps an open field at least this wide for as long as the search lasts, so it is the short
+        // width. `searchWidth` widens the field past it.
+        searchToolbarItem.preferredWidthForSearchField = Self.compactFilterWidth
         searchWidth.priority = .init(500)
         searchWidth.isActive = true
-    }
 
-    /// Looks like a bordered image item. Unlike one, it can carry an accessibility identifier.
-    private func toolbarButton(_ symbol: String, _ description: String, action: Selector, identifier: String) -> NSButton {
-        let button = NSButton(
-            image: NSImage(systemSymbolName: symbol, accessibilityDescription: description)!,
-            target: self, action: action)
-        button.bezelStyle = .toolbar
-        button.setAccessibilityIdentifier(identifier)
-        return button
+        moreToolbarItem.image = NSImage(systemSymbolName: "ellipsis", accessibilityDescription: "More")
+        moreToolbarItem.label = "More"
+        moreToolbarItem.toolTip = "More"
+        moreToolbarItem.showsIndicator = true
+        moreToolbarItem.menu.delegate = self
     }
 
     func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
         [
-            Self.homeItem, .flexibleSpace, Self.tabsItem, .flexibleSpace,
-            Self.newConnectionItem, Self.searchItem,
+            Self.connectionsItem, Self.tabsItem, .flexibleSpace,
+            Self.agentItem, Self.captureItem, Self.searchItem, Self.moreItem,
         ]
     }
 
@@ -657,20 +930,13 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
         willBeInsertedIntoToolbar flag: Bool
     ) -> NSToolbarItem? {
         switch itemIdentifier {
-        case Self.homeItem:
-            return homeToolbarItem
-        case Self.tabsItem:
-            return tabsToolbarItem
-        case Self.newConnectionItem:
-            let item = NSToolbarItem(itemIdentifier: itemIdentifier)
-            item.view = toolbarButton("plus", "New Connection", action: #selector(newConnection(_:)), identifier: "newConnection")
-            item.label = "New Connection"
-            item.toolTip = "New Connection"
-            return item
-        case Self.searchItem:
-            return searchToolbarItem
-        default:
-            return nil
+        case Self.tabsItem: tabsToolbarItem
+        case Self.connectionsItem: connectionsToolbarItem
+        case Self.agentItem: agentToolbarItem
+        case Self.captureItem: captureToolbarItem
+        case Self.searchItem: searchToolbarItem
+        case Self.moreItem: moreToolbarItem
+        default: nil
         }
     }
 }

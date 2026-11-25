@@ -45,24 +45,26 @@ struct SettingsView: View {
 }
 
 extension View {
-    /// Every pane is a grouped form, 500 pt wide and as tall as its rows.
+    /// Every pane is a grouped form, 540 pt wide and as tall as its rows.
     fileprivate func settingsPane() -> some View {
         formStyle(.grouped)
             .scrollDisabled(true)
-            .frame(width: 500)
+            .frame(width: 540)
             .fixedSize(horizontal: false, vertical: true)
     }
 }
 
-/// A row's status line: a green or orange symbol and secondary text.
+/// A row's status: a green or orange symbol and secondary text. A short status sits beside the row's button.
+/// One that needs a sentence is the row's second line.
 private struct StatusLabel: View {
     let text: String
     let ok: Bool
+    var isSecondLine = false
 
     var body: some View {
         Label {
             // Match the secondary line a form gives a second Text.
-            Text(text).font(.subheadline).foregroundStyle(.secondary)
+            Text(text).font(isSecondLine ? .subheadline : nil).foregroundStyle(.secondary)
         } icon: {
             Image(systemName: ok ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
                 .foregroundStyle(ok ? .green : .orange)
@@ -91,24 +93,29 @@ private struct GeneralPane: View {
             Section("Keyboard") {
                 Toggle(isOn: $captureShortcuts) {
                     Text(Self.captureShortcutsTitle)
-                    Text(
-                        "While a session tab is active, shortcuts like Command-Tab and Command-Space go to the remote computer. Command-Q, Control-Command-F, and the Control-Option-Command tab and capture shortcuts stay on this Mac."
-                    )
+                    Text("While a session tab is active, shortcuts like Command-Tab and Command-Space go to the remote computer.")
                 }
                 // The form shows the label beside the switch; this puts it on the switch itself.
                 .accessibilityLabel(Self.captureShortcutsTitle)
                 .accessibilityIdentifier("captureSystemShortcuts")
                 LabeledContent {
-                    Button("Open System Settings") { SystemShortcutCapture.openAccessibilitySettings() }
-                        .accessibilityIdentifier("openAccessibilitySettings")
+                    if trusted {
+                        StatusLabel(text: "Allowed", ok: true)
+                            .accessibilityIdentifier("accessibilityPermission")
+                    } else {
+                        Button("Open System Settings") { SystemShortcutCapture.openAccessibilitySettings() }
+                            .accessibilityIdentifier("openAccessibilitySettings")
+                    }
                 } label: {
                     Text("Permission to control this Mac")
-                    StatusLabel(text: trusted ? "Allowed" : "Not allowed. System shortcuts stay on this Mac.", ok: trusted)
-                        .accessibilityIdentifier("accessibilityPermission")
+                    if !trusted {
+                        StatusLabel(text: "Not allowed. System shortcuts stay on this Mac.", ok: false, isSecondLine: true)
+                            .accessibilityIdentifier("accessibilityPermission")
+                    }
                 }
                 .disabled(!captureShortcuts)
             }
-            Section {
+            Section("Key Presses") {
                 Toggle(isOn: $showKeyPresses) {
                     Text(Self.keyPressesTitle)
                     Text("Typed text, including passwords, appears on screen and in recordings.")
@@ -213,7 +220,7 @@ private struct CopyableText: View {
     }
 }
 
-/// A link's status in one short line. The help tag holds the paths.
+/// A link's status beside its button. The help tag holds the paths.
 private struct LinkStatus: View {
     let link: CommandLineTool
     let state: CommandLineTool.State?
@@ -272,15 +279,11 @@ private struct CommandLinePane: View {
     var body: some View {
         Form {
             Section {
-                LabeledContent {
-                    switch state {
-                    case .notInstalled:
-                        Button("Install") {
-                            perform { try tool.install() }
-                            opensPathAdvice = state == .installed
-                        }
-                    case .installed:
-                        HStack {
+                LabeledContent("Command-line tool") {
+                    HStack(spacing: 10) {
+                        if state == .installed, isOnPath == false {
+                            StatusLabel(text: "Installed, but not on your PATH", ok: false)
+                                .help("~/.local/bin isn't on your PATH, so \(tool.link.lastPathComponent) won't run in Terminal.")
                             // Row-specific help opens from an info button, as in System Settings.
                             Button("PATH Setup", systemImage: "info.circle") { showsPathAdvice.toggle() }
                                 .labelStyle(.iconOnly)
@@ -293,18 +296,19 @@ private struct CommandLinePane: View {
                                     }
                                     .padding()
                                 }
-                            Button("Uninstall") { perform { try tool.uninstall() } }
+                        } else {
+                            LinkStatus(link: tool, state: state)
                         }
-                    case let state?: LinkFixButton(link: tool, state: state, perform: perform)
-                    case nil: EmptyView()
-                    }
-                } label: {
-                    Text("Command-line tool")
-                    if state == .installed, isOnPath == false {
-                        StatusLabel(text: "Installed, but not on your PATH", ok: false)
-                            .help("~/.local/bin isn't on your PATH, so \(tool.link.lastPathComponent) won't run in Terminal.")
-                    } else {
-                        LinkStatus(link: tool, state: state)
+                        switch state {
+                        case .notInstalled:
+                            Button("Install") {
+                                perform { try tool.install() }
+                                opensPathAdvice = state == .installed
+                            }
+                        case .installed: Button("Uninstall") { perform { try tool.uninstall() } }
+                        case let state?: LinkFixButton(link: tool, state: state, perform: perform)
+                        case nil: EmptyView()
+                        }
                     }
                 }
                 .accessibilityIdentifier("commandLineTool")
@@ -317,7 +321,7 @@ private struct CommandLinePane: View {
                 }
             }
             AgentSkillSection()
-            Section {
+            Section("Pointer") {
                 Toggle(isOn: $showAgentPointer) {
                     Text(Self.pointerTitle)
                     Text("It never appears in screenshots.")
@@ -345,27 +349,25 @@ private struct AgentSkillSection: View {
 
     var body: some View {
         Section {
-            LabeledContent {
-            } label: {
-                Text("Agent skill")
-                Text("Teaches AI agents to use the \(AppIdentity.current.commandName) command.")
-            }
             ForEach(AgentSkill.Folder.allCases, id: \.self) { folder in
                 let link = skill.link(in: folder)
                 LabeledContent {
-                    switch states[folder] {
-                    case .notInstalled: Button("Install") { perform { try link.install() } }
-                    case .installed: Button("Remove") { perform { try link.uninstall() } }
-                    case let state?: LinkFixButton(link: link, state: state, perform: perform)
-                    case nil: EmptyView()
+                    HStack(spacing: 10) {
+                        switch states[folder] {
+                        // The Install button says as much.
+                        case .notInstalled: Button("Install") { perform { try link.install() } }
+                        case .installed:
+                            LinkStatus(link: link, state: .installed)
+                            Button("Remove") { perform { try link.uninstall() } }
+                        case let state?:
+                            LinkStatus(link: link, state: state)
+                            LinkFixButton(link: link, state: state, perform: perform)
+                        case nil: EmptyView()
+                        }
                     }
                 } label: {
                     Text(folder.name)
-                    // One subtitle view, so the status line has the same style in both rows.
-                    VStack(alignment: .leading, spacing: 2) {
-                        if folder == .agents { Text("Read by Codex, OpenCode, Cursor and other agents.") }
-                        LinkStatus(link: link, state: states[folder])
-                    }
+                    if folder == .agents { Text("Read by Codex, OpenCode, Cursor and other agents.") }
                 }
                 .accessibilityIdentifier("agentSkill-\(folder.rawValue)")
             }
@@ -376,6 +378,11 @@ private struct AgentSkillSection: View {
                 }
             }
             .accessibilityAction { otherAgentsExpanded.toggle() }
+        } header: {
+            Text("Agent Skill")
+        } footer: {
+            Text("Teaches AI agents to use the \(AppIdentity.current.commandName) command.")
+                .foregroundStyle(.secondary)
         }
         // The command line, Finder or another app may change a skills folder while the pane is open.
         .task { repeat { refresh() } while (try? await Task.sleep(for: .seconds(1))) != nil }

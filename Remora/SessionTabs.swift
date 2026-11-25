@@ -196,12 +196,7 @@ final class SessionTabs {
 
     /// True while any open tab records or finishes a recording.
     var isRecording: Bool {
-        sessions.values.contains {
-            switch $0.capture.recordingState {
-            case .recording, .finishing: true
-            case .idle, .failed: false
-            }
-        }
+        sessions.values.contains { $0.capture.recordingState.isWriting }
     }
 
     var unfinishedCaptureURLs: [URL] {
@@ -211,12 +206,7 @@ final class SessionTabs {
     /// Disconnects sessions and finishes recordings, including those from closed tabs.
     @discardableResult
     func prepareToQuit() async -> [CaptureFailure] {
-        let captures = (sessions.values.map(\.capture) + Array(closingCaptures.values)).filter {
-            switch $0.recordingState {
-            case .recording, .finishing: true
-            case .idle, .failed: false
-            }
-        }
+        let captures = (sessions.values.map(\.capture) + Array(closingCaptures.values)).filter { $0.recordingState.isWriting }
         for session in sessions.values { session.disconnect() }
         return await withTaskGroup(of: CaptureFailure?.self) { group in
             for capture in captures {
@@ -253,6 +243,7 @@ extension SessionState {
         }
     }
 
+    /// A failure reads differently from an ordinary ending, like its icon does.
     var statusTitle: String {
         switch self {
         case .connecting: "Connecting…"
@@ -260,7 +251,7 @@ extension SessionState {
         case .awaitingTrust: "Waiting for Approval"
         case .connected: "Connected"
         case .reconnecting: "Reconnecting…"
-        case .disconnected: "Disconnected"
+        case .disconnected(let reason): reason?.isFailure == true ? "Connection Failed" : "Disconnected"
         }
     }
 }

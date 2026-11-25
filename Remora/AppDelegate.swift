@@ -10,6 +10,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let updater = AppUpdater()
     private lazy var settings = NSHostingSceneRepresentation { [updater] in Settings { SettingsView(updater: updater.sparkle) } }
     private var statusMenu: StatusMenu?
+    private var shortcutsWindow: NSWindow?
     private var sessionTabs: SessionTabs?
     private var commandLineController: CommandLineController?
     private var terminationPending = false
@@ -181,22 +182,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         alert.informativeText = """
             Double-click a connection to open it in a tab. Each connection has at most one tab.
 
-            When the remote computer has several displays, a tab shows one. Choose it from the tab’s Tab Actions menu.
+            When the remote computer has several displays, a tab shows one. Choose it from the More menu in the toolbar.
 
-            In a session, Command acts as the Windows or Super key, Control as Control, and Option as Alt.
-
-            These shortcuts stay on this Mac while a session has the keyboard:
-            Control-Option-Command-[ and ] show the previous and next tab.
-            Control-Option-Command-1 through 9 show tab 1 through 9.
-            Control-Option-Command-Right Arrow and Left Arrow show the next and previous remote display.
-            Control-Option-Command-H shows the connections list.
-            Control-Option-Command-W closes the tab and disconnects it.
-            Control-Option-Command-S saves a screenshot of the remote desktop. Add Shift to copy it instead.
-            Control-Option-Command-R starts or stops recording the remote desktop.
-            Control-Option-Command-Escape releases the keyboard. Click the remote desktop to capture it again.
-            Control-Command-F enters or exits full screen. Command-Q quits Remora.
+            Help > Keyboard Shortcuts lists the shortcuts that stay on this Mac while a session has the keyboard.
             """
         alert.runModal()
+    }
+
+    @objc private func showKeyboardShortcuts(_ sender: Any?) {
+        if shortcutsWindow == nil {
+            let content = NSHostingController(rootView: KeyboardShortcutsView())
+            content.sizingOptions = .preferredContentSize
+            let window = NSWindow(contentViewController: content)
+            window.title = "Keyboard Shortcuts"
+            // A fixed list has nothing to gain from a resize or a zoom.
+            window.styleMask = [.titled, .closable, .miniaturizable]
+            window.toolbar = NSToolbar()
+            window.toolbarStyle = .unified
+            window.isReleasedWhenClosed = false
+            window.center()
+            shortcutsWindow = window
+        }
+        shortcutsWindow?.makeKeyAndOrderFront(nil)
+        updateActivationPolicy()
     }
 
     /// Shows the window with the connections list.
@@ -212,9 +220,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApplication.shared.activate()
     }
 
-    /// The Dock icon shows while the main window or Settings is open, including minimized.
+    /// The Dock icon shows while the main window, Settings or Keyboard Shortcuts is open, including minimized.
     private func updateActivationPolicy() {
-        let windowOpen = [mainWindowController?.window, NSApplication.shared.settingsWindow].contains {
+        let windowOpen = [mainWindowController?.window, NSApplication.shared.settingsWindow, shortcutsWindow].contains {
             guard let window = $0 else { return false }
             return window.isVisible || window.isMiniaturized
         }
@@ -247,7 +255,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         appMenu.addItem(withTitle: "Quit \(AppIdentity.current.name)", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
 
         let fileMenu = addMenu("File", to: mainMenu)
-        fileMenu.addItem(withTitle: "New Connection", action: #selector(newConnection(_:)), keyEquivalent: "n").target = self
+        fileMenu.addItem(withTitle: "New Connection…", action: #selector(newConnection(_:)), keyEquivalent: "n").target = self
         fileMenu.addItem(.separator())
         fileMenu.addItem(withTitle: "Connect", action: #selector(ConnectionsViewController.connect(_:)), keyEquivalent: "o")
         fileMenu.addItem(withTitle: "Edit Connection…", action: #selector(ConnectionsViewController.editConnection(_:)), keyEquivalent: "")
@@ -292,17 +300,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         sessionMenu.addItem(.separator())
         sessionMenu.addItem(withTitle: "Send Ctrl-Alt-Delete", action: #selector(MainWindowController.sendCtrlAltDelete(_:)), keyEquivalent: "")
         sessionMenu.addItem(.separator())
-        for item in MainWindowController.makeCaptureItems() { sessionMenu.addItem(item) }
-        sessionMenu.addItem(.separator())
-        sessionMenu.addItem(withTitle: "Take Over", action: #selector(MainWindowController.toggleAgentControl(_:)), keyEquivalent: "")
-        sessionMenu.addItem(withTitle: "Stop Agent Control", action: #selector(MainWindowController.stopAgentControl(_:)), keyEquivalent: "")
-        sessionMenu.addItem(withTitle: "Stop All Agent Control", action: #selector(MainWindowController.stopAllAgentControl(_:)), keyEquivalent: "")
-        sessionMenu.addItem(.separator())
+        for item in MainWindowController.makeKeyboardItems() { sessionMenu.addItem(item) }
         sessionMenu.addItem(
             withTitle: "Release Keyboard Capture",
             action: #selector(MainWindowController.releaseKeyboardCapture(_:)),
             keyEquivalent: "\u{1b}"
         ).keyEquivalentModifierMask = localChord
+        sessionMenu.addItem(.separator())
+        for item in MainWindowController.makeCaptureItems() { sessionMenu.addItem(item) }
+        sessionMenu.addItem(.separator())
+        sessionMenu.addItem(withTitle: "Take Over", action: #selector(MainWindowController.toggleAgentControl(_:)), keyEquivalent: "")
+        sessionMenu.addItem(withTitle: "Stop Agent Control", action: #selector(MainWindowController.stopAgentControl(_:)), keyEquivalent: "")
+        sessionMenu.addItem(withTitle: "Stop All Agent Control", action: #selector(MainWindowController.stopAllAgentControl(_:)), keyEquivalent: "")
         sessionMenu.addItem(.separator())
         sessionMenu.addItem(withTitle: "Close Tab", action: #selector(MainWindowController.closeTab(_:)), keyEquivalent: "w")
             .keyEquivalentModifierMask = localChord
@@ -325,6 +334,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         let helpMenu = addMenu("Help", to: mainMenu)
         helpMenu.addItem(withTitle: "\(AppIdentity.current.name) Help", action: #selector(showHelp(_:)), keyEquivalent: "?").target = self
+        helpMenu.addItem(withTitle: "Keyboard Shortcuts", action: #selector(showKeyboardShortcuts(_:)), keyEquivalent: "").target = self
         NSApplication.shared.helpMenu = helpMenu
         NSApplication.shared.mainMenu = mainMenu
     }
