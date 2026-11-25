@@ -313,6 +313,8 @@ bool rm_graphics_display_woken(RMGraphics *g) {
     return WaitForSingleObject(rm_display_event(rm_rdp_display(g->session)), 0) == WAIT_OBJECT_0;
 }
 
+void rm_graphics_reconnect(RMGraphics *g) { rm_display_connected(rm_rdp_display(g->session)); }
+
 unsigned rm_graphics_refreshes(RMGraphics *g) {
     (void)rm_display_process(rm_rdp_display(g->session));
     return g->refreshes;

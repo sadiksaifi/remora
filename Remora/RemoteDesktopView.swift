@@ -50,8 +50,9 @@ final class RemoteDesktopView: NSView {
     private static let redrawWait = 0.1
     private var waitingUntil: DispatchTime?
     private var waitingForFrame = false
-    /// A present was sent since the view moved to its window, so the layer shows a picture.
-    private var shownInWindow = false
+    /// The view has presented once. Its layer then keeps the last picture, also out of the window and stretched
+    /// to a new size, so every later present can wait while the session awaits its redraw.
+    private var hasPresented = false
     private(set) var remoteSize = CGSize.zero
 
     /// The tab this desktop belongs to, for its accessibility label and identifier.
@@ -123,7 +124,6 @@ final class RemoteDesktopView: NSView {
         frameObserver = nil
         frameUpdates?.cancel()
         frameUpdates = nil
-        shownInWindow = false
         NotificationCenter.default.removeObserver(self)
         super.viewWillMove(toWindow: newWindow)
     }
@@ -267,8 +267,8 @@ final class RemoteDesktopView: NSView {
         }
         let revision = redrawRevision
         let redraw = revision != submittedRedrawRevision
-        // The first present in a window shows the last picture at once: the placeholder comes 50 ms or more later.
-        if shownInWindow, input?.awaitsRedraw == true {
+        // Until its first present the layer is empty, so that one goes out at once.
+        if hasPresented, input?.awaitsRedraw == true {
             let frame = renderer.hasNewFrame
             guard redraw || frame else {
                 waitingUntil = nil
@@ -284,7 +284,7 @@ final class RemoteDesktopView: NSView {
             }
             if let waitingUntil, now < waitingUntil { return }
         }
-        shownInWindow = true
+        hasPresented = true
         waitingUntil = nil
         let refreshRate = window.screen?.maximumFramesPerSecond ?? 60
         let interval = 1.0 / Double(refreshRate > 0 ? refreshRate : 60)

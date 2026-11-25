@@ -201,9 +201,8 @@ void rm_display_connected(RMDisplay *d) {
     pthread_mutex_lock(&d->lock);
     d->pausable = suppress && refresh;
     d->updates_sent = true;
-    /* A new connection draws the whole desktop. */
+    /* A new connection draws the whole desktop. A redraw that arrived before it keeps its deadline. */
     d->redraw_sent = d->redraw_owed;
-    d->redraw_due = 0;
     SetEvent(d->wake);
     pthread_mutex_unlock(&d->lock);
 }

@@ -376,7 +376,7 @@ private func expectPicture(_ color: UInt32, sourceLocation: SourceLocation = #_s
         show(true)
         #expect(try await desktop.after(120) == 1)
         #expect(desktop.awaitsRedraw)
-        #expect(try await desktop.after(860) == 2)
+        #expect(try await desktop.after(900) == 2)
 
         // Again, but the answer comes after the next resume is wanted and before its request goes out.
         show(false)
@@ -385,14 +385,15 @@ private func expectPicture(_ color: UInt32, sourceLocation: SourceLocation = #_s
         desktop.h264(1)
         #expect(try await desktop.after(120) == 2)
         #expect(desktop.awaitsRedraw)
-        #expect(try await desktop.after(860) == 3)
+        #expect(try await desktop.after(900) == 3)
         #expect(desktop.gpu.frames.count == 2)
 
-        // The resume's own first frame, such as the placeholder, counts 100 ms later.
+        // The resume's own first frame, such as the placeholder, counts 100 ms later, across a reconnection.
         let start = ContinuousClock.now
         desktop.h264(1)
         _ = desktop.refreshes
         #expect(desktop.awaitsRedraw || ContinuousClock.now - start >= .milliseconds(100))
+        rm_graphics_reconnect(desktop.graphics)
         _ = try await desktop.after(120)
         #expect(!desktop.awaitsRedraw)
     }
