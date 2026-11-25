@@ -32,6 +32,38 @@ public enum PasswordInput {
     }
 }
 
+public enum StandardInput {
+    /// Reads a descriptor to end of file, fails at the 1 MiB request size limit, and ends at the deadline or when the task is cancelled.
+    /// It reads only after poll reports an event, so it never blocks or leaves a read running. `FileHandle.readabilityHandler` never reports a regular file's end.
+    /// poll reports devices such as /dev/null as invalid, so read decides. A nonblocking descriptor without data waits, and its flags stay unchanged.
+    public static func read(_ descriptor: Int32 = STDIN_FILENO, until deadline: ContinuousClock.Instant) async throws -> Data {
+        var data = Data()
+        var buffer = [UInt8](repeating: 0, count: 65_536)
+        while true {
+            let remaining = ContinuousClock.now.duration(to: deadline)
+            guard remaining > .zero else {
+                throw ControlFailure(
+                    .timeout, "Stdin did not reach end of file before the deadline.",
+                    hint: "Close stdin after writing the input, or pass a longer --timeout. Nothing was sent.")
+            }
+            guard !Task.isCancelled else { throw ControlFailure(.cancelled, "The command was interrupted.") }
+            var event = pollfd(fd: descriptor, events: Int16(POLLIN), revents: 0)
+            if poll(&event, 1, 0) > 0 {
+                let (count, error) = buffer.withUnsafeMutableBytes { (Darwin.read(descriptor, $0.baseAddress, $0.count), errno) }
+                if count == 0 { return data }
+                if count > 0 {
+                    data.append(contentsOf: buffer[..<count])
+                    guard data.count < 1_048_576 else { throw ControlFailure(.invalidArgument, "Stdin exceeds the request size limit.") }
+                    continue
+                }
+                guard error == EAGAIN || error == EINTR else { throw ControlFailure(.ioFailed, "Could not read stdin.") }
+            }
+            // A cancelled sleep returns at once, and the next pass reports the cancellation.
+            try? await Task.sleep(for: min(remaining, .milliseconds(10)))
+        }
+    }
+}
+
 extension ControlRequest {
     public func validateArguments(_ allowed: Set<String>, sessionAllowed: Bool = false) throws {
         guard sessionAllowed || session == nil, Set(arguments.keys).isSubset(of: allowed) else {

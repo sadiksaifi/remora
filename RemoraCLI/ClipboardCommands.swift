@@ -24,17 +24,18 @@ struct ClipboardCommand: AsyncParsableCommand {
         @OptionGroup var target: SessionOptions
         @Option(help: "Remote clipboard text. Without it, the command reads untrimmed UTF-8 text from stdin to EOF.") var text: String?
         @MainActor func run() async throws {
+            let deadline = try options.deadline(for: "clipboard.set")
             let value: String
             if let text {
                 value = text
             } else {
-                guard let decoded = String(data: try await readPipedInput(), encoding: .utf8) else {
+                guard let decoded = String(data: try await readPipedInput(until: deadline), encoding: .utf8) else {
                     throw ControlFailure(.invalidArgument, "Clipboard stdin must be UTF-8.")
                 }
                 value = decoded
             }
             guard !value.utf8.contains(0) else { throw ControlFailure(.invalidArgument, "Clipboard text cannot contain NUL bytes.") }
-            try await options.execute(.init(command: "clipboard.set", session: target.target, arguments: ["text": .string(value)]))
+            try await options.execute(.init(command: "clipboard.set", session: target.target, arguments: ["text": .string(value)]), deadline: deadline)
         }
     }
 }

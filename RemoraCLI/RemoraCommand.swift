@@ -118,7 +118,7 @@ struct CommonOptions: ParsableArguments {
     @Option(
         name: .long,
         help: """
-            Command deadline, such as 500ms, 10s or 2m. Bare numbers are seconds. \
+            Command deadline, such as 500ms, 10s or 2m. Bare numbers are seconds. It includes reading stdin to EOF. \
             Defaults to 10s, or \(deadlines.sorted { $0.key < $1.key }.map { "\($0.value) for \($0.key)" }.joined(separator: ", ")). \
             events has no default.
             """
@@ -128,8 +128,11 @@ struct CommonOptions: ParsableArguments {
 
     func seconds(for command: String) throws -> Double { try CommandTimeout(timeout ?? Self.deadlines[command] ?? "10s").seconds }
 
-    @MainActor func execute(_ request: ControlRequest, launch: Bool = true) async throws {
-        let seconds = try seconds(for: request.command)
+    /// A command that reads stdin starts its deadline first, so the read and the request share it.
+    func deadline(for command: String) throws -> ContinuousClock.Instant { .now + .seconds(try seconds(for: command)) }
+
+    @MainActor func execute(_ request: ControlRequest, launch: Bool = true, deadline: ContinuousClock.Instant? = nil) async throws {
+        let seconds = try deadline.map { max(0, ContinuousClock.now.duration(to: $0) / .seconds(1)) } ?? seconds(for: request.command)
         let bounded = ControlRequest(
             command: request.command, session: request.session, timeout: seconds,
             arguments: request.arguments, agent: AgentName.current)
