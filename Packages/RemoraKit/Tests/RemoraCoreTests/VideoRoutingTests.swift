@@ -400,9 +400,9 @@ private func expectPicture(_ color: UInt32, sourceLocation: SourceLocation = #_s
     }
 
     /// Windows sometimes resumes without the redraw and sends nothing. A resume that no frame answers within 300 ms is
-    /// repeated as a pause and a resume until a frame answers, but not while a pause is pending. A retry's answer can
-    /// follow a late answer to the earlier request, so the redraw counts 300 ms after the first frame.
-    @Test func anUnansweredResumeIsRepeatedUntilAFrameAnswers() async throws {
+    /// repeated as a pause and a resume, at most twice, and not while a pause is pending. After the last retry the
+    /// redraw stays owed until a frame comes, and a frame after a retry counts 300 ms later.
+    @Test func anUnansweredResumeIsRepeatedTwice() async throws {
         let desktop = try Desktop()
         desktop.surface(1, at: (0, 0))
         let show = { rm_rdp_set_display_updates(desktop.session, $0) }
@@ -411,27 +411,53 @@ private func expectPicture(_ color: UInt32, sourceLocation: SourceLocation = #_s
         #expect(desktop.pauses == 1)
         show(true)
         #expect(try await desktop.after(1010) == 1)
-
         #expect(try await desktop.after(310) == 2)
         #expect(desktop.pauses == 2)
-        #expect(desktop.awaitsRedraw)
 
-        // Hidden again before an answer: the pause comes 2 s later, and nothing goes out meanwhile.
+        // Hidden again before an answer: nothing goes out until the pause, 2 s later. A test thread that stalls
+        // past it has nothing more to check.
+        let hidden = ContinuousClock.now
         show(false)
-        #expect(try await desktop.after(310) == 2)
+        try await Task.sleep(for: .milliseconds(310))
+        guard ContinuousClock.now - hidden < .milliseconds(1900) else { return }
+        #expect(desktop.refreshes == 2)
         #expect(desktop.pauses == 2)
-        // Shown before that pause: the overdue retry goes out at once.
+        // Shown before that pause: the overdue retry goes out at once. It is the last one.
         show(true)
         #expect(desktop.refreshes == 3)
         #expect(desktop.pauses == 3)
+        #expect(try await desktop.after(310) == 3)
+        #expect(desktop.awaitsRedraw)
 
-        // A frame answers. The redraw counts 300 ms later, and no retry follows.
-        let answered = ContinuousClock.now
+        var answered: ContinuousClock.Instant?
+        desktop.gpu.onDraw = { answered = .now }
         desktop.h264(1)
         #expect(try await desktop.after(150) == 3)
-        #expect(desktop.awaitsRedraw || ContinuousClock.now - answered >= .milliseconds(300))
+        #expect(try desktop.awaitsRedraw || ContinuousClock.now - #require(answered) >= .milliseconds(300))
         #expect(try await desktop.after(200) == 3)
         #expect(desktop.pauses == 3)
+        #expect(!desktop.awaitsRedraw)
+    }
+
+    /// A frame that another thread finishes while a retry is written answers it. It holds as long as any answer to a
+    /// retry, and no further retry follows.
+    @Test func aFrameDuringARetrysWriteAnswersIt() async throws {
+        let desktop = try Desktop()
+        desktop.surface(1, at: (0, 0))
+        rm_rdp_set_display_updates(desktop.session, false)
+        #expect(try await desktop.after(2010) == 0)
+        rm_rdp_set_display_updates(desktop.session, true)
+        #expect(try await desktop.after(1010) == 1)
+
+        var answered: ContinuousClock.Instant?
+        desktop.gpu.onDraw = { answered = .now }
+        rm_graphics_draw_on_pause(desktop.graphics, 1)
+        #expect(try await desktop.after(310) == 2)
+        #expect(desktop.gpu.frames.count == 1)
+        #expect(try await desktop.after(150) == 2)
+        #expect(try desktop.awaitsRedraw || ContinuousClock.now - #require(answered) >= .milliseconds(300))
+        #expect(try await desktop.after(200) == 2)
+        #expect(desktop.pauses == 2)
         #expect(!desktop.awaitsRedraw)
     }
 }

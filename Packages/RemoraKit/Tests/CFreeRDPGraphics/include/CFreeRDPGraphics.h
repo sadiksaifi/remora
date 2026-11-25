@@ -44,6 +44,9 @@ bool rm_graphics_display_woken(RMGraphics *graphics);
 unsigned rm_graphics_refreshes(RMGraphics *graphics);
 /* How many Suppress Output requests that pause updates the session has sent. */
 unsigned rm_graphics_pauses(RMGraphics *graphics);
+/* The next pause request draws an H.264 frame on the surface while it is written, as a frame that another thread
+ * finishes during the write. */
+void rm_graphics_draw_on_pause(RMGraphics *graphics, uint16_t surface);
 /* The session connects again, as after an automatic reconnection. */
 void rm_graphics_reconnect(RMGraphics *graphics);
 #endif

@@ -21,7 +21,8 @@ private final class DesktopSink: FrameSink, @unchecked Sendable {
     let desktop: MetalDesktop
     let session: RDPSession
 
-    init() throws {
+    /// A pausable server lets the client pause its updates and never answers.
+    init(pausable: Bool = false) throws {
         directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
         do {
@@ -40,7 +41,7 @@ private final class DesktopSink: FrameSink, @unchecked Sendable {
             openssl.waitUntilExit()
             try #require(openssl.terminationStatus == 0)
             // The server starts last, so a failure above leaves no thread or socket behind.
-            server = try #require(rm_test_rdp_server_start(certificate, key))
+            server = try #require(rm_test_rdp_server_start(certificate, key, pausable))
         } catch {
             try? FileManager.default.removeItem(at: directory)
             throw error
@@ -61,6 +62,7 @@ private final class DesktopSink: FrameSink, @unchecked Sendable {
     var onState: ((SessionState) -> Void)?
 
     var refreshes: UInt32 { rm_test_rdp_server_refreshes(server) }
+    var pauses: UInt32 { rm_test_rdp_server_pauses(server) }
 
     /// Connects, trusts the test identity, runs `connected` once the server has activated the connection, and
     /// returns the terminal reason after the session ends. `connected` must end the session.
@@ -155,6 +157,33 @@ private final class DesktopSink: FrameSink, @unchecked Sendable {
     #expect(connection.refreshes == 1)
     #expect(rm_test_rdp_server_whole_refreshes(connection.server) == 1)
     #expect(connection.desktop.losses == 1)
+}
+
+/// Windows sometimes answers a resume with nothing. The session repeats an unanswered resume as a pause and a resume
+/// twice, about 300 ms apart, with no other traffic to wake it, then stops and keeps awaiting the redraw.
+@Test @MainActor func anUnansweredResumeIsRepeatedTwiceOnAQuietConnection() async throws {
+    let connection = try Connection(pausable: true)
+    defer { connection.close() }
+    var awaitsAtTheEnd = false
+    let reason = try await connection.run {
+        let session = connection.session
+        session.setDisplayUpdatesEnabled(false)
+        try #require(try await eventually(within: .seconds(4)) { connection.pauses == 1 })
+        session.setDisplayUpdatesEnabled(true)
+        // Nothing else wakes the session thread, so each retry needs the wake its own write arms.
+        for count in UInt32(1)...3 {
+            try #require(try await eventually(within: .seconds(2)) { connection.refreshes >= count })
+        }
+        try await Task.sleep(for: .milliseconds(700))
+        awaitsAtTheEnd = session.awaitsRedraw
+        session.disconnect()
+    }
+    #expect(reason == .cancelledByUser)
+    #expect(connection.refreshes == 3)
+    #expect(connection.pauses == 3)
+    // Every request after the first starts with a pause.
+    #expect(connection.pauses == 3)
+    #expect(awaitsAtTheEnd)
 }
 
 /// The session removes its loss observer before it reports the end. A later loss sends nothing and does not crash.

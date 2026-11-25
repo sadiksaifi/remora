@@ -150,7 +150,7 @@ extension CommandLineController {
         {
             throw ControlFailure(
                 .frameTimeout, "No fresh desktop frame arrived before the deadline.",
-                hint: request.command == "wait" ? "The screen did not change. Take a screenshot if you need its current state." : nil)
+                hint: request.command == "wait" ? "Take a screenshot if you need the current picture." : nil)
         } catch let failure as CaptureFailure {
             let code: ControlFailure.Code
             switch failure {
