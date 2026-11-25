@@ -31,6 +31,8 @@ struct ConnectionEditor: View {
     @State private var identifiedServer: ServerAddress?
     /// Connect waiting for the check of the address it is about to open.
     @State private var connecting: Task<Void, Never>?
+    /// The check in flight. The editor's own check and Connect's wait share it.
+    @State private var check: (server: ServerAddress, mode: Task<VNCMode?, Never>)?
     @FocusState private var focusedField: Field?
 
     private enum ResolutionChoice: String, CaseIterable {
@@ -148,26 +150,41 @@ struct ConnectionEditor: View {
     }
 
     private func identify(_ server: ServerAddress?) async {
-        guard let server, let identifyVNCServer else { return }
+        guard let server else { return }
         // Wait for typing to pause, so Remora does not connect to every partial host name.
-        guard (try? await Task.sleep(for: .milliseconds(600))) != nil else { return }
-        let mode = await identifyVNCServer(server.host, server.port)
+        guard identifyVNCServer != nil, (try? await Task.sleep(for: .milliseconds(600))) != nil else { return }
+        let mode = await checkedMode(of: server)
         guard !Task.isCancelled else { return }
         detectedMac = mode == .apple ? server : nil
         identifiedServer = server
     }
 
+    /// Reads the server's greeting once per address. A second caller waits for the check in flight, so its
+    /// answer is never lost to a second check that started later and timed out.
+    private func checkedMode(of server: ServerAddress) async -> VNCMode? {
+        guard let identifyVNCServer else { return nil }
+        let mode: Task<VNCMode?, Never>
+        if let check, check.server == server {
+            mode = check.mode
+        } else {
+            mode = Task { await identifyVNCServer(server.host, server.port) }
+            check = (server, mode)
+        }
+        let found = await mode.value
+        if check?.mode == mode { check = nil }
+        return found
+    }
+
     /// Connect opens the connection with the saved mode at once, so it first finishes the check of the
     /// address in the fields. Save leaves an unfinished check alone, as the mode can still be edited.
     private func connect(with open: @escaping (Connection, String) -> Void) {
-        guard let server = serverToIdentify, server != identifiedServer, let identifyVNCServer else {
+        guard let server = serverToIdentify, server != identifiedServer else {
             return submit(to: open)
         }
         connecting = Task {
-            let mode = await identifyVNCServer(server.host, server.port)
+            let mode = await checkedMode(of: server)
             guard !Task.isCancelled else { return }
-            // The editor's own check of this address may have ended first. A Mac that either check found stands.
-            if mode == .apple { detectedMac = server }
+            detectedMac = mode == .apple ? server : nil
             identifiedServer = server
             connecting = nil
             submit(to: open)
