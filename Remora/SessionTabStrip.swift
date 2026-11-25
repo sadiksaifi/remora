@@ -68,7 +68,9 @@ struct SessionTabStrip: View {
                                 }
                             )
                             .frame(width: width, height: proxy.size.height - 2 * Self.trackInset)
-                            .id(tab.id)
+                            // The scroll target reaches past the tab by the fade's width. The shown tab stops
+                            // clear of the fade, and the first and last tabs bring the strip to its end.
+                            .background { Color.clear.id(ScrollTarget(tab: tab.id)).padding(.horizontal, -Self.fadeWidth) }
                             .onGeometryChange(for: CGRect.self) {
                                 $0.frame(in: .named(Self.coordinateSpace))
                             } action: {
@@ -80,7 +82,7 @@ struct SessionTabStrip: View {
                     .padding(Self.trackInset)
                 }
                 .scrollIndicators(.never)
-                .scrollDisabled(widths.total(count: tabs.tabs.count) + 2 * Self.trackInset <= proxy.size.width + 0.5)
+                .scrollDisabled(!scrolls(widths, in: proxy.size.width))
                 .onScrollGeometryChange(for: ClippedEdges.self) { geometry in
                     ClippedEdges(
                         leading: geometry.contentOffset.x > 0.5,
@@ -90,11 +92,12 @@ struct SessionTabStrip: View {
                 }
                 .onChange(of: tabs.selection) { _, selection in
                     guard let selection else { return }
-                    withAnimation { scroller.scrollTo(selection) }
+                    withAnimation { scroller.scrollTo(ScrollTarget(tab: selection)) }
                 }
                 // A narrower strip may start to scroll, and the shown tab stays in view.
-                .onChange(of: proxy.size.width) {
-                    if let selection = tabs.selection { scroller.scrollTo(selection) }
+                .onChange(of: proxy.size.width.rounded()) {
+                    guard let selection = tabs.selection, scrolls(widths, in: proxy.size.width) else { return }
+                    scroller.scrollTo(ScrollTarget(tab: selection))
                 }
             }
         }
@@ -114,6 +117,10 @@ struct SessionTabStrip: View {
         .accessibilityLabel("Tabs")
     }
 
+    private func scrolls(_ widths: TabWidths, in width: CGFloat) -> Bool {
+        widths.total(count: tabs.tabs.count) + 2 * Self.trackInset > width + 0.5
+    }
+
     /// The shown and hovered tabs hide the dividers on both sides.
     private func isEmphasized(_ index: Int) -> Bool {
         let id = tabs.tabs[index].id
@@ -124,11 +131,16 @@ struct SessionTabStrip: View {
         var leading = false
         var trailing = false
     }
+
+    private struct ScrollTarget: Hashable {
+        let tab: UUID
+    }
 }
 
 /// How wide the shown tab and each resting tab are in a strip of a given width.
 /// Tabs are equal while each has `selectedMinimumTabWidth`. Below that the shown tab keeps that width and the
-/// resting tabs share the rest, down to `iconTabWidth`. Then the shown tab gives way, down to `selectedTabWidthAmongIcons`.
+/// resting tabs share the rest, while their titles fit. Without titles the resting tabs give the shown tab their
+/// width, up to `idealTabWidth`, and keep `iconTabWidth`. Then the shown tab gives way, down to `selectedTabWidthAmongIcons`.
 /// A compact strip starts at that last step: icon-wide resting tabs, and the rest for the shown tab.
 @MainActor
 struct TabWidths {
@@ -149,11 +161,15 @@ struct TabWidths {
             resting = equal
         } else {
             let shared = (available - SessionTabStrip.selectedMinimumTabWidth) / (count - 1)
-            resting = max(SessionTabStrip.iconTabWidth, shared)
-            selected =
-                shared >= SessionTabStrip.iconTabWidth
-                ? SessionTabStrip.selectedMinimumTabWidth
-                : max(SessionTabStrip.selectedTabWidthAmongIcons, available - SessionTabStrip.iconTabWidth * (count - 1))
+            if shared >= SessionTabStrip.minimumTabWidth {
+                selected = SessionTabStrip.selectedMinimumTabWidth
+                resting = shared
+            } else {
+                selected = min(
+                    SessionTabStrip.idealTabWidth,
+                    max(SessionTabStrip.selectedTabWidthAmongIcons, available - SessionTabStrip.iconTabWidth * (count - 1)))
+                resting = max(SessionTabStrip.iconTabWidth, (available - selected) / (count - 1))
+            }
         }
     }
 
@@ -196,8 +212,16 @@ private struct SessionTabView: View {
         // A resting tab reads like the shown one. Only the glass tells them apart.
         .foregroundStyle(.primary)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background { if isHovered && !isSelected { Capsule().fill(.fill.tertiary) } }
-        .glassEffect(isSelected ? .regular : .identity, in: .capsule)
+        // Only the shown tab has a glass effect. With an identity effect on each resting tab, SwiftUI's glass
+        // resolver never settled after tabs closed and the window widened, and the app hung.
+        .background {
+            if isSelected {
+                Color.clear.glassEffect(.regular, in: .capsule)
+            } else if isHovered {
+                // A plain colour: under the strip's fade mask a system fill style draws black.
+                Capsule().fill(Color.primary.opacity(0.07))
+            }
+        }
         .overlay(alignment: .leading) {
             if showsDivider {
                 Rectangle()
