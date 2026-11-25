@@ -345,10 +345,15 @@ private struct OverlayRecording {
 
     /// Finishes the movie and reads its frames back in order. The movie starts on the overlays' clock, so each
     /// frame is timed as far into the movie as the test had moved the clock, and the movie plays an animation
-    /// at its own speed. The movie holds no frame that the test did not wait for.
+    /// at its own speed. The movie holds no frame that the test did not wait for. It stops on the overlays'
+    /// clock too, so it lasts as long as the test moved the clock, however long the encoder took.
     func finish() async throws -> [CVPixelBuffer] {
         let url = try await movie.finish().get()
         let asset = AVURLAsset(url: url)
+        let length = clock.time - times[0]
+        #expect(abs(try await asset.load(.duration).seconds - length) < 0.02)
+        // The encoded media runs past the stop by the last frame's own length.
+        #expect(try #require(movieMediaDuration(Data(contentsOf: url))) > length - 0.02)
         let track = try #require(try await asset.loadTracks(withMediaType: .video).first)
         let reader = try AVAssetReader(asset: asset)
         let output = AVAssetReaderTrackOutput(track: track, outputSettings: [kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA])
@@ -414,6 +419,8 @@ private func rgb(_ buffer: CVPixelBuffer, _ x: Int, _ y: Int) -> [Int] {
     clock.advance(by: 0.1)
     overlays.configure(showPointerInRecordings: false, showKeyPresses: false, showAgentPointer: true, scale: 1)
     let disabled = try await recording.frame()
+    // The movie holds its last frame until it stops.
+    clock.advance(by: 0.5)
     let shots = try await recording.finish()
     #expect(try media.png(frames.snapshot()) == rawPNG)
     // The hotspot puts the cursor at (95,93), rather than centering it on the point. The pill does not hide it.
