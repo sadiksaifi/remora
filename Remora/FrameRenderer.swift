@@ -89,6 +89,8 @@ final class FrameRenderer: FrameSink, Sendable {
     }
 
     var statistics: Statistics { counters.withLock { $0 } }
+    /// The desktop has a frame this renderer has not presented yet.
+    var hasNewFrame: Bool { desktop.needsSubmission(since: presentation.withLock { $0.submittedRevision }, redraw: false) }
 
     /// The shared framebuffer performs the original renderer's dirty uploads.
     func consume(_ frame: BorrowedFrame) {

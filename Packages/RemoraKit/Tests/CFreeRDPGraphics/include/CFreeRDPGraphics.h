@@ -42,4 +42,6 @@ uint32_t rm_graphics_desktop_pixel(RMGraphics *graphics, uint32_t x, uint32_t y)
 bool rm_graphics_display_woken(RMGraphics *graphics);
 /* Runs the display's session-thread step, then returns how many Refresh Rect requests the session has sent. */
 unsigned rm_graphics_refreshes(RMGraphics *graphics);
+/* The session connects again, as after an automatic reconnection. */
+void rm_graphics_reconnect(RMGraphics *graphics);
 #endif

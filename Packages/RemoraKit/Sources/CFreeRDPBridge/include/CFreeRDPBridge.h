@@ -140,7 +140,8 @@ void rm_rdp_request_resize(RMRDPSession *session, uint32_t width, uint32_t heigh
 void rm_rdp_set_display_updates(RMRDPSession *session, bool enabled);
 /* Thread-safe. Asks the server to redraw the whole desktop with Refresh Rect, once, when it supports that. */
 void rm_rdp_request_refresh(RMRDPSession *session);
-/* True from enabling the updates of a paused server until its redraw has reached the frame callback. */
+/* True from enabling the updates of a paused server until 100 ms after the first frame that answers it,
+ * because Windows sends a blank placeholder just before the redraw. */
 bool rm_rdp_awaits_redraw(RMRDPSession *session);
 void rm_rdp_key(RMRDPSession *session, uint16_t key, bool down);
 void rm_rdp_pointer(RMRDPSession *session, uint16_t x, uint16_t y, uint8_t buttons);

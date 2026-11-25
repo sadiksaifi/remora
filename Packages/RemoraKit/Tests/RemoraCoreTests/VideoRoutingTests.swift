@@ -120,6 +120,12 @@ private final class Desktop {
     func surfacePixel(_ id: UInt16, _ x: UInt32, _ y: UInt32) -> UInt32 { rm_graphics_surface_pixel(graphics, id, x, y) }
     func desktopPixel(_ x: UInt32, _ y: UInt32) -> UInt32 { rm_graphics_desktop_pixel(graphics, x, y) }
     var refreshes: UInt32 { rm_graphics_refreshes(graphics) }
+    var awaitsRedraw: Bool { rm_rdp_awaits_redraw(session) }
+    /// Waits, then runs the display step and returns how many Refresh Rect requests went out.
+    func after(_ milliseconds: Int) async throws -> UInt32 {
+        try await Task.sleep(for: .milliseconds(milliseconds))
+        return refreshes
+    }
     var displayWoken: Bool { rm_graphics_display_woken(graphics) }
 }
 
@@ -348,5 +354,47 @@ private func expectPicture(_ color: UInt32, sourceLocation: SourceLocation = #_s
         _ = desktop.refreshes
         rm_rdp_request_refresh(desktop.session)
         #expect(desktop.refreshes == 1)
+    }
+
+    /// Windows answers a resume with a blank placeholder before the redraw, so the redraw counts as arrived 100 ms
+    /// after the first frame that follows the resume's request. A late answer to an earlier resume never counts.
+    @Test func aResumesRedrawArrivesShortlyAfterItsOwnFirstFrame() async throws {
+        let desktop = try Desktop()
+        desktop.surface(1, at: (0, 0))
+        let show = { rm_rdp_set_display_updates(desktop.session, $0) }
+        // A resume that has no answer yet. A pause goes out 2 s after hiding, a resume 1 s after the pause.
+        show(false)
+        #expect(try await desktop.after(2010) == 0)
+        show(true)
+        #expect(try await desktop.after(1010) == 1)
+        #expect(desktop.awaitsRedraw)
+
+        // Its answer comes after the next pause, just before the next resume is wanted.
+        show(false)
+        _ = try await desktop.after(2010)
+        desktop.h264(1)
+        show(true)
+        #expect(try await desktop.after(120) == 1)
+        #expect(desktop.awaitsRedraw)
+        #expect(try await desktop.after(900) == 2)
+
+        // Again, but the answer comes after the next resume is wanted and before its request goes out.
+        show(false)
+        _ = try await desktop.after(2010)
+        show(true)
+        desktop.h264(1)
+        #expect(try await desktop.after(120) == 2)
+        #expect(desktop.awaitsRedraw)
+        #expect(try await desktop.after(900) == 3)
+        #expect(desktop.gpu.frames.count == 2)
+
+        // The resume's own first frame, such as the placeholder, counts 100 ms later, across a reconnection.
+        let start = ContinuousClock.now
+        desktop.h264(1)
+        _ = desktop.refreshes
+        #expect(desktop.awaitsRedraw || ContinuousClock.now - start >= .milliseconds(100))
+        rm_graphics_reconnect(desktop.graphics)
+        _ = try await desktop.after(120)
+        #expect(!desktop.awaitsRedraw)
     }
 }

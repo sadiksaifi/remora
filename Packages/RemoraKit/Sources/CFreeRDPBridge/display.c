@@ -13,8 +13,11 @@
 /* Updates stay on this long after their last use, so back-to-back uses never pause the server. */
 #define PAUSE_DELAY_MS 2000
 /* A pause lasts at least this long, so every frame the server sent before pausing has arrived
- * and the first frame after the resume is its redraw. */
+ * and the first frame after the resume answers it. */
 #define MINIMUM_PAUSE_MS 1000
+/* Windows answers a resume with a blank placeholder of the whole desktop, then the redraw 3 to 44 ms later.
+ * So the redraw counts as arrived this long after the first frame that answers the resume. */
+#define REDRAW_HOLD_MS 100
 struct RMDisplay {
     rdpContext *context;
     RMRDPCallbacks callbacks;
@@ -38,8 +41,10 @@ struct RMDisplay {
     bool pausable;
     /* When updates stopped being wanted, and when the server was told to pause. */
     uint64_t unwanted_at, paused_at;
-    /* A resume of a paused server owes a redraw. redraw_sent: its request is on the wire. */
+    /* A resume of a paused server owes a redraw. redraw_sent: its request is on the wire.
+     * redraw_due: when the redraw counts as arrived, set by the first frame after the request, otherwise 0. */
     bool redraw_owed, redraw_sent;
+    uint64_t redraw_due;
     /* A whole-desktop Refresh Rect is wanted, for example after pixels drawn on the GPU were lost. */
     bool refresh_wanted;
 };
@@ -178,6 +183,7 @@ void rm_rdp_set_display_updates(RMRDPSession *session, bool enabled) {
             /* Only a server that was told to pause has stale frames to replace. */
             d->redraw_owed = true;
             d->redraw_sent = false;
+            d->redraw_due = 0;
         }
         SetEvent(d->wake);
     }
@@ -195,7 +201,7 @@ void rm_display_connected(RMDisplay *d) {
     pthread_mutex_lock(&d->lock);
     d->pausable = suppress && refresh;
     d->updates_sent = true;
-    /* A new connection draws the whole desktop. */
+    /* A new connection draws the whole desktop. A redraw that arrived before it keeps its deadline. */
     d->redraw_sent = d->redraw_owed;
     SetEvent(d->wake);
     pthread_mutex_unlock(&d->lock);
@@ -203,8 +209,10 @@ void rm_display_connected(RMDisplay *d) {
 
 void rm_display_frame(RMDisplay *d) {
     pthread_mutex_lock(&d->lock);
-    if (d->redraw_sent)
-        d->redraw_owed = d->redraw_sent = false;
+    if (d->redraw_sent && !d->redraw_due) {
+        d->redraw_due = GetTickCount64() + REDRAW_HOLD_MS;
+        SetEvent(d->wake);
+    }
     pthread_mutex_unlock(&d->lock);
 }
 
@@ -262,6 +270,12 @@ DWORD rm_display_process(RMDisplay *d) {
             updates_timeout = (DWORD)(due - now);
         }
     }
+    if (d->redraw_due && now >= d->redraw_due) {
+        d->redraw_owed = d->redraw_sent = false;
+        d->redraw_due = 0;
+    } else if (d->redraw_due && d->redraw_due - now < updates_timeout) {
+        updates_timeout = (DWORD)(d->redraw_due - now);
+    }
     /* A server that still sends updates redraws now, during the pause delay too. A paused server keeps the
      * request until it resumes, and the resume's own Refresh Rect serves it. */
     const bool refresh = d->refresh_wanted && d->updates_sent && !updates_changed;
@@ -304,6 +318,7 @@ DWORD rm_display_process(RMDisplay *d) {
             /* Set only after the write: a frame another thread finishes before it is not the redraw. */
             pthread_mutex_lock(&d->lock);
             d->redraw_sent = d->redraw_owed;
+            d->redraw_due = 0;
             pthread_mutex_unlock(&d->lock);
         }
     }
