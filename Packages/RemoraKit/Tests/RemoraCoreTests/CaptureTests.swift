@@ -327,7 +327,10 @@ private func movieMediaDuration(_ data: Data, range: Range<Int>? = nil) -> Doubl
     let pillAt = ProcessInfo.processInfo.systemUptime - startedAt
     overlays.receive(.human, .key(scancode: 0x0F, down: true))
     // There are no frame observers or additional decoded frames. Only overlay invalidations wake the movie.
-    try await Task.sleep(for: .milliseconds(1750))
+    // The fade's last tick comes 1.5 s after the key press and the test changes nothing for 1.25 s after it,
+    // so an encoder that stalls for a second still writes that tick's frame before the overlays turn off.
+    try await Task.sleep(for: .milliseconds(2750))
+    let disabledAt = ProcessInfo.processInfo.systemUptime - startedAt
     overlays.configure(showPointerInRecordings: false, showKeyPresses: false, showAgentPointer: true, scale: 1)
     try await Task.sleep(for: .milliseconds(120))
     _ = try await movie.finish().get()
@@ -345,7 +348,10 @@ private func movieMediaDuration(_ data: Data, range: Range<Int>? = nil) -> Doubl
     while let sample = output.copyNextSampleBuffer() {
         let time = CMSampleBufferGetPresentationTimeStamp(sample).seconds
         if first == nil && time > pillAt + 0.05 { first = CMSampleBufferGetImageBuffer(sample) }
-        if time > pillAt + 1.49 && time < pillAt + 1.7 { faded = CMSampleBufferGetImageBuffer(sample) }
+        // The movie's clock starts after `startedAt`, 29 ms after it once on the CI runner, so the frame that
+        // turning the overlays off wakes is timed no earlier than 0.1 s before `disabledAt`. The last frame
+        // before that time shows the end of the fade.
+        if time < disabledAt - 0.1 { faded = CMSampleBufferGetImageBuffer(sample) }
         disabled = CMSampleBufferGetImageBuffer(sample)  // Finish drains the frame rendered after `configure`.
         times.append(time)
     }
@@ -364,7 +370,9 @@ private func movieMediaDuration(_ data: Data, range: Range<Int>? = nil) -> Doubl
     #expect(rgb(initial, x: 98, y: 96)[1] < 80)
     // Inside the light glass, above the Tab keycap, the gray desktop is tinted toward white.
     #expect(rgb(initial, x: 320, y: 255).allSatisfy { $0 > 120 })
+    // The pill is gone and the cursor still shows, so this frame comes from before the overlays turn off.
     #expect(try rgb(#require(faded), x: 320, y: 255).allSatisfy { abs($0 - 80) < 8 })
+    #expect(try rgb(#require(faded), x: 98, y: 96)[0] > 180)
     #expect(try rgb(#require(disabled), x: 98, y: 96).allSatisfy { abs($0 - 80) < 8 })
     // The test changes nothing between the key press and the end of the pill's fade.
     #expect(animates(times, during: [(pillAt + quietAfterChange)...(pillAt + 1.5)]))
