@@ -61,14 +61,18 @@ public final class SessionOverlayState: @unchecked Sendable {
 
     private let clock: @Sendable () -> TimeInterval
 
-    /// `clock` times input feedback and animations. It counts seconds as system uptime does, which is also the
-    /// scale of the times given to `snapshot(at:)` and to observers.
-    public init(clock: @escaping @Sendable () -> TimeInterval = { ProcessInfo.processInfo.systemUptime }) {
+    public convenience init() {
+        self.init(clock: { ProcessInfo.processInfo.systemUptime })
+    }
+
+    /// `clock` times input feedback and animations. It must be system uptime wherever the desktop changes,
+    /// since a movie orders the desktop's frames, which arrive on system uptime, with the frames this clock times.
+    init(clock: @escaping @Sendable () -> TimeInterval) {
         self.clock = clock
     }
 
     /// The clock's time. A movie starts and stops on it, since it times the frames that these overlays wake.
-    public var now: TimeInterval { clock() }
+    var now: TimeInterval { clock() }
     deinit { timer?.cancel() }
 
     public func reset() {
