@@ -40,6 +40,34 @@ private func desktop(width: Int, height: Int, bgra: [UInt8], sink: MetalDesktop)
     #expect(!frame { pixels in for index in (126 * 256 * 4)..<(127 * 256 * 4) { pixels[index] = 200 } }.isBlank)
 }
 
+/// A held desktop takes frames from the CPU and the GPU without publishing them, then publishes them as one.
+@Test func heldDesktopPublishesItsFramesAsOneWhenReleased() throws {
+    let frames = try MetalDesktop(device: #require(MTLCreateSystemDefaultDevice()))
+    let published = Mutex(0)
+    let observer = frames.addFrameObserver { _ in published.withLock { $0 += 1 } }
+    defer { frames.removeFrameObserver(observer) }
+    desktop(width: 2, height: 1, bgra: [0, 0, 0, 255], sink: frames)
+    let revision = frames.revision
+    let present = { try frames.submit(presenting: true) { _, _ in } != nil }
+    frames.setHeld(true)
+    #expect(try present())
+    try frames.draw(width: 2, height: 1) { _, _, _ in }
+    #expect(try !present())
+    desktop(width: 2, height: 1, bgra: [17, 91, 203, 255], sink: frames)
+    #expect(frames.revision == revision)
+    #expect(published.withLock { $0 } == 1)
+    let applied = try frames.snapshot()
+    #expect(Array(applied.pixels.prefix(4)) == [17, 91, 203, 255])
+
+    frames.setHeld(false)
+    #expect(frames.revision == revision + 1)
+    #expect(published.withLock { $0 } == 2)
+    #expect(try present())
+    frames.setHeld(true)
+    frames.setHeld(false)
+    #expect(frames.revision == revision + 1)
+}
+
 @Test func desktopReadbackLeavesChangedFramePendingForPresentation() throws {
     let frames = try MetalDesktop(device: #require(MTLCreateSystemDefaultDevice()))
     desktop(width: 2, height: 1, bgra: [0, 0, 0, 255], sink: frames)

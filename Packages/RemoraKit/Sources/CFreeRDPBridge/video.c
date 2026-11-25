@@ -22,11 +22,6 @@
 #define MAX_STALE_RECTS 256
 /* After this many GPU drawing failures in a session, H.264 goes back to FreeRDP's CPU path. */
 #define MAX_FAILURES 3
-/* A picture is blank when 99% of its luma, sampled every 4 pixels, lies within 4 of the most common value.
- * The other 1% leaves room for the pointer that Windows draws into its placeholder. */
-#define BLANK_STEP 4
-#define BLANK_SPREAD 4
-#define BLANK_PERCENT 99
 
 /* The path that drew a surface's last AVC444 picture. */
 enum { PATH_NONE, PATH_GPU, PATH_CPU };
@@ -46,8 +41,6 @@ struct RMVideo {
     /* Set after MAX_FAILURES, or when GPU-drawn pixels cannot be read back; stays for the session. */
     bool cpu_only;
     uint8_t avc444_path[UINT16_MAX + 1];
-    /* The surface whose last new H.264 picture was a skipped placeholder, so its refinements are skipped too. -1: none. */
-    int32_t placeholder;
     pcRdpgfxSurfaceCommand surface_command;
     pcRdpgfxSolidFill solid_fill;
     pcRdpgfxSurfaceToSurface surface_to_surface;
@@ -71,7 +64,6 @@ RMVideo *rm_video_new(const RMRDPCallbacks *callbacks, void *user) {
     video->callbacks = *callbacks;
     video->user = user;
     video->log = os_log_create("com.peblon.remora", "Video");
-    video->placeholder = -1;
     return video;
 }
 
@@ -84,7 +76,6 @@ static void drop_all_stale(RMVideo *video) {
 static void forget_all(RMVideo *video) {
     drop_all_stale(video);
     memset(video->avc444_path, PATH_NONE, sizeof(video->avc444_path));
-    video->placeholder = -1;
 }
 
 void rm_video_free(RMVideo *video) {
@@ -124,8 +115,6 @@ static void drop_stale(RMVideo *video, RMStale *stale) {
 /* A new or deleted surface ID has no GPU-drawn areas and no AVC444 state. */
 static void forget(RMVideo *video, UINT16 surface) {
     video->avc444_path[surface] = PATH_NONE;
-    if (video->placeholder == surface)
-        video->placeholder = -1;
     RMStale *stale = find_stale(video, surface);
     if (stale)
         drop_stale(video, stale);
@@ -282,58 +271,6 @@ static RMRDPVideoRectangle *copy_rects(const RDPGFX_H264_METABLOCK *meta) {
     return rects;
 }
 
-/* FreeRDP pads a surface's width and height to multiples of 16; its mapped size is the server's. */
-static bool covers_surface(const RDPGFX_H264_METABLOCK *meta, const gdiGfxSurface *surface) {
-    uint64_t area = 0;
-    for (UINT32 i = 0; i < meta->numRegionRects; i++)
-        area += (uint64_t)(meta->regionRects[i].right - meta->regionRects[i].left) *
-                (meta->regionRects[i].bottom - meta->regionRects[i].top);
-    return area >= (uint64_t)surface->mappedWidth * surface->mappedHeight;
-}
-
-static bool blank(CVPixelBufferRef image, const gdiGfxSurface *surface) {
-    if (!CVPixelBufferIsPlanar(image) || CVPixelBufferLockBaseAddress(image, kCVPixelBufferLock_ReadOnly) != kCVReturnSuccess)
-        return false;
-    const uint8_t *luma = CVPixelBufferGetBaseAddressOfPlane(image, 0);
-    const size_t stride = CVPixelBufferGetBytesPerRowOfPlane(image, 0);
-    const size_t width = MIN(surface->mappedWidth, CVPixelBufferGetWidthOfPlane(image, 0));
-    const size_t height = MIN(surface->mappedHeight, CVPixelBufferGetHeightOfPlane(image, 0));
-    uint64_t counts[256] = { 0 }, total = 0;
-    for (size_t y = 0; luma && y < height; y += BLANK_STEP)
-        for (size_t x = 0; x < width; x += BLANK_STEP, total++)
-            counts[luma[y * stride + x]]++;
-    CVPixelBufferUnlockBaseAddress(image, kCVPixelBufferLock_ReadOnly);
-    size_t mode = 0;
-    for (size_t v = 1; v < 256; v++)
-        if (counts[v] > counts[mode])
-            mode = v;
-    uint64_t near = 0;
-    for (size_t v = mode > BLANK_SPREAD ? mode - BLANK_SPREAD : 0; v <= MIN(255, mode + BLANK_SPREAD); v++)
-        near += counts[v];
-    return total > 0 && near * 100 >= total * BLANK_PERCENT;
-}
-
-/* Whether a command is the placeholder that Windows sends before a redraw, or a progressive refinement of it. The
- * picture that carries luma decides; a command of chroma alone is drawn. See rm_display_skip_placeholder. */
-static bool skips_placeholder(RMVideo *video, const rdpGdi *gdi, const gdiGfxSurface *surface, const RMStream *luma) {
-    if (!luma->image || luma->layout == RMRDP_VIDEO_CHROMA_V1 || luma->layout == RMRDP_VIDEO_CHROMA_V2)
-        return false;
-    const RDPGFX_H264_METABLOCK *meta = luma->meta;
-    bool refinement = meta->numRegionRects > 0 && meta->quantQualityVals;
-    for (UINT32 i = 0; refinement && i < meta->numRegionRects; i++)
-        refinement = meta->quantQualityVals[i].p;
-    if (refinement)
-        return video->placeholder == surface->surfaceId;
-    RMDisplay *display = rm_rdp_display((RMRDPSession *)gdi->context);
-    const bool skip = covers_surface(meta, surface) && rm_display_redrawing(display) && blank(luma->image, surface) &&
-                      rm_display_skip_placeholder(display);
-    if (skip)
-        video->placeholder = surface->surfaceId;
-    else if (video->placeholder == surface->surfaceId)
-        video->placeholder = -1;
-    return skip;
-}
-
 /* Returns CHANNEL_RC_OK when the command was drawn or ignored as FreeRDP ignores it. */
 static UINT draw_h264(RMVideo *video, RdpgfxClientContext *gfx, rdpGdi *gdi, gdiGfxSurface *surface,
                       const RDPGFX_SURFACE_COMMAND *cmd) {
@@ -412,8 +349,6 @@ static UINT draw_h264(RMVideo *video, RdpgfxClientContext *gfx, rdpGdi *gdi, gdi
     if (failed) {
         if (status == CHANNEL_RC_OK)
             os_log_error(video->log, "H.264 decode failed on surface %u; the update is ignored", surface->surfaceId);
-    } else if (frame.pass_count > 0 && skips_placeholder(video, gdi, surface, &streams[0])) {
-        os_log_info(video->log, "Skipped the blank placeholder before the redraw of surface %u", surface->surfaceId);
     } else if (frame.pass_count > 0) {
         frame.surface = surface->surfaceId;
         frame.surface_width = surface->width;

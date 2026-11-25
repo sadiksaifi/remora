@@ -9,6 +9,7 @@ private final class FakeGPU {
         let originX, originY, visibleWidth, visibleHeight: UInt32
         let layouts: [RMRDPVideoLayout]
         let rectangles: [Area]
+        let held: Bool
     }
     struct Read {
         let areas: [Area]
@@ -24,6 +25,8 @@ private final class FakeGPU {
     let readColor: UInt32 = 0x112233
     /// Runs as each frame reaches the GPU, before it is drawn.
     var onDraw: (() -> Void)?
+    /// Each hold and release the display asked for, in order.
+    var holds: [Bool] = []
 
     static func of(_ user: UnsafeMutableRawPointer?) -> FakeGPU { Unmanaged<FakeGPU>.fromOpaque(user!).takeUnretainedValue() }
 
@@ -34,7 +37,8 @@ private final class FakeGPU {
             Frame(
                 surface: frame.surface, originX: frame.origin_x, originY: frame.origin_y, visibleWidth: frame.visible_width,
                 visibleHeight: frame.visible_height, layouts: passes.map(\.layout),
-                rectangles: passes.flatMap { UnsafeBufferPointer(start: $0.rectangles, count: $0.count).map(Area.init) }))
+                rectangles: passes.flatMap { UnsafeBufferPointer(start: $0.rectangles, count: $0.count).map(Area.init) },
+                held: holds.last == true))
         return results.isEmpty ? RMRDP_VIDEO_DRAWN : results.removeFirst()
     }
 
@@ -78,6 +82,7 @@ private final class Desktop {
     init(refreshRect: Bool = true) throws {
         var callbacks = RMRDPCallbacks()
         callbacks.video_frame = { user, frame in FakeGPU.of(user).draw(frame!.pointee) }
+        callbacks.hold = { user, held in FakeGPU.of(user).holds.append(held) }
         callbacks.video_read = { user, rectangles, count, originX, originY, pixels, stride in
             FakeGPU.of(user).read(
                 UnsafeBufferPointer(start: rectangles, count: count), originX: originX, originY: originY, into: pixels!,
@@ -96,27 +101,10 @@ private final class Desktop {
         if let position { #expect(rm_graphics_map(graphics, id, position.x, position.y) == 0) }
     }
 
-    func h264(
-        _ id: UInt16, _ codec: RMGraphicsCodec = RMGRAPHICS_AVC420, _ areas: [Area] = [Area(0, 0, 16, 16)],
-        picture: RMGraphicsPicture = RMGRAPHICS_PLAIN, refinement: Bool = false
-    ) {
+    func h264(_ id: UInt16, _ codec: RMGraphicsCodec = RMGRAPHICS_AVC420, _ areas: [Area] = [Area(0, 0, 16, 16)]) {
         let rectangles = areas.map(\.c)
-        #expect(rm_graphics_h264(graphics, id, codec, picture, refinement, rectangles, rectangles.count) == 0)
+        #expect(rm_graphics_h264(graphics, id, codec, rectangles, rectangles.count) == 0)
     }
-
-    /// Pauses the server as a hidden tab does, then resumes it as a selected tab does, which asks for a redraw.
-    func pauseAndResume() async throws {
-        let before = refreshes
-        rm_rdp_set_display_updates(session, false)
-        try await Task.sleep(for: .milliseconds(2100))
-        _ = refreshes
-        rm_rdp_set_display_updates(session, true)
-        try await Task.sleep(for: .milliseconds(1100))
-        #expect(refreshes == before + 1)
-        #expect(awaitsRedraw)
-    }
-
-    var awaitsRedraw: Bool { rm_rdp_awaits_redraw(session) }
 
     func fill(_ id: UInt16, _ area: Area, _ color: UInt32) { #expect(rm_graphics_fill(graphics, id, area.c, color) == 0) }
 
@@ -137,6 +125,19 @@ private final class Desktop {
     func surfacePixel(_ id: UInt16, _ x: UInt32, _ y: UInt32) -> UInt32 { rm_graphics_surface_pixel(graphics, id, x, y) }
     func desktopPixel(_ x: UInt32, _ y: UInt32) -> UInt32 { rm_graphics_desktop_pixel(graphics, x, y) }
     var refreshes: UInt32 { rm_graphics_refreshes(graphics) }
+    var awaitsRedraw: Bool { rm_rdp_awaits_redraw(session) }
+
+    /// Pauses the server as a hidden tab does, then resumes it as a selected tab does, which asks for a redraw.
+    func pauseAndResume() async throws {
+        let before = refreshes
+        rm_rdp_set_display_updates(session, false)
+        try await Task.sleep(for: .milliseconds(2050))
+        _ = refreshes
+        rm_rdp_set_display_updates(session, true)
+        try await Task.sleep(for: .milliseconds(1050))
+        #expect(refreshes == before + 1)
+        #expect(awaitsRedraw)
+    }
     var displayWoken: Bool { rm_graphics_display_woken(graphics) }
 }
 
@@ -358,44 +359,47 @@ private func expectPicture(_ color: UInt32, sourceLocation: SourceLocation = #_s
         #expect(desktop.refreshes == (refreshRect ? 1 : 0))
     }
 
-    /// Windows answers a resume with a blank picture of the whole desktop, sometimes refined progressively, before
-    /// the redraw. The tab keeps its last picture until the redraw arrives.
-    @Test(arguments: [RMGRAPHICS_AVC420, RMGRAPHICS_AVC444V2])
-    func blankPlaceholderBeforeARedrawIsSkippedWithItsRefinements(codec: RMGraphicsCodec) async throws {
+    /// Windows answers a resume with a blank placeholder of the whole desktop before the redraw, at times as separate
+    /// luma and chroma commands. Every frame reaches the desktop, and the display publishes them together 100 ms after
+    /// the first, so the placeholder is never shown on its own. A hold whose answer has not come yet lasts through
+    /// another pause and resume.
+    @Test func framesAfterAResumeArePublishedTogetherAfterAShortHold() async throws {
         let desktop = try Desktop()
-        // FreeRDP pads the surface to 64x64, as it pads a 1080-row desktop to 1088.
-        let whole = [Area(0, 0, 64, 60)]
-        desktop.surface(1, height: 60, at: (0, 0))
-        desktop.h264(1, codec, whole, picture: RMGRAPHICS_SPLIT)
+        let whole = [Area(0, 0, 64, 64)]
+        desktop.surface(1, at: (0, 0))
         try await desktop.pauseAndResume()
+        try await desktop.pauseAndResume()
+        #expect(desktop.gpu.holds == [true])
 
-        desktop.h264(1, codec, whole)
-        desktop.h264(1, codec, whole, refinement: true)
-        #expect(desktop.gpu.frames.count == 1)
+        desktop.h264(1, RMGRAPHICS_AVC444V2_LUMA, whole)
+        desktop.h264(1, RMGRAPHICS_AVC444V2_CHROMA, whole)
+        desktop.h264(1, RMGRAPHICS_AVC420, [Area(0, 0, 16, 16)])
+        #expect(desktop.gpu.frames.map(\.layouts) == [[RMRDP_VIDEO_LUMA], [RMRDP_VIDEO_CHROMA_V2], [RMRDP_VIDEO_YUV420]])
+        #expect(desktop.gpu.frames.map(\.held) == [true, true, true])
+        #expect(desktop.refreshes == 2)
+        #expect(desktop.gpu.holds == [true])
         #expect(desktop.awaitsRedraw)
 
-        desktop.h264(1, codec, whole, picture: RMGRAPHICS_SPLIT)
-        desktop.h264(1, codec, whole, picture: RMGRAPHICS_SPLIT, refinement: true)
-        #expect(desktop.gpu.frames.count == 3)
+        try await Task.sleep(for: .milliseconds(150))
+        #expect(desktop.refreshes == 2)
+        #expect(desktop.gpu.holds == [true, false])
         #expect(!desktop.awaitsRedraw)
+        desktop.h264(1, RMGRAPHICS_AVC420, [Area(0, 0, 16, 16)])
+        #expect(desktop.gpu.frames.last?.held == false)
+        // The surface's CPU pixels take the whole held picture before a copy reads them.
+        desktop.surface(2)
+        desktop.copy(1, Area(0, 0, 64, 64), to: 2, x: 0, y: 0)
+        #expect(desktop.gpu.reads.map(\.areas) == [[Area(0, 0, 64, 64)]])
     }
 
-    /// Only the first new picture of a redraw can be the placeholder, and only when it is blank and covers the
-    /// whole surface. A desktop that really is blank, or a small blank update, still appears.
-    @Test func blankPictureThatIsNotThePlaceholderIsDrawn() async throws {
+    /// A reconnection publishes a held frame at once, so a tab never stays held.
+    @Test func reconnectionEndsAHold() async throws {
         let desktop = try Desktop()
-        let whole = [Area(0, 0, 64, 60)]
-        desktop.surface(1, height: 60, at: (0, 0))
+        desktop.surface(1, at: (0, 0))
         try await desktop.pauseAndResume()
-        desktop.h264(1, RMGRAPHICS_AVC420, [Area(0, 0, 16, 16)])
-        #expect(desktop.gpu.frames.count == 1)
-        #expect(!desktop.awaitsRedraw)
-
-        try await desktop.pauseAndResume()
-        desktop.h264(1, RMGRAPHICS_AVC420, whole)
-        desktop.h264(1, RMGRAPHICS_AVC420, whole)
-        #expect(desktop.gpu.frames.count == 2)
-        #expect(!desktop.awaitsRedraw)
+        desktop.h264(1)
+        rm_graphics_reconnect(desktop.graphics)
+        #expect(desktop.gpu.holds == [true, false])
     }
 
     /// A hidden tab's server keeps sending updates for two seconds before it is paused, and redraws meanwhile.

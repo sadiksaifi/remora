@@ -164,7 +164,7 @@ final class FrameRenderer: FrameSink, Sendable {
         pass.colorAttachments[0].storeAction = .store
         pass.colorAttachments[0].clearColor = MTLClearColor(red: 0, green: 0, blue: 0, alpha: 1)
         do {
-            let submission = try desktop.submit { texture, command in
+            let submission = try desktop.submit(presenting: true) { texture, command in
                 guard let encoder = command.makeRenderCommandEncoder(descriptor: pass) else { throw Failure.allocationFailed }
                 let size = CGSize(width: texture.width, height: texture.height)
                 let drawableSize = CGSize(width: drawable.texture.width, height: drawable.texture.height)
@@ -194,6 +194,11 @@ final class FrameRenderer: FrameSink, Sendable {
                 command.label = "Remote desktop presentation"
                 presentation.withLock { $0.earliest = CACurrentMediaTime() + interval }
                 command.present(drawable)
+            }
+            guard let submission else {
+                // A held desktop publishes, and so asks for this presentation again, when it is released.
+                finish(size: nil, retry: false, didComplete: didComplete)
+                return
             }
             presentation.withLock { $0.submittedRevision = submission.revision }
         } catch {
