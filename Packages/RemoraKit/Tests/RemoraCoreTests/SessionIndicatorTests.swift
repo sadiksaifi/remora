@@ -16,6 +16,7 @@ private func indicator(
     #expect(indicator(.awaitingCredentials) == .needsAttention)
     #expect(indicator(.awaitingTrust) == .needsAttention)
     #expect(indicator(.connected, waiting: true, control: .active, recording: true) == .needsAttention)
+    #expect(indicator(.reconnecting(attempt: 1), waiting: true) == .needsAttention)
     let failures: [DisconnectReason] = [
         .authenticationFailed, .certificateRejected, .hostNotFound, .connectionRefused, .connectionTimedOut, .localNetworkDenied,
         .protocolError("bad handshake"),
