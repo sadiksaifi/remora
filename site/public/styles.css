@@ -257,9 +257,9 @@ h1 {
     margin: clamp(2.75rem, 6vw, 4.5rem) auto 0;
 }
 
-/* The recording is the Remora window with black outside its rounded corners. The window's corner radius
-   is 36 px of the video's 1800 by 1124. A slightly larger radius, as a share of each side, hides the black
-   at every width. */
+/* The recording is the Remora window, with its rounded corners filled from the neighbouring pixels. The
+   window's corner radius is 36 px of the video's 1800 by 1124, so this radius, a share of each side, rounds
+   the video as the window is rounded at every width. */
 .window video {
     width: 100%;
     height: auto;
