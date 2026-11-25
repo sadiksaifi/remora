@@ -258,12 +258,12 @@ h1 {
 }
 
 /* The recording is the Remora window, with its rounded corners filled from the neighbouring pixels. The
-   window's corner radius is 36 px of the video's 1800 by 1124, so this radius, a share of each side, rounds
-   the video as the window is rounded at every width. */
+   window's corner radius is about 24 px of the video's 1800 by 1124, so this radius, a share of each side,
+   rounds the video as the window is rounded at every width. */
 .window video {
     width: 100%;
     height: auto;
-    border-radius: 2.11% / 3.38%;
+    border-radius: 1.33% / 2.14%;
     background: var(--tile);
     box-shadow:
         0 0 0 0.5px light-dark(rgb(0 0 0 / 0.22), rgb(255 255 255 / 0.22)),
