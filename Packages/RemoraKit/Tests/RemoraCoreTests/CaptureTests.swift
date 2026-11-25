@@ -366,16 +366,21 @@ private func movieMediaDuration(_ data: Data, range: Range<Int>? = nil) -> Doubl
     #expect(rgb(initial, x: 320, y: 255).allSatisfy { $0 > 120 })
     #expect(try rgb(#require(faded), x: 320, y: 255).allSatisfy { abs($0 - 80) < 8 })
     #expect(try rgb(#require(disabled), x: 98, y: 96).allSatisfy { abs($0 - 80) < 8 })
-    #expect(animatesThroughout(times, from: pillAt, to: pillAt + 1.5))
+    // The test changes nothing between the key press and the end of the pill's fade.
+    #expect(animates(times, during: [(pillAt + quietAfterChange)...(pillAt + 1.5)]))
 }
 
-/// Overlay invalidations alone keep a movie's frames coming. Without them, a movie holds one frame until the
-/// next state change, a gap of a second or more here. A slow encoder spaces frames further apart, but by much
-/// less than this bound, so the check does not depend on the frame rate. The window counts its own ends, so
-/// frames that start late or stop early fail too. Callers start the window after the encoder's warm-up.
-private func animatesThroughout(_ times: [Double], from start: Double, to end: Double) -> Bool {
-    let edges = [start] + times.filter { $0 > start && $0 < end } + [end]
-    return edges.count > 5 && zip(edges, edges.dropFirst()).allSatisfy { $1 - $0 < 0.4 }
+/// A frame carries the time of the overlay change that woke the movie, or 1/60 s after the frame before it.
+/// A quiet span starts this long after a change, so it leaves out that change's frame.
+private let quietAfterChange = 0.05
+
+/// Overlay invalidations alone keep a movie's frames coming. Each frame carries the time of the overlay change
+/// or animation tick that woke the movie, so a frame timed in a quiet span, in which the test changes nothing,
+/// came from a tick. Without ticks the quiet spans hold no frame. The check counts their frames and does not
+/// time the gaps between frames: a slow encoder once left a gap over 0.4 s on the CI runner, and it still
+/// records two frames in quiet spans that add up to more than a second.
+private func animates(_ times: [Double], during quiet: [ClosedRange<Double>]) -> Bool {
+    times.count { time in quiet.contains { $0.contains(time) } } >= 2
 }
 
 @Test(arguments: [1.0, 2.0]) func recordingAgentCursorMovesAndPressesWithoutAScreenObserver(unit: Double) async throws {
@@ -403,7 +408,6 @@ private func animatesThroughout(_ times: [Double], from start: Double, to end: D
     let lead = 0.1
     // The move starts after the encoder's warm-up, which held the second frame back 0.5 s on the CI runner.
     try await Task.sleep(for: .seconds(1))
-    let moveAt = ProcessInfo.processInfo.systemUptime - started
     // Three legs, out, back and out again, each starting as the last one settles. One move spends only
     // about 0.25 s between the resting positions, which a slow encoder samples once or twice. A leg's
     // window opens while the cursor still rests at its start, so it holds the frame the move starts.
@@ -415,9 +419,8 @@ private func animatesThroughout(_ times: [Double], from start: Double, to end: D
         try await Task.sleep(for: .seconds(arrival + lead))
     }
     let arrivedAt = ProcessInfo.processInfo.systemUptime - started
-    // Each state holds for several frame intervals of a slow encoder, so the movie records it at any frame rate.
-    // The resting window below closes `lead` before the press and stays 0.4 s long, longer than any frame gap
-    // the animation check allows, so it always holds a frame.
+    // Each state holds for several frame intervals of a slow encoder, so the movie records it.
+    // The resting window below closes `lead` before the press and stays 0.4 s long.
     try await Task.sleep(for: .seconds(0.65))
     let pressAt = ProcessInfo.processInfo.systemUptime - started
     state.pressAgentCursor(depth: CursorTuning.clickDepth, animated: true)
@@ -477,7 +480,12 @@ private func animatesThroughout(_ times: [Double], from start: Double, to end: D
         if time > pressAt + 0.08 && time < pressAt + 0.65 - lead { pressed.append((time - pressAt, buffer)) }
         if time > humanAt - lead && time < humanAt + 0.5 { human.append(buffer) }
     }
-    #expect(animatesThroughout(times, from: moveAt, to: humanAt))
+    // The test changes nothing while a leg travels, while the cursor rests after the last leg, and while it
+    // stays pressed. Each span closes `lead` before the next change.
+    let quiet =
+        legs.map { ($0.start + quietAfterChange)...($0.start + $0.arrival) }
+        + [(arrivedAt + quietAfterChange)...(pressAt - lead), (pressAt + quietAfterChange)...(pressAt + 0.65 - lead)]
+    #expect(animates(times, during: quiet))
     // The cursor travels between resting centers near x 84-96 and 504-514, and a spring settles it at each.
     // Progress is the center along the leg's direction, from the first frame that leaves the start to the end
     // of the leg's window. It is capped at the destination band's edge, so the spring's recoil there counts as
@@ -523,7 +531,7 @@ private func animatesThroughout(_ times: [Double], from start: Double, to end: D
     let restingArea = glyphArea(rest)
     // Pressing shrinks the glyph about the same target tip, and it stays pressed until the release 0.65 s later.
     // A frame in the first 0.19 s must show it pressed. A slow encoder can skip that span, so the whole pressed
-    // window counts only then. It is 0.47 s long and the animation check allows 0.4 s between frames.
+    // window, 0.47 s long, counts only then.
     // Every pressed frame shows no agent click ring at radius 14. An erroneous ring fades over 0.5 s, so this
     // check is strongest on the frames nearest the press.
     let early = pressed.filter { $0.time < 0.19 }
