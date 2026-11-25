@@ -1,3 +1,4 @@
+import CFreeRDPBridge
 import CFreeRDPTestServer
 import Foundation
 import Metal
@@ -160,8 +161,10 @@ private final class DesktopSink: FrameSink, @unchecked Sendable {
 }
 
 /// Windows sometimes answers a resume with nothing. The session repeats an unanswered resume as a pause and a resume
-/// twice, about 300 ms apart, with no other traffic to wake it, then stops and keeps awaiting the redraw.
-@Test @MainActor func anUnansweredResumeIsRepeatedTwiceOnAQuietConnection() async throws {
+/// `RM_RDP_RESUME_RETRIES` times, about 300 ms apart, with no other traffic to wake it, then stops and keeps awaiting
+/// the redraw.
+@Test @MainActor func anUnansweredResumeIsRepeatedUpToTheCapOnAQuietConnection() async throws {
+    let requests = UInt32(RM_RDP_RESUME_RETRIES) + 1
     let connection = try Connection(pausable: true)
     defer { connection.close() }
     var awaitsAtTheEnd = false
@@ -171,7 +174,7 @@ private final class DesktopSink: FrameSink, @unchecked Sendable {
         try #require(try await eventually(within: .seconds(4)) { connection.pauses == 1 })
         session.setDisplayUpdatesEnabled(true)
         // Nothing else wakes the session thread, so each retry needs the wake its own write arms.
-        for count in UInt32(1)...3 {
+        for count in UInt32(1)...requests {
             try #require(try await eventually(within: .seconds(2)) { connection.refreshes >= count })
         }
         try await Task.sleep(for: .milliseconds(700))
@@ -179,10 +182,9 @@ private final class DesktopSink: FrameSink, @unchecked Sendable {
         session.disconnect()
     }
     #expect(reason == .cancelledByUser)
-    #expect(connection.refreshes == 3)
-    #expect(connection.pauses == 3)
+    #expect(connection.refreshes == requests)
     // Every request after the first starts with a pause.
-    #expect(connection.pauses == 3)
+    #expect(connection.pauses == requests)
     #expect(awaitsAtTheEnd)
 }
 

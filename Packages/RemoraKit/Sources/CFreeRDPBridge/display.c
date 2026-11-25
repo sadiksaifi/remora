@@ -20,12 +20,13 @@
 #define REDRAW_HOLD_MS 100
 /* About 7 in 100 Windows resumes get no redraw: Windows sends only what changed while paused, often nothing.
  * Its answers to a resume came within 40 ms, so a resume unanswered this long is repeated as a pause and a resume,
- * at most REDRAW_RETRIES times. Windows answered all but one such retry with the placeholder and then the redraw,
- * mostly 125 to 200 ms after it, and the retry after the miss worked. Refresh Rect alone, or Suppress Output and
- * Refresh Rect again, got no answer. A late answer to the earlier request can come before the retry's own, so after
- * a retry the redraw counts this long after the first frame. */
+ * at most RM_RDP_RESUME_RETRIES times. Windows answered 45 of 51 such retries with the placeholder and then the
+ * redraw, mostly 125 to 200 ms after it, and a second retry as often as a first: 4 of 5. No resume needed more than
+ * 2 retries, also in 204 resumes that allowed 6, and one resume got no answer to 2, so the cap of 3 keeps one retry
+ * of margin. Refresh Rect alone, or Suppress Output and Refresh Rect again, got no answer. A late answer to the
+ * earlier request can come before the retry's own, so after a retry the redraw counts this long after the first
+ * frame. */
 #define REDRAW_RETRY_MS 300
-#define REDRAW_RETRIES 2
 struct RMDisplay {
     rdpContext *context;
     RMRDPCallbacks callbacks;
@@ -348,7 +349,7 @@ DWORD rm_display_process(RMDisplay *d) {
                 d->redraw_due = 0;
             }
             /* After the last retry a later frame or a reconnection still ends the wait, as without retries. */
-            if (d->redraw_sent && !d->redraw_due && d->redraw_retries < REDRAW_RETRIES) {
+            if (d->redraw_sent && !d->redraw_due && d->redraw_retries < RM_RDP_RESUME_RETRIES) {
                 d->redraw_retry = GetTickCount64() + REDRAW_RETRY_MS;
                 if (REDRAW_RETRY_MS < updates_timeout)
                     updates_timeout = REDRAW_RETRY_MS;

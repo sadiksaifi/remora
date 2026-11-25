@@ -400,9 +400,11 @@ private func expectPicture(_ color: UInt32, sourceLocation: SourceLocation = #_s
     }
 
     /// Windows sometimes resumes without the redraw and sends nothing. A resume that no frame answers within 300 ms is
-    /// repeated as a pause and a resume, at most twice, and not while a pause is pending. After the last retry the
-    /// redraw stays owed until a frame comes, and a frame after a retry counts 300 ms later.
-    @Test func anUnansweredResumeIsRepeatedTwice() async throws {
+    /// repeated as a pause and a resume, at most `RM_RDP_RESUME_RETRIES` times, and not while a pause is pending. After
+    /// the last retry the redraw stays owed until a frame comes, and a frame after a retry counts 300 ms later.
+    @Test func anUnansweredResumeIsRepeatedUpToTheCap() async throws {
+        let requests = UInt32(RM_RDP_RESUME_RETRIES) + 1
+        try #require(requests >= 3)
         let desktop = try Desktop()
         desktop.surface(1, at: (0, 0))
         let show = { rm_rdp_set_display_updates(desktop.session, $0) }
@@ -422,20 +424,24 @@ private func expectPicture(_ color: UInt32, sourceLocation: SourceLocation = #_s
         guard ContinuousClock.now - hidden < .milliseconds(1900) else { return }
         #expect(desktop.refreshes == 2)
         #expect(desktop.pauses == 2)
-        // Shown before that pause: the overdue retry goes out at once. It is the last one.
+        // Shown before that pause: the overdue retry goes out at once, and the rest follow 300 ms apart.
         show(true)
         #expect(desktop.refreshes == 3)
         #expect(desktop.pauses == 3)
-        #expect(try await desktop.after(310) == 3)
+        for count in stride(from: 4, through: requests, by: 1) {
+            #expect(try await desktop.after(310) == count)
+        }
+        #expect(try await desktop.after(310) == requests)
+        #expect(desktop.pauses == requests)
         #expect(desktop.awaitsRedraw)
 
         var answered: ContinuousClock.Instant?
         desktop.gpu.onDraw = { answered = .now }
         desktop.h264(1)
-        #expect(try await desktop.after(150) == 3)
+        #expect(try await desktop.after(150) == requests)
         #expect(try desktop.awaitsRedraw || ContinuousClock.now - #require(answered) >= .milliseconds(300))
-        #expect(try await desktop.after(200) == 3)
-        #expect(desktop.pauses == 3)
+        #expect(try await desktop.after(200) == requests)
+        #expect(desktop.pauses == requests)
         #expect(!desktop.awaitsRedraw)
     }
 

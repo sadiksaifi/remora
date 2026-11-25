@@ -144,6 +144,8 @@ void rm_rdp_request_refresh(RMRDPSession *session);
  * that answers it, because Windows sends a blank placeholder just before the redraw, and longer after a retry.
  * A resume that no frame answers stays true until a later frame or a reconnection. */
 bool rm_rdp_awaits_redraw(RMRDPSession *session);
+/* How many times the session repeats a resume that no frame answers, about 300 ms apart. */
+#define RM_RDP_RESUME_RETRIES 3
 void rm_rdp_key(RMRDPSession *session, uint16_t key, bool down);
 void rm_rdp_pointer(RMRDPSession *session, uint16_t x, uint16_t y, uint8_t buttons);
 void rm_rdp_wheel(RMRDPSession *session, int32_t vertical, int32_t horizontal);

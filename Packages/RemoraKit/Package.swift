@@ -49,7 +49,7 @@ let package = Package(
         .target(name: "CFreeRDPGraphics", dependencies: ["CFreeRDPBridge", "FreeRDP"], path: "Tests/CFreeRDPGraphics"),
         // An RDP server in the test process, built on FreeRDP's peer API, for RDPSession's tests.
         .target(name: "CFreeRDPTestServer", dependencies: ["FreeRDP"], path: "Tests/CFreeRDPTestServer"),
-        .testTarget(name: "RDPSessionTests", dependencies: ["RDPSession", "RemoraCore", "CFreeRDPTestServer"]),
+        .testTarget(name: "RDPSessionTests", dependencies: ["RDPSession", "RemoraCore", "CFreeRDPBridge", "CFreeRDPTestServer"]),
         .testTarget(
             name: "RemoraCoreTests",
             dependencies: ["RemoraCore", "CFreeRDPBridge", "CVNCBridge", "CFreeRDPReference", "CFreeRDPGraphics"],
