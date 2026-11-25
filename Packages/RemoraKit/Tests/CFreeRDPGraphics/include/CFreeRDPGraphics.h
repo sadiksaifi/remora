@@ -6,10 +6,7 @@
  * so tests can send graphics commands through Remora's video module as a server would. Surfaces are BGRX.
  * Each function returns FreeRDP's channel status, 0 on success. */
 typedef struct RMGraphics RMGraphics;
-/* The _LUMA and _CHROMA codecs send one AVC444v2 view per command, as Windows does after a resume. */
-typedef enum {
-    RMGRAPHICS_AVC420, RMGRAPHICS_AVC444, RMGRAPHICS_AVC444V2, RMGRAPHICS_AVC444V2_LUMA, RMGRAPHICS_AVC444V2_CHROMA
-} RMGraphicsCodec;
+typedef enum { RMGRAPHICS_AVC420, RMGRAPHICS_AVC444, RMGRAPHICS_AVC444V2 } RMGraphicsCodec;
 
 /* refresh_rect says whether the server honors Refresh Rect, as Windows does and GNOME does not. */
 RMGraphics *rm_graphics_new(uint32_t width, uint32_t height, bool refresh_rect, const RMRDPCallbacks *callbacks,
@@ -45,6 +42,4 @@ uint32_t rm_graphics_desktop_pixel(RMGraphics *graphics, uint32_t x, uint32_t y)
 bool rm_graphics_display_woken(RMGraphics *graphics);
 /* Runs the display's session-thread step, then returns how many Refresh Rect requests the session has sent. */
 unsigned rm_graphics_refreshes(RMGraphics *graphics);
-/* The session connects again, as after an automatic reconnection. */
-void rm_graphics_reconnect(RMGraphics *graphics);
 #endif

@@ -569,7 +569,6 @@ void rm_rdp_run(RMRDPSession *s) {
                 break;
             }
         }
-        rm_display_disconnected(s->display);
     }
     const UINT32 error = freerdp_get_last_error(context);
     const UINT32 info = freerdp_error_info(instance);

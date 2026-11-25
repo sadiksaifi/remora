@@ -250,12 +250,6 @@ uint32_t rm_graphics_h264(RMGraphics *g, uint16_t surface, RMGraphicsCodec codec
         cmd.codecId = codec == RMGRAPHICS_AVC444 ? RDPGFX_CODECID_AVC444 : RDPGFX_CODECID_AVC444v2;
         cmd.extra = &both;
         break;
-    case RMGRAPHICS_AVC444V2_LUMA:
-    case RMGRAPHICS_AVC444V2_CHROMA:
-        cmd.codecId = RDPGFX_CODECID_AVC444v2;
-        both.LC = codec == RMGRAPHICS_AVC444V2_LUMA ? 1 : 2;
-        cmd.extra = &both;
-        break;
     }
     const UINT status = g->gfx.SurfaceCommand(&g->gfx, &cmd);
     free(rects);
@@ -318,8 +312,6 @@ uint32_t rm_graphics_desktop_pixel(RMGraphics *g, uint32_t x, uint32_t y) {
 bool rm_graphics_display_woken(RMGraphics *g) {
     return WaitForSingleObject(rm_display_event(rm_rdp_display(g->session)), 0) == WAIT_OBJECT_0;
 }
-
-void rm_graphics_reconnect(RMGraphics *g) { rm_display_connected(rm_rdp_display(g->session)); }
 
 unsigned rm_graphics_refreshes(RMGraphics *g) {
     (void)rm_display_process(rm_rdp_display(g->session));

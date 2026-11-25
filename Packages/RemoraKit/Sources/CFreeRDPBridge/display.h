@@ -17,11 +17,7 @@ DWORD rm_display_process(RMDisplay *display);
 /* Session thread only. Call after each connect and reconnect, before the connected callback:
  * a new connection starts with display updates on, and its capabilities are final. */
 void rm_display_connected(RMDisplay *display);
-/* Session thread. Call when the connection ends. A held frame is published. */
-void rm_display_disconnected(RMDisplay *display);
-/* Call after each frame reaches the frame callbacks. After a resume that owes a redraw, the display holds
- * frames through the hold callback: the first frame starts a short deadline, and the redraw is complete
- * when the frames are published at that deadline. */
+/* Call after each frame reaches the frame callback. */
 void rm_display_frame(RMDisplay *display);
 /* Any thread. Asks a server that honors Refresh Rect to send the whole desktop again, from the
  * session thread. A paused server gets the request when it resumes, which redraws anyway. */

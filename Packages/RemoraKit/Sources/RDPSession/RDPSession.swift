@@ -319,7 +319,6 @@ public final class RDPSession: AgentInputSession, @unchecked Sendable {
                     stride: Int(stride), dirtyRectangles: dirty
                 ))
         }
-        callbacks.hold = { user, held in session(user).frameSink.metalDesktop?.setHeld(held) }
         callbacks.cursor = { user, kind, pixels, width, height, hotspotX, hotspotY in
             let cursor: RemoteCursor
             switch kind {

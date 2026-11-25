@@ -44,6 +44,14 @@ final class RemoteDesktopView: NSView {
     private var frameUpdates: (any DispatchSourceUserDataAdd)?
     private var redrawRevision = 0
     private var submittedRedrawRevision = -1
+    /// Windows answers a resume with a blank placeholder of the whole desktop, then the redraw 3 to 44 ms later.
+    /// While the session awaits its redraw, the view keeps its last picture and presents this long after the first
+    /// new frame, or after a redraw if no frame comes, so the placeholder is never shown.
+    private static let redrawWait = 0.1
+    private var waitingUntil: DispatchTime?
+    private var waitingForFrame = false
+    /// A present was sent since the view moved to its window, so the layer shows a picture.
+    private var shownInWindow = false
     private(set) var remoteSize = CGSize.zero
 
     /// The tab this desktop belongs to, for its accessibility label and identifier.
@@ -115,6 +123,7 @@ final class RemoteDesktopView: NSView {
         frameObserver = nil
         frameUpdates?.cancel()
         frameUpdates = nil
+        shownInWindow = false
         NotificationCenter.default.removeObserver(self)
         super.viewWillMove(toWindow: newWindow)
     }
@@ -252,11 +261,34 @@ final class RemoteDesktopView: NSView {
     private func refresh() {
         guard frameUpdates != nil, let window, window.occlusionState.contains(.visible),
             !window.isMiniaturized, !isHiddenOrHasHiddenAncestor
-        else { return }
+        else {
+            waitingUntil = nil
+            return
+        }
         let revision = redrawRevision
+        let redraw = revision != submittedRedrawRevision
+        // The first present in a window shows the last picture at once: the placeholder comes 50 ms or more later.
+        if shownInWindow, input?.awaitsRedraw == true {
+            let frame = renderer.hasNewFrame
+            guard redraw || frame else {
+                waitingUntil = nil
+                return
+            }
+            let now = DispatchTime.now()
+            if waitingUntil == nil || frame && !waitingForFrame {
+                let until = now + Self.redrawWait
+                (waitingUntil, waitingForFrame) = (until, frame)
+                DispatchQueue.main.asyncAfter(deadline: until) { [weak self] in
+                    MainActor.assumeIsolated { self?.refresh() }
+                }
+            }
+            if let waitingUntil, now < waitingUntil { return }
+        }
+        shownInWindow = true
+        waitingUntil = nil
         let refreshRate = window.screen?.maximumFramesPerSecond ?? 60
         let interval = 1.0 / Double(refreshRate > 0 ? refreshRate : 60)
-        renderer.present(on: metalLayer, redraw: revision != submittedRedrawRevision, interval: interval) { [weak self] size in
+        renderer.present(on: metalLayer, redraw: redraw, interval: interval) { [weak self] size in
             guard let self else { return }
             if let size {
                 if remoteSize != size {

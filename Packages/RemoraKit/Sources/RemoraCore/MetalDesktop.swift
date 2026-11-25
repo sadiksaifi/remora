@@ -49,15 +49,6 @@ public final class MetalDesktop: CaptureSource, Sendable {
     }
 
     public func removeLossObserver(_ id: UUID) { _ = state.withLock { $0.lossObservers.removeValue(forKey: id) } }
-
-    /// While held, ingested and drawn frames change the framebuffer but are not published or presented: the revision
-    /// stays, observers hear nothing, and `submit(presenting:)` declines. Releasing publishes them as one frame.
-    public func setHeld(_ held: Bool) {
-        state.withLock { state in
-            state.held = held
-            if !held && state.unpublished { state.publish() }
-        }
-    }
     var lossObserverCount: Int { state.withLock { $0.lossObservers.count } }
 
     /// Only the renderer's original dirty-rectangle copies. No capture work unless an observer is installed.
@@ -104,7 +95,9 @@ public final class MetalDesktop: CaptureSource, Sendable {
                 copied += rowBytes * rectangle.height
             }
             state.damage.insert(contentsOf: damage.rectangles)
-            state.publish()
+            state.revision += 1
+            state.arrival = ProcessInfo.processInfo.systemUptime
+            for observer in state.observers.values { observer(state.arrival) }
             return copied
         }
     }
@@ -121,15 +114,8 @@ public final class MetalDesktop: CaptureSource, Sendable {
     /// The caller's encoding and GPU wait happen outside it. Every enqueued command is committed,
     /// including when the caller throws, so neither a staging semaphore nor the queue is stranded.
     public func submit(_ encode: (any MTLTexture, any MTLCommandBuffer) throws -> Void) throws -> Submission {
-        try submit(presenting: false, encode)!
-    }
-
-    /// For presentation, nil with nothing enqueued while the desktop is held with frames it has not published.
-    /// The check and the queue order are taken under one lock, so a held frame is never presented.
-    public func submit(presenting: Bool, _ encode: (any MTLTexture, any MTLCommandBuffer) throws -> Void) throws -> Submission? {
-        let prepared = try state.withLock { state -> (Submission, any MTLTexture)? in
+        let prepared = try state.withLock { state -> (Submission, any MTLTexture) in
             guard let storage = state.storage else { throw CaptureFailure.noFrame }
-            if presenting && state.unpublished { return nil }
             guard let command = queue.makeCommandBuffer() else { throw CaptureFailure.image("No Metal command buffer.") }
             let slot = state.pending.map { storage.slots[$0] }
             let rectangles = state.damage.rectangles
@@ -160,7 +146,6 @@ public final class MetalDesktop: CaptureSource, Sendable {
                     revision: state.revision, rectangleCount: rectangles.count), storage.texture
             )
         }
-        guard let prepared else { return nil }
         do { try encode(prepared.1, prepared.0.command) } catch {
             prepared.0.command.commit()
             throw error
@@ -180,8 +165,6 @@ public final class MetalDesktop: CaptureSource, Sendable {
             throw CaptureFailure.image("Invalid framebuffer dimensions.")
         }
         let created = try state.withLock { state -> Bool in
-            // Before the drawing is enqueued, so no presentation enqueued after it shows a held frame.
-            state.unpublished = state.unpublished || state.held
             guard state.storage?.width != width || state.storage?.height != height else { return false }
             let storage = try Storage(device: device, width: width, height: height)
             state.dropPending()
@@ -190,7 +173,11 @@ public final class MetalDesktop: CaptureSource, Sendable {
             return true
         }
         _ = try submit { texture, command in try encode(texture, command, created) }
-        state.withLock { $0.publish() }
+        state.withLock { state in
+            state.revision += 1
+            state.arrival = ProcessInfo.processInfo.systemUptime
+            for observer in state.observers.values { observer(state.arrival) }
+        }
     }
 
     /// After GPU work on `texture` fails, the framebuffer holds undefined pixels, including those only the GPU drew.
@@ -288,16 +275,6 @@ public final class MetalDesktop: CaptureSource, Sendable {
         var revision = 0
         var arrival: TimeInterval = 0
         var losses = 0
-        var held = false
-        var unpublished = false
-
-        mutating func publish() {
-            unpublished = held
-            guard !held else { return }
-            revision += 1
-            arrival = ProcessInfo.processInfo.systemUptime
-            for observer in observers.values { observer(arrival) }
-        }
 
         mutating func dropPending() {
             if let pending, let storage { storage.slots[pending].available.signal() }
