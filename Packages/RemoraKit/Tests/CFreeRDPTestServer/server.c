@@ -30,7 +30,8 @@ struct RMTestRDPServer {
     int connection;
     pthread_t thread;
     char *certificate, *key;
-    atomic_uint refreshes, whole_refreshes;
+    bool pausable;
+    atomic_uint refreshes, whole_refreshes, pauses;
     atomic_bool activated, ended;
 };
 
@@ -48,6 +49,14 @@ static BOOL refresh_rect(rdpContext *context, BYTE count, const RECTANGLE_16 *ar
     atomic_fetch_add(&s->refreshes, 1);
     if (whole)
         atomic_fetch_add(&s->whole_refreshes, 1);
+    return TRUE;
+}
+
+/* FreeRDP's own handler sends a reply, which would wake the client. */
+static BOOL suppress_output(rdpContext *context, BYTE allow, const RECTANGLE_16 *area) {
+    (void)area;
+    if (!allow)
+        atomic_fetch_add(&server_of(context)->pauses, 1);
     return TRUE;
 }
 
@@ -75,18 +84,19 @@ static bool configure(freerdp_peer *peer, const RMTestRDPServer *s) {
         freerdp_certificate_free(certificate);
         return false;
     }
-    /* Refresh Rect without Suppress Output, so the client never pauses updates. */
+    /* Without Suppress Output the client never pauses updates. */
     if (!freerdp_settings_set_bool(settings, FreeRDP_TlsSecurity, TRUE) ||
         !freerdp_settings_set_bool(settings, FreeRDP_RdpSecurity, FALSE) ||
         !freerdp_settings_set_bool(settings, FreeRDP_NlaSecurity, FALSE) ||
         !freerdp_settings_set_bool(settings, FreeRDP_ExtSecurity, FALSE) ||
         !freerdp_settings_set_bool(settings, FreeRDP_RefreshRect, TRUE) ||
-        !freerdp_settings_set_bool(settings, FreeRDP_SuppressOutput, FALSE) ||
+        !freerdp_settings_set_bool(settings, FreeRDP_SuppressOutput, s->pausable) ||
         !freerdp_settings_set_uint32(settings, FreeRDP_ColorDepth, 32))
         return false;
     peer->PostConnect = post_connect;
     peer->Activate = activate;
     peer->context->update->RefreshRect = refresh_rect;
+    peer->context->update->SuppressOutput = suppress_output;
     return true;
 }
 
@@ -166,7 +176,7 @@ static void prepare_process(void) {
     unsetenv("HTTPS_PROXY");
 }
 
-RMTestRDPServer *rm_test_rdp_server_start(const char *certificate_path, const char *key_path) {
+RMTestRDPServer *rm_test_rdp_server_start(const char *certificate_path, const char *key_path, bool pausable) {
     static pthread_once_t prepared = PTHREAD_ONCE_INIT;
     if (!certificate_path || !key_path || !winpr_InitializeSSL(WINPR_SSL_INIT_DEFAULT))
         return NULL;
@@ -175,6 +185,7 @@ RMTestRDPServer *rm_test_rdp_server_start(const char *certificate_path, const ch
     if (!s)
         return NULL;
     s->listener = s->wake[0] = s->wake[1] = s->connection = -1;
+    s->pausable = pausable;
     pthread_mutex_init(&s->lock, NULL);
     s->certificate = strdup(certificate_path);
     s->key = strdup(key_path);
@@ -198,6 +209,7 @@ uint16_t rm_test_rdp_server_port(const RMTestRDPServer *s) { return s->port; }
 bool rm_test_rdp_server_activated(const RMTestRDPServer *s) { return atomic_load(&s->activated); }
 uint32_t rm_test_rdp_server_refreshes(const RMTestRDPServer *s) { return atomic_load(&s->refreshes); }
 uint32_t rm_test_rdp_server_whole_refreshes(const RMTestRDPServer *s) { return atomic_load(&s->whole_refreshes); }
+uint32_t rm_test_rdp_server_pauses(const RMTestRDPServer *s) { return atomic_load(&s->pauses); }
 bool rm_test_rdp_server_ended(const RMTestRDPServer *s) { return atomic_load(&s->ended); }
 
 void rm_test_rdp_server_stop(RMTestRDPServer *s) {

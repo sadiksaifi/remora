@@ -18,6 +18,15 @@
 /* Windows answers a resume with a blank placeholder of the whole desktop, then the redraw 3 to 44 ms later.
  * So the redraw counts as arrived this long after the first frame that answers the resume. */
 #define REDRAW_HOLD_MS 100
+/* About 7 in 100 Windows resumes get no redraw: Windows sends only what changed while paused, often nothing.
+ * Its answers to a resume came within 40 ms, so a resume unanswered this long is repeated as a pause and a resume,
+ * at most RM_RDP_RESUME_RETRIES times. Windows answered 45 of 51 such retries with the placeholder and then the
+ * redraw, mostly 125 to 200 ms after it, and a second retry as often as a first: 4 of 5. No resume needed more than
+ * 2 retries, also in 204 resumes that allowed 6, and one resume got no answer to 2, so the cap of 3 keeps one retry
+ * of margin. Refresh Rect alone, or Suppress Output and Refresh Rect again, got no answer. A late answer to the
+ * earlier request can come before the retry's own, so after a retry the redraw counts this long after the first
+ * frame. */
+#define REDRAW_RETRY_MS 300
 struct RMDisplay {
     rdpContext *context;
     RMRDPCallbacks callbacks;
@@ -42,9 +51,13 @@ struct RMDisplay {
     /* When updates stopped being wanted, and when the server was told to pause. */
     uint64_t unwanted_at, paused_at;
     /* A resume of a paused server owes a redraw. redraw_sent: its request is on the wire.
-     * redraw_due: when the redraw counts as arrived, set by the first frame after the request, otherwise 0. */
+     * redraw_due: when the redraw counts as arrived, set by the first frame after the request, otherwise 0.
+     * redraw_retry: when the request goes out again if no frame has answered it, otherwise 0.
+     * redraw_retries: retries decided for this resume. Any frame after the resume's own write answers the resume
+     * and its retries. */
     bool redraw_owed, redraw_sent;
-    uint64_t redraw_due;
+    uint64_t redraw_due, redraw_retry;
+    unsigned redraw_retries;
     /* A whole-desktop Refresh Rect is wanted, for example after pixels drawn on the GPU were lost. */
     bool refresh_wanted;
 };
@@ -184,6 +197,7 @@ void rm_rdp_set_display_updates(RMRDPSession *session, bool enabled) {
             d->redraw_owed = true;
             d->redraw_sent = false;
             d->redraw_due = 0;
+            d->redraw_retries = 0;
         }
         SetEvent(d->wake);
     }
@@ -203,6 +217,8 @@ void rm_display_connected(RMDisplay *d) {
     d->updates_sent = true;
     /* A new connection draws the whole desktop. A redraw that arrived before it keeps its deadline. */
     d->redraw_sent = d->redraw_owed;
+    d->redraw_retry = 0;
+    d->redraw_retries = 0;
     SetEvent(d->wake);
     pthread_mutex_unlock(&d->lock);
 }
@@ -210,7 +226,7 @@ void rm_display_connected(RMDisplay *d) {
 void rm_display_frame(RMDisplay *d) {
     pthread_mutex_lock(&d->lock);
     if (d->redraw_sent && !d->redraw_due) {
-        d->redraw_due = GetTickCount64() + REDRAW_HOLD_MS;
+        d->redraw_due = GetTickCount64() + (d->redraw_retries ? REDRAW_RETRY_MS : REDRAW_HOLD_MS);
         SetEvent(d->wake);
     }
     pthread_mutex_unlock(&d->lock);
@@ -243,14 +259,15 @@ static RECTANGLE_16 whole_desktop(const rdpContext *context) {
     };
 }
 
-/* A failed write surfaces through the event loop like any other. */
-static void send_display_updates(RMDisplay *d, bool allow) {
+/* A failed write surfaces through the event loop like any other. again: pause first, to repeat a resume. */
+static void send_display_updates(RMDisplay *d, bool allow, bool again) {
     rdpContext *context = d->context;
     const RECTANGLE_16 desktop = whole_desktop(context);
     const BOOL sent = allow
-        ? context->update->SuppressOutput(context, 1, &desktop) && context->update->RefreshRect(context, 1, &desktop)
+        ? (!again || context->update->SuppressOutput(context, 0, NULL)) &&
+          context->update->SuppressOutput(context, 1, &desktop) && context->update->RefreshRect(context, 1, &desktop)
         : context->update->SuppressOutput(context, 0, NULL);
-    os_log_info(d->log, "Display updates: %{public}s, status=%d", allow ? "on" : "off", sent);
+    os_log_info(d->log, "Display updates: %{public}s, status=%d", allow ? again ? "on again" : "on" : "off", sent);
 }
 
 DWORD rm_display_process(RMDisplay *d) {
@@ -276,10 +293,20 @@ DWORD rm_display_process(RMDisplay *d) {
     } else if (d->redraw_due && d->redraw_due - now < updates_timeout) {
         updates_timeout = (DWORD)(d->redraw_due - now);
     }
+    /* The server is resumed and stays so, the request is on the wire, and no frame has answered it. */
+    const bool unanswered = d->redraw_sent && !d->redraw_due && updates && d->updates_sent && d->redraw_retry;
+    const bool retry = unanswered && now >= d->redraw_retry;
+    if (retry) {
+        /* Counted before the write, so a frame that finishes during it holds as long as a retry's answer needs. */
+        d->redraw_retries++;
+        d->redraw_retry = 0;
+    } else if (unanswered && d->redraw_retry - now < updates_timeout) {
+        updates_timeout = (DWORD)(d->redraw_retry - now);
+    }
     /* A server that still sends updates redraws now, during the pause delay too. A paused server keeps the
      * request until it resumes, and the resume's own Refresh Rect serves it. */
-    const bool refresh = d->refresh_wanted && d->updates_sent && !updates_changed;
-    if (refresh || updates_changed)
+    const bool refresh = d->refresh_wanted && d->updates_sent && !updates_changed && !retry;
+    if (refresh || updates_changed || retry)
         d->refresh_wanted = false;
     const bool changed = d->available != d->reported_available;
     const bool available = d->available;
@@ -312,13 +339,21 @@ DWORD rm_display_process(RMDisplay *d) {
         if (!d->queued && d->retries >= 5) timeout = INFINITE;
     }
     pthread_mutex_unlock(&d->lock);
-    if (updates_changed) {
-        send_display_updates(d, updates);
+    if (updates_changed || retry) {
+        send_display_updates(d, updates, retry);
         if (updates) {
-            /* Set only after the write: a frame another thread finishes before it is not the redraw. */
             pthread_mutex_lock(&d->lock);
-            d->redraw_sent = d->redraw_owed;
-            d->redraw_due = 0;
+            if (!retry) {
+                /* Set only after the write: a frame another thread finishes before it is not the redraw. */
+                d->redraw_sent = d->redraw_owed;
+                d->redraw_due = 0;
+            }
+            /* After the last retry a later frame or a reconnection still ends the wait, as without retries. */
+            if (d->redraw_sent && !d->redraw_due && d->redraw_retries < RM_RDP_RESUME_RETRIES) {
+                d->redraw_retry = GetTickCount64() + REDRAW_RETRY_MS;
+                if (REDRAW_RETRY_MS < updates_timeout)
+                    updates_timeout = REDRAW_RETRY_MS;
+            }
             pthread_mutex_unlock(&d->lock);
         }
     }

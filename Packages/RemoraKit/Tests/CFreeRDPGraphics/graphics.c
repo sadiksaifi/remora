@@ -29,7 +29,9 @@ struct RMGraphics {
     RdpgfxClientContext gfx;
     void *surfaces[MAX_SURFACES];
     void *cache[MAX_CACHE_SLOTS];
-    unsigned refreshes;
+    unsigned refreshes, pauses;
+    /* The next pause request draws an H.264 frame on this surface before it returns, or 0 for none. */
+    uint16_t draw_on_pause;
     UINT32 frame;
     RMGraphics *next;
 };
@@ -55,9 +57,16 @@ static BOOL refresh_rect(rdpContext *context, BYTE count, const RECTANGLE_16 *ar
 }
 
 static BOOL suppress_output(rdpContext *context, BYTE allow, const RECTANGLE_16 *area) {
-    (void)context;
-    (void)allow;
     (void)area;
+    RMGraphics *g = graphics_of(context);
+    if (!allow) {
+        g->pauses++;
+        const uint16_t surface = g->draw_on_pause;
+        g->draw_on_pause = 0;
+        const RMRDPVideoRectangle rectangle = { 0, 0, 16, 16 };
+        if (surface)
+            (void)rm_graphics_h264(g, surface, RMGRAPHICS_AVC420, &rectangle, 1);
+    }
     return TRUE;
 }
 
@@ -319,3 +328,7 @@ unsigned rm_graphics_refreshes(RMGraphics *g) {
     (void)rm_display_process(rm_rdp_display(g->session));
     return g->refreshes;
 }
+
+unsigned rm_graphics_pauses(RMGraphics *g) { return g->pauses; }
+
+void rm_graphics_draw_on_pause(RMGraphics *g, uint16_t surface) { g->draw_on_pause = surface; }

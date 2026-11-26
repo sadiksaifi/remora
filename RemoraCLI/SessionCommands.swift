@@ -133,7 +133,7 @@ struct WaitCommand: AsyncParsableCommand {
             resumed             the user handed control back to the agent
             recording-finished  a stopped recording's file is complete
 
-            A frame-timeout failure means the screen did not change before the deadline.
+            A frame-timeout failure means no fresh desktop frame arrived before the deadline.
             """)
     enum State: String, CaseIterable, ExpressibleByArgument {
         case connected, disconnected, frame, resumed

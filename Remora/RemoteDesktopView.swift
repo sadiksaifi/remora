@@ -48,8 +48,16 @@ final class RemoteDesktopView: NSView {
     /// While the session awaits its redraw, the view keeps its last picture and presents this long after the first
     /// new frame, or after a redraw if no frame comes, so the placeholder is never shown.
     private static let redrawWait = 0.1
+    /// After a retry the session holds its redraw for 300 ms after the first frame. Past `redrawWait` the view checks
+    /// this often whether the session still awaits, until this long after the first frame.
+    private static let redrawCheck = 0.005
+    private static let redrawHold = 0.32
     private var waitingUntil: DispatchTime?
     private var waitingForFrame = false
+    /// The desktop's revision when the view was last out of sight. Frames from before, such as a hidden tab's, do not
+    /// start the hold, because the session's first frame after the resume can come later.
+    private var hiddenRevision = 0
+    private var holdEnds = DispatchTime.now()
     /// The view has presented once. Its layer then keeps the last picture, also out of the window and stretched
     /// to a new size, so every later present can wait while the session awaits its redraw.
     private var hasPresented = false
@@ -140,6 +148,7 @@ final class RemoteDesktopView: NSView {
         }
         updates.activate()
         frameUpdates = updates
+        hiddenRevision = renderer.desktop.revision
         frameObserver = renderer.desktop.addFrameObserver { _ in updates.add(data: 1) }
         window.makeFirstResponder(self)
         for name in [
@@ -264,11 +273,19 @@ final class RemoteDesktopView: NSView {
         refresh()
     }
 
+    private func wait(until deadline: DispatchTime) {
+        waitingUntil = deadline
+        DispatchQueue.main.asyncAfter(deadline: deadline) { [weak self] in
+            MainActor.assumeIsolated { self?.refresh() }
+        }
+    }
+
     private func refresh() {
         guard frameUpdates != nil, let window, window.occlusionState.contains(.visible),
             !window.isMiniaturized, !isHiddenOrHasHiddenAncestor
         else {
             waitingUntil = nil
+            hiddenRevision = renderer.desktop.revision
             return
         }
         let revision = redrawRevision
@@ -281,14 +298,17 @@ final class RemoteDesktopView: NSView {
                 return
             }
             let now = DispatchTime.now()
-            if waitingUntil == nil || frame && !waitingForFrame {
-                let until = now + Self.redrawWait
-                (waitingUntil, waitingForFrame) = (until, frame)
-                DispatchQueue.main.asyncAfter(deadline: until) { [weak self] in
-                    MainActor.assumeIsolated { self?.refresh() }
-                }
+            let arrived = frame && renderer.desktop.revision != hiddenRevision
+            if waitingUntil == nil || arrived && !waitingForFrame {
+                waitingForFrame = arrived
+                holdEnds = now + Self.redrawHold
+                wait(until: now + Self.redrawWait)
             }
             if let waitingUntil, now < waitingUntil { return }
+            if waitingForFrame, now < holdEnds {
+                wait(until: min(now + Self.redrawCheck, holdEnds))
+                return
+            }
         }
         hasPresented = true
         waitingUntil = nil
